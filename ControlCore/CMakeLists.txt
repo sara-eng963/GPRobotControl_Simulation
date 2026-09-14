@@ -31,6 +31,7 @@ add_library(
     Pipeline/single_segment_line.c
     Pipeline/single_segment_line_stream.c
     Pipeline/single_segment_circular.c
+    Pipeline/single_segment_circular_stream.c
 )
 
 target_include_directories(
