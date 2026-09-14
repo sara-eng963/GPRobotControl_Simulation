@@ -7,6 +7,7 @@
 
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
 
 
 static Mat4 array_to_mat4(
@@ -420,14 +421,31 @@ bool single_line_stream_next(
 
 
     if (!ikSucceeded)
-    {
-        set_error(
-            stream,
-            SINGLE_LINE_STREAM_IK_FAILED
-        );
+{
+    printf(
+        "\nIK FAILED\n"
+        "sample: %zu / %zu\n"
+        "t:      %.6f s\n"
+        "s:      %.6f\n"
+        "p:      [%.6f %.6f %.6f] m\n",
+        stream->nextSampleIndex,
+        s_curve_profile_sample_count(
+            &stream->profile
+        ),
+        profileSample.t,
+        profileSample.s,
+        desiredPosition.v[0],
+        desiredPosition.v[1],
+        desiredPosition.v[2]
+    );
 
-        return false;
-    }
+    set_error(
+        stream,
+        SINGLE_LINE_STREAM_IK_FAILED
+    );
+
+    return false;
+}
 
 
     JointVector qSolution =

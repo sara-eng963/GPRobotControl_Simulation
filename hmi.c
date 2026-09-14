@@ -70,6 +70,473 @@
 #define NUM_POSE_VALUES 6
 #define PLAN_FLOAT_COUNT 15
 
+/* ============================================================================
+ * RESIZABLE / HORIZONTAL SCROLLING
+ * ============================================================================
+ *
+ * The HMI layout itself is still designed on a 1400 px wide canvas.
+ *
+ * If the OS window becomes narrower than that, we simply view a smaller
+ * portion of the canvas and allow horizontal scrolling.
+ *
+ * Nothing about the actual GUI layout changes.
+ * ============================================================================
+ */
+
+#define HMI_CONTENT_WIDTH   1400.0f
+#define HMI_SCROLL_STEP       80.0f
+
+
+static float hmi_scroll_x =
+    0.0f;
+
+
+static bool hmi_scroll_dragging =
+    false;
+
+
+static float hmi_scroll_drag_offset =
+    0.0f;
+
+
+/* --------------------------------------------------------------------------
+ * Small local clamp helper
+ * --------------------------------------------------------------------------
+ */
+
+static float hmi_clampf(
+    float value,
+    float minimum,
+    float maximum
+)
+{
+    if (value < minimum)
+    {
+        return minimum;
+    }
+
+    if (value > maximum)
+    {
+        return maximum;
+    }
+
+    return value;
+}
+
+
+/* --------------------------------------------------------------------------
+ * Mouse position in HMI CANVAS coordinates
+ * --------------------------------------------------------------------------
+ *
+ * Raylib gives mouse position relative to the visible window.
+ *
+ * But our controls are positioned in the 1400 px virtual HMI canvas.
+ *
+ * Therefore:
+ *
+ *      canvas mouse X = screen mouse X + horizontal scroll
+ */
+
+static Vector2 hmi_mouse_position(void)
+{
+    Vector2 mouse =
+        GetMousePosition();
+
+
+    mouse.x +=
+        hmi_scroll_x;
+
+
+    return mouse;
+}
+
+
+/* --------------------------------------------------------------------------
+ * Horizontal scrollbar input
+ * --------------------------------------------------------------------------
+ */
+
+static void update_horizontal_scroll(void)
+{
+    float viewport_width =
+        (float)GetScreenWidth();
+
+
+    float max_scroll =
+        HMI_CONTENT_WIDTH -
+        viewport_width;
+
+
+    /*
+     * Full HMI already fits.
+     */
+    if (max_scroll <= 0.0f)
+    {
+        hmi_scroll_x =
+            0.0f;
+
+        hmi_scroll_dragging =
+            false;
+
+        return;
+    }
+
+
+    /*
+     * Normal mouse wheel scrolls horizontally whenever the HMI is narrower
+     * than its virtual canvas.
+     *
+     * Wheel down  -> right
+     * Wheel up    -> left
+     */
+    float wheel =
+        GetMouseWheelMove();
+
+
+    if (wheel != 0.0f)
+    {
+        hmi_scroll_x -=
+            wheel *
+            HMI_SCROLL_STEP;
+    }
+
+
+    hmi_scroll_x =
+        hmi_clampf(
+            hmi_scroll_x,
+            0.0f,
+            max_scroll
+        );
+
+
+    /* ----------------------------------------------------------------------
+     * Scrollbar geometry is SCREEN-SPACE, not canvas-space.
+     * ----------------------------------------------------------------------
+     */
+
+    float track_x =
+        10.0f;
+
+
+    float track_width =
+        viewport_width -
+        20.0f;
+
+
+    if (track_width < 80.0f)
+    {
+        track_width =
+            80.0f;
+    }
+
+
+    float thumb_width =
+        track_width *
+        (
+            viewport_width /
+            HMI_CONTENT_WIDTH
+        );
+
+
+    if (thumb_width < 60.0f)
+    {
+        thumb_width =
+            60.0f;
+    }
+
+
+    if (thumb_width > track_width)
+    {
+        thumb_width =
+            track_width;
+    }
+
+
+    float usable_width =
+        track_width -
+        thumb_width;
+
+
+    float thumb_x =
+        track_x;
+
+
+    if (
+        max_scroll > 0.0f &&
+        usable_width > 0.0f
+    )
+    {
+        thumb_x +=
+            (
+                hmi_scroll_x /
+                max_scroll
+            ) *
+            usable_width;
+    }
+
+
+    Rectangle track =
+    {
+        track_x,
+        (float)GetScreenHeight() - 16.0f,
+        track_width,
+        9.0f
+    };
+
+
+    Rectangle thumb =
+    {
+        thumb_x,
+        track.y,
+        thumb_width,
+        track.height
+    };
+
+
+    Vector2 mouse =
+        GetMousePosition();
+
+
+    /* Start dragging the thumb. */
+    if (
+        IsMouseButtonPressed(
+            MOUSE_BUTTON_LEFT
+        )
+    )
+    {
+        if (
+            CheckCollisionPointRec(
+                mouse,
+                thumb
+            )
+        )
+        {
+            hmi_scroll_dragging =
+                true;
+
+
+            hmi_scroll_drag_offset =
+                mouse.x -
+                thumb.x;
+        }
+
+        /*
+         * Clicking somewhere else on the scrollbar jumps there and begins
+         * dragging immediately.
+         */
+        else if (
+            CheckCollisionPointRec(
+                mouse,
+                track
+            ) &&
+            usable_width > 0.0f
+        )
+        {
+            float new_thumb_x =
+                mouse.x -
+                thumb_width / 2.0f;
+
+
+            new_thumb_x =
+                hmi_clampf(
+                    new_thumb_x,
+                    track_x,
+                    track_x +
+                    usable_width
+                );
+
+
+            hmi_scroll_x =
+                (
+                    (
+                        new_thumb_x -
+                        track_x
+                    ) /
+                    usable_width
+                ) *
+                max_scroll;
+
+
+            hmi_scroll_dragging =
+                true;
+
+
+            hmi_scroll_drag_offset =
+                thumb_width /
+                2.0f;
+        }
+    }
+
+
+    /* Continue dragging. */
+    if (hmi_scroll_dragging)
+    {
+        if (
+            IsMouseButtonDown(
+                MOUSE_BUTTON_LEFT
+            )
+        )
+        {
+            float new_thumb_x =
+                mouse.x -
+                hmi_scroll_drag_offset;
+
+
+            new_thumb_x =
+                hmi_clampf(
+                    new_thumb_x,
+                    track_x,
+                    track_x +
+                    usable_width
+                );
+
+
+            if (usable_width > 0.0f)
+            {
+                hmi_scroll_x =
+                    (
+                        (
+                            new_thumb_x -
+                            track_x
+                        ) /
+                        usable_width
+                    ) *
+                    max_scroll;
+            }
+        }
+        else
+        {
+            hmi_scroll_dragging =
+                false;
+        }
+    }
+
+
+    hmi_scroll_x =
+        hmi_clampf(
+            hmi_scroll_x,
+            0.0f,
+            max_scroll
+        );
+}
+
+
+/* --------------------------------------------------------------------------
+ * Draw scrollbar on top of the HMI
+ * --------------------------------------------------------------------------
+ */
+
+static void draw_horizontal_scrollbar(void)
+{
+    float viewport_width =
+        (float)GetScreenWidth();
+
+
+    float max_scroll =
+        HMI_CONTENT_WIDTH -
+        viewport_width;
+
+
+    if (max_scroll <= 0.0f)
+    {
+        return;
+    }
+
+
+    float track_x =
+        10.0f;
+
+
+    float track_width =
+        viewport_width -
+        20.0f;
+
+
+    if (track_width < 80.0f)
+    {
+        track_width =
+            80.0f;
+    }
+
+
+    float thumb_width =
+        track_width *
+        (
+            viewport_width /
+            HMI_CONTENT_WIDTH
+        );
+
+
+    if (thumb_width < 60.0f)
+    {
+        thumb_width =
+            60.0f;
+    }
+
+
+    if (thumb_width > track_width)
+    {
+        thumb_width =
+            track_width;
+    }
+
+
+    float usable_width =
+        track_width -
+        thumb_width;
+
+
+    float thumb_x =
+        track_x;
+
+
+    if (usable_width > 0.0f)
+    {
+        thumb_x +=
+            (
+                hmi_scroll_x /
+                max_scroll
+            ) *
+            usable_width;
+    }
+
+
+    Rectangle track =
+    {
+        track_x,
+        (float)GetScreenHeight() - 16.0f,
+        track_width,
+        9.0f
+    };
+
+
+    Rectangle thumb =
+    {
+        thumb_x,
+        track.y,
+        thumb_width,
+        track.height
+    };
+
+
+    DrawRectangleRounded(
+        track,
+        1.0f,
+        8,
+        (Color){38, 43, 55, 255}
+    );
+
+
+    DrawRectangleRounded(
+        thumb,
+        1.0f,
+        8,
+        hmi_scroll_dragging
+            ? (Color){120, 165, 230, 255}
+            : (Color){83, 91, 111, 255}
+    );
+}
+
 /*
  * Controller -> HMI live-status packet.
  *
@@ -197,7 +664,7 @@ static void update_numeric_field(
 )
 {
     Vector2 mouse =
-        GetMousePosition();
+         hmi_mouse_position();
 
 
     /*
@@ -460,7 +927,7 @@ static int button(
 )
 {
     Vector2 mouse =
-        GetMousePosition();
+        hmi_mouse_position();
 
     bool hovered =
         CheckCollisionPointRec(
@@ -1140,13 +1607,22 @@ int main(void)
      */
 
     const int window_width  = 1400;
-    const int window_height = 760;
+const int window_height = 760;
 
-    InitWindow(
-        window_width,
-        window_height,
-        "Robot Controller - Cartesian Trajectory HMI"
-    );
+
+/*
+ * Allow the user to resize the desktop HMI window.
+ */
+SetConfigFlags(
+    FLAG_WINDOW_RESIZABLE
+);
+
+
+InitWindow(
+    window_width,
+    window_height,
+    "Robot Controller - Cartesian Trajectory HMI"
+);
 
     SetTargetFPS(60);
 
@@ -1178,6 +1654,37 @@ int main(void)
             status_socket,
             &controller_status
         );
+        update_horizontal_scroll();
+
+
+Camera2D scroll_camera =
+{
+    0
+};
+
+
+scroll_camera.offset =
+    (Vector2)
+    {
+        -hmi_scroll_x,
+        0.0f
+    };
+
+
+scroll_camera.target =
+    (Vector2)
+    {
+        0.0f,
+        0.0f
+    };
+
+
+scroll_camera.rotation =
+    0.0f;
+
+
+scroll_camera.zoom =
+    1.0f;
 
 
         BeginDrawing();
@@ -1186,6 +1693,9 @@ int main(void)
             (Color){24, 27, 35, 255}
         );
 
+        BeginMode2D(
+    scroll_camera
+);
 
         /* Header */
         DrawText(
@@ -1891,7 +2401,19 @@ int main(void)
         );
 
 
-        EndDrawing();
+        /*
+ * Finish drawing the scrollable 1400 px HMI canvas.
+ */
+EndMode2D();
+
+
+/*
+ * The scrollbar itself stays fixed to the physical window.
+ */
+draw_horizontal_scrollbar();
+
+
+EndDrawing();
     }
 
 
