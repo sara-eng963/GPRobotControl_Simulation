@@ -6,7 +6,10 @@
 #include <stddef.h>
 
 
-#define CIRCULAR_EPS 1e-12
+#define CIRCULAR_COLLINEAR_EPS 1e-12
+#define CIRCULAR_RADIUS_EPS    1e-9
+#define CIRCULAR_ANGLE_EPS     1e-12
+#define CIRCULAR_SOLVE_EPS     1e-15
 
 
 /* ============================================================================
@@ -26,32 +29,178 @@ static real_t vec3_dot_local(
 }
 
 
-static bool vec3_unit_local(
-    Vec3 input,
-    Vec3 *output
+/* ============================================================================
+ * MATLAB-LIKE 3x3 LINEAR SOLVE
+ * ============================================================================
+ *
+ * The MATLAB helpers compute the circumcenter with:
+ *
+ *      C = A \\ rhs
+ *
+ * This small Gaussian-elimination solver reproduces that same mathematical
+ * step for the fixed 3x3 system used by the circle fit.
+ * ============================================================================
+ */
+
+static bool solve_3x3(
+    real_t A[3][3],
+    real_t rhs[3],
+    Vec3 *solution
 )
 {
-    if (output == NULL)
+    if (solution == NULL)
     {
         return false;
     }
 
 
-    real_t norm =
-        vec3_norm(input);
+    real_t augmented[3][4];
 
 
-    if (norm <= CIRCULAR_EPS)
+    for (int row = 0;
+         row < 3;
+         row++)
     {
-        return false;
+        for (int column = 0;
+             column < 3;
+             column++)
+        {
+            augmented[row][column] =
+                A[row][column];
+        }
+
+        augmented[row][3] =
+            rhs[row];
     }
 
 
-    *output =
-        vec3_scale(
-            input,
-            1.0 / norm
-        );
+    for (int pivot = 0;
+         pivot < 3;
+         pivot++)
+    {
+        int best_row =
+            pivot;
+
+        real_t best_value =
+            fabs(
+                augmented[pivot][pivot]
+            );
+
+
+        for (int row = pivot + 1;
+             row < 3;
+             row++)
+        {
+            real_t candidate =
+                fabs(
+                    augmented[row][pivot]
+                );
+
+            if (candidate > best_value)
+            {
+                best_value =
+                    candidate;
+
+                best_row =
+                    row;
+            }
+        }
+
+
+        if (best_value <= CIRCULAR_SOLVE_EPS)
+        {
+            return false;
+        }
+
+
+        if (best_row != pivot)
+        {
+            for (int column = pivot;
+                 column < 4;
+                 column++)
+            {
+                real_t temporary =
+                    augmented[pivot][column];
+
+                augmented[pivot][column] =
+                    augmented[best_row][column];
+
+                augmented[best_row][column] =
+                    temporary;
+            }
+        }
+
+
+        real_t pivot_value =
+            augmented[pivot][pivot];
+
+
+        for (int row = pivot + 1;
+             row < 3;
+             row++)
+        {
+            real_t factor =
+                augmented[row][pivot] /
+                pivot_value;
+
+
+            for (int column = pivot;
+                 column < 4;
+                 column++)
+            {
+                augmented[row][column] -=
+                    factor *
+                    augmented[pivot][column];
+            }
+        }
+    }
+
+
+    real_t x[3] =
+    {
+        0.0,
+        0.0,
+        0.0
+    };
+
+
+    for (int row = 2;
+         row >= 0;
+         row--)
+    {
+        real_t value =
+            augmented[row][3];
+
+
+        for (int column = row + 1;
+             column < 3;
+             column++)
+        {
+            value -=
+                augmented[row][column] *
+                x[column];
+        }
+
+
+        if (
+            fabs(
+                augmented[row][row]
+            ) <= CIRCULAR_SOLVE_EPS
+        )
+        {
+            return false;
+        }
+
+
+        x[row] =
+            value /
+            augmented[row][row];
+    }
+
+
+    solution->v[0] = x[0];
+    solution->v[1] = x[1];
+    solution->v[2] = x[2];
 
 
     return true;
@@ -60,6 +209,29 @@ static bool vec3_unit_local(
 
 /* ============================================================================
  * FIT A CIRCLE THROUGH THREE 3D POINTS
+ * ============================================================================
+ *
+ * Direct port of the common geometry setup used by both MATLAB helpers:
+ *
+ *      generateCircleWaypoints.m
+ *      generateFullCircleWaypoints.m
+ *
+ * MATLAB sequence:
+ *
+ *      v1 = P2 - P1
+ *      v2 = P3 - P1
+ *      b  = unit(cross(v1,v2))
+ *
+ *      A = [v1'; v2'; b']
+ *      rhs = [
+ *          0.5*(P2'*P2 - P1'*P1)
+ *          0.5*(P3'*P3 - P1'*P1)
+ *          b'*P1
+ *      ]
+ *
+ *      C = A \\ rhs
+ *      e1 = unit(P1-C)
+ *      e2 = cross(b,e1)
  * ============================================================================
  */
 
@@ -76,104 +248,92 @@ static bool fit_circle_three_points(
     }
 
 
-    Vec3 u =
+    Vec3 v1 =
         vec3_sub(
             p2,
             p1
         );
 
 
-    Vec3 v =
+    Vec3 v2 =
         vec3_sub(
             p3,
             p1
         );
 
 
-    Vec3 normal =
+    Vec3 normal_raw =
         vec3_cross(
-            u,
-            v
+            v1,
+            v2
         );
 
 
-    real_t normalSquared =
-        vec3_dot_local(
-            normal,
-            normal
+    real_t normal_norm =
+        vec3_norm(
+            normal_raw
         );
 
 
-    if (normalSquared <= CIRCULAR_EPS * CIRCULAR_EPS)
+    if (normal_norm < CIRCULAR_COLLINEAR_EPS)
     {
         return false;
     }
 
 
-    real_t uSquared =
+    info->axis =
+        vec3_scale(
+            normal_raw,
+            1.0 / normal_norm
+        );
+
+
+    real_t A[3][3] =
+    {
+        {
+            v1.v[0],
+            v1.v[1],
+            v1.v[2]
+        },
+        {
+            v2.v[0],
+            v2.v[1],
+            v2.v[2]
+        },
+        {
+            info->axis.v[0],
+            info->axis.v[1],
+            info->axis.v[2]
+        }
+    };
+
+
+    real_t rhs[3] =
+    {
+        0.5 *
+        (
+            vec3_dot_local(p2, p2) -
+            vec3_dot_local(p1, p1)
+        ),
+
+        0.5 *
+        (
+            vec3_dot_local(p3, p3) -
+            vec3_dot_local(p1, p1)
+        ),
+
         vec3_dot_local(
-            u,
-            u
-        );
-
-
-    real_t vSquared =
-        vec3_dot_local(
-            v,
-            v
-        );
-
-
-    /*
-     * 3D circumcenter formula:
-     *
-     * c = p1 +
-     *     ( |u|^2 (v x n) + |v|^2 (n x u) ) /
-     *     ( 2 |n|^2 )
-     */
-
-    Vec3 term1 =
-        vec3_scale(
-            vec3_cross(
-                v,
-                normal
-            ),
-            uSquared
-        );
-
-
-    Vec3 term2 =
-        vec3_scale(
-            vec3_cross(
-                normal,
-                u
-            ),
-            vSquared
-        );
-
-
-    Vec3 centerOffset =
-        vec3_scale(
-            vec3_add(
-                term1,
-                term2
-            ),
-            1.0 /
-            (2.0 * normalSquared)
-        );
-
-
-    info->center =
-        vec3_add(
-            p1,
-            centerOffset
-        );
+            info->axis,
+            p1
+        )
+    };
 
 
     if (
-        !vec3_unit_local(
-            normal,
-            &info->axis
+        !solve_3x3(
+            A,
+            rhs,
+            &info->center
         )
     )
     {
@@ -190,10 +350,28 @@ static bool fit_circle_three_points(
         );
 
 
-    if (info->radius <= CIRCULAR_EPS)
+    if (info->radius < CIRCULAR_RADIUS_EPS)
     {
         return false;
     }
+
+
+    info->e1 =
+        vec3_scale(
+            vec3_sub(
+                p1,
+                info->center
+            ),
+            1.0 /
+            info->radius
+        );
+
+
+    info->e2 =
+        vec3_cross(
+            info->axis,
+            info->e1
+        );
 
 
     info->thetaTotal =
@@ -205,84 +383,58 @@ static bool fit_circle_three_points(
 
 
 /* ============================================================================
- * POSITIVE ANGLE AROUND AN AXIS
+ * MATLAB mod(angle, 2*pi)
  * ============================================================================
  *
- * Returns an angle in [0, 2*pi).
+ * C fmod() keeps the sign of the dividend, while MATLAB mod() with a positive
+ * divisor returns a value in [0, 2*pi). This helper preserves MATLAB behavior.
  * ============================================================================
  */
 
-static real_t positive_angle_about_axis(
-    Vec3 from,
-    Vec3 to,
-    Vec3 axis
+static real_t mod_two_pi(
+    real_t angle
 )
 {
-    real_t cosine =
-        clamp_real(
-            vec3_dot_local(
-                from,
-                to
-            ),
-            -1.0,
-             1.0
+    real_t period =
+        2.0 * ROBOT_PI;
+
+
+    real_t result =
+        fmod(
+            angle,
+            period
         );
 
 
-    real_t sine =
-        vec3_dot_local(
-            axis,
-            vec3_cross(
-                from,
-                to
-            )
-        );
-
-
-    real_t angle =
-        atan2(
-            sine,
-            cosine
-        );
-
-
-    if (angle < 0.0)
+    if (result < 0.0)
     {
-        angle +=
-            2.0 * ROBOT_PI;
+        result +=
+            period;
     }
 
 
-    return angle;
+    return result;
 }
 
 
 /* ============================================================================
- * SAMPLE A CIRCLE FROM START RADIAL VECTOR
+ * SAMPLE A CIRCLE IN THE MATLAB e1/e2 BASIS
  * ============================================================================
  */
 
 static Vec3 sample_circle(
     const CircularPathInfo *info,
-    Vec3 radialStart,
     real_t theta
 )
 {
-    Vec3 tangent =
-        vec3_cross(
-            info->axis,
-            radialStart
-        );
-
-
     Vec3 radial =
         vec3_add(
             vec3_scale(
-                radialStart,
+                info->e1,
                 cos(theta)
             ),
             vec3_scale(
-                tangent,
+                info->e2,
                 sin(theta)
             )
         );
@@ -301,6 +453,9 @@ static Vec3 sample_circle(
 
 /* ============================================================================
  * THREE-POINT ARC
+ * ============================================================================
+ *
+ * Direct C port of generateCircleWaypoints.m.
  * ============================================================================
  */
 
@@ -336,73 +491,135 @@ bool generate_arc_waypoints(
     }
 
 
-    Vec3 radialStart;
-    Vec3 radialMid;
-    Vec3 radialEnd;
+    Vec3 mid_from_center =
+        vec3_sub(
+            mid,
+            info->center
+        );
 
 
-    if (
-        !vec3_unit_local(
-            vec3_sub(
-                start,
-                info->center
-            ),
-            &radialStart
-        ) ||
-        !vec3_unit_local(
-            vec3_sub(
-                mid,
-                info->center
-            ),
-            &radialMid
-        ) ||
-        !vec3_unit_local(
-            vec3_sub(
-                end,
-                info->center
-            ),
-            &radialEnd
-        )
-    )
-    {
-        return false;
-    }
+    Vec3 end_from_center =
+        vec3_sub(
+            end,
+            info->center
+        );
 
 
     real_t thetaMid =
-        positive_angle_about_axis(
-            radialStart,
-            radialMid,
-            info->axis
+        atan2(
+            vec3_dot_local(
+                mid_from_center,
+                info->e2
+            ),
+            vec3_dot_local(
+                mid_from_center,
+                info->e1
+            )
         );
 
 
     real_t thetaEnd =
-        positive_angle_about_axis(
-            radialStart,
-            radialEnd,
-            info->axis
+        atan2(
+            vec3_dot_local(
+                end_from_center,
+                info->e2
+            ),
+            vec3_dot_local(
+                end_from_center,
+                info->e1
+            )
         );
 
 
-    /*
-     * Because the fitted normal is cross(mid-start, end-start), the positive
-     * sweep should encounter mid before end. Reject degenerate/numerically
-     * inconsistent input instead of silently choosing the wrong arc.
+    /* ------------------------------------------------------------------------
+     * Pick the sweep direction that actually passes through the middle point.
+     * This mirrors the MATLAB helper exactly.
+     * ------------------------------------------------------------------------
      */
+
+    real_t sweepCCW =
+        mod_two_pi(
+            thetaEnd
+        );
+
+
+    if (sweepCCW < CIRCULAR_ANGLE_EPS)
+    {
+        sweepCCW =
+            2.0 * ROBOT_PI;
+    }
+
+
+    real_t thetaMidCCW =
+        mod_two_pi(
+            thetaMid
+        );
+
+
+    bool ccwWorks =
+        thetaMidCCW <=
+            sweepCCW +
+            CIRCULAR_ANGLE_EPS &&
+        thetaMidCCW >
+            CIRCULAR_ANGLE_EPS;
+
+
+    real_t sweepCW =
+        -mod_two_pi(
+            -thetaEnd
+        );
+
+
+    if (sweepCW > -CIRCULAR_ANGLE_EPS)
+    {
+        sweepCW =
+            -2.0 * ROBOT_PI;
+    }
+
+
+    real_t thetaMidCW =
+        -mod_two_pi(
+            -thetaMid
+        );
+
+
+    bool cwWorks =
+        thetaMidCW >=
+            sweepCW -
+            CIRCULAR_ANGLE_EPS &&
+        thetaMidCW <
+            -CIRCULAR_ANGLE_EPS;
+
+
     if (
-        thetaMid <= CIRCULAR_EPS ||
-        thetaEnd <= thetaMid + CIRCULAR_EPS ||
-        thetaEnd >= 2.0 * ROBOT_PI - CIRCULAR_EPS
+        ccwWorks &&
+        !cwWorks
     )
+    {
+        info->thetaTotal =
+            sweepCCW;
+    }
+    else if (
+        cwWorks &&
+        !ccwWorks
+    )
+    {
+        info->thetaTotal =
+            sweepCW;
+    }
+    else
     {
         return false;
     }
 
 
-    info->thetaTotal =
-        thetaEnd;
-
+    /* ------------------------------------------------------------------------
+     * Uniform angular sampling, matching MATLAB:
+     *
+     *      s = (i-1)/(N-1)
+     *      theta = thetaTotal*s
+     * ------------------------------------------------------------------------
+     */
 
     for (size_t i = 0;
          i < numWaypoints;
@@ -414,28 +631,22 @@ bool generate_arc_waypoints(
 
 
         real_t theta =
-            s *
-            info->thetaTotal;
+            info->thetaTotal *
+            s;
 
 
         waypoints[i] =
             sample_circle(
                 info,
-                radialStart,
                 theta
             );
     }
 
 
     /*
-     * Force exact taught endpoints so floating-point trig cannot perturb them.
+     * Do not overwrite the first/last points here. The MATLAB arc helper also
+     * leaves the sampled values exactly as produced by the circle equation.
      */
-    waypoints[0] =
-        start;
-
-    waypoints[numWaypoints - 1] =
-        end;
-
 
     return true;
 }
@@ -443,6 +654,9 @@ bool generate_arc_waypoints(
 
 /* ============================================================================
  * FULL CIRCLE
+ * ============================================================================
+ *
+ * Direct C port of generateFullCircleWaypoints.m.
  * ============================================================================
  */
 
@@ -480,23 +694,6 @@ bool generate_full_circle_waypoints(
     }
 
 
-    Vec3 radialStart;
-
-
-    if (
-        !vec3_unit_local(
-            vec3_sub(
-                p1,
-                info->center
-            ),
-            &radialStart
-        )
-    )
-    {
-        return false;
-    }
-
-
     info->thetaTotal =
         (real_t)direction *
         2.0 * ROBOT_PI;
@@ -512,23 +709,22 @@ bool generate_full_circle_waypoints(
 
 
         real_t theta =
-            s *
-            info->thetaTotal;
+            info->thetaTotal *
+            s;
 
 
         waypoints[i] =
             sample_circle(
                 info,
-                radialStart,
                 theta
             );
     }
 
 
-    /* Closed-loop endpoint must be exactly identical to the start point. */
-    waypoints[0] =
-        p1;
-
+    /*
+     * Match MATLAB exactly: only the closing point is forced to P1 in order to
+     * eliminate floating-point drift and make the loop truly closed.
+     */
     waypoints[numWaypoints - 1] =
         p1;
 
@@ -577,6 +773,40 @@ static Quat quat_conjugate_local(
 }
 
 
+static bool vec3_unit_orientation(
+    Vec3 input,
+    Vec3 *output
+)
+{
+    if (output == NULL)
+    {
+        return false;
+    }
+
+
+    real_t norm =
+        vec3_norm(
+            input
+        );
+
+
+    if (norm <= CIRCULAR_COLLINEAR_EPS)
+    {
+        return false;
+    }
+
+
+    *output =
+        vec3_scale(
+            input,
+            1.0 / norm
+        );
+
+
+    return true;
+}
+
+
 static Quat axis_angle_quaternion(
     Vec3 axis,
     real_t angle
@@ -586,7 +816,7 @@ static Quat axis_angle_quaternion(
 
 
     if (
-        !vec3_unit_local(
+        !vec3_unit_orientation(
             axis,
             &unitAxis
         )
