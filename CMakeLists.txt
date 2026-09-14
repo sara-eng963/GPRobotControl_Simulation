@@ -104,15 +104,15 @@ target_compile_features(
     c_std_11
 )
 
-# Force-include the desktop view controls only for the HMI target.
-# This adds mouse-wheel/keyboard zoom and middle-button panning while leaving
-# the HMI layout, UDP protocol and controller behavior unchanged.
+# Keep the HMI at its native 1440 x 900 logical size. If the desktop window is
+# resized smaller, expose horizontal/vertical scrollbars instead of shrinking
+# the UI and making the text unreadable.
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(
         mock_hmi
         PRIVATE
         -include
-        ${CMAKE_CURRENT_SOURCE_DIR}/hmi_zoom_hooks.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/hmi_scroll_hooks.h
     )
 endif()
 
