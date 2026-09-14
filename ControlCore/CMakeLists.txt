@@ -34,6 +34,8 @@ add_library(
     Trajectory/arc_length_parameterize.c
     Trajectory/s_curve_time_scaling.c
 
+    Execution/trajectory_buffer.c
+
     Pipeline/single_segment_line.c
 )
 
@@ -50,6 +52,7 @@ target_include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/Math
     ${CMAKE_CURRENT_SOURCE_DIR}/Kinematics
     ${CMAKE_CURRENT_SOURCE_DIR}/Trajectory
+    ${CMAKE_CURRENT_SOURCE_DIR}/Execution
     ${CMAKE_CURRENT_SOURCE_DIR}/Pipeline
 )
 
@@ -89,9 +92,27 @@ add_executable(
     Tests/single_segment_line_test.c
 )
 
-
 target_link_libraries(
     single_segment_line_test
+    PRIVATE
+
+    control_core
+    m
+)
+
+
+# ============================================================================
+# TRAJECTORY BUFFER TEST
+# ============================================================================
+
+add_executable(
+    trajectory_buffer_test
+
+    Tests/trajectory_buffer_test.c
+)
+
+target_link_libraries(
+    trajectory_buffer_test
     PRIVATE
 
     control_core
