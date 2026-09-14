@@ -86,6 +86,18 @@ target_link_libraries(
 )
 
 add_executable(
+    single_segment_circular_stream_test
+    Tests/single_segment_circular_stream_test.c
+)
+
+target_link_libraries(
+    single_segment_circular_stream_test
+    PRIVATE
+    control_core
+    m
+)
+
+add_executable(
     trajectory_buffer_test
     Tests/trajectory_buffer_test.c
 )
