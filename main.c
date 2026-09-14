@@ -134,10 +134,15 @@
  *      ecx_send_processdata()
  *      ...
  */
-#include "soem/soem.h"
 #include "robot_config.h"
 #include "single_segment_line.h"
+#include "single_segment_line_stream.h"
+#include "trajectory_buffer.h"
 #include "math3d.h"
+
+#include "ethercat_master.h"
+#include "cia402.h"
+#include "a6ec_drive.h"
 
 /* ============================================================================
  *                              CONFIGURATION
@@ -219,16 +224,6 @@
 #define NUM_AXES 6
 
 /*
- * CiA-402 mode value:
- *
- *      8 = CSP = Cyclic Synchronous Position
- *
- * In CSP, the EtherCAT master continuously sends a new target position every
- * control cycle.
- */
-#define CSP_MODE 8
-
-/*
  * Desired EtherCAT Distributed-Clock SYNC0 period:
  *
  *      1,000,000 ns = 1 ms
@@ -239,129 +234,78 @@
 
 
 /* ============================================================================
- *                           GLOBAL ETHERCAT DATA
+ * CONTROLCORE STREAMING TRAJECTORY
+ * ============================================================================
+ *
+ * The live controller does NOT store the complete time-sampled trajectory.
+ *
+ * PlannerTask generates exact 1 ms JointVector samples into a fixed-size FIFO.
+ * EtherCATTask consumes exactly one JointVector per 1 ms CSP cycle.
+ *
+ * Total trajectory duration is therefore independent of FIFO capacity.
  * ============================================================================
  */
 
-/*
- * SOEM context.
- *
- * SOEM stores its entire EtherCAT-master state here:
- *      - discovered slaves
- *      - slave states
- *      - process-data pointers
- *      - EtherCAT errors
- *      - group information
- *      - Distributed Clock information
- *      - etc.
- *
- * Because the "ecx_*" SOEM API is used, the context is passed explicitly to
- * most SOEM functions.
- */
-static ecx_contextt soem_context;
-
-/*
- * EtherCAT process-data memory.
- *
- * During PDO mapping, SOEM uses this array as the shared process-data area.
- *
- * Conceptually:
- *
- *      IOmap
- *      +------------------------------------------------------+
- *      | slave outputs | slave inputs | ...                   |
- *      +------------------------------------------------------+
- *
- * SOEM later makes each slave's .outputs and .inputs pointers point into the
- * correct locations inside this memory.
- */
-static uint8_t IOmap[4096];
-
-/* ============================================================================
- * CONTROLCORE SINGLE-SEGMENT TRAJECTORY
- * ============================================================================
- */
-
-#define TRAJECTORY_CAPACITY 7000
-#define GEOMETRY_CAPACITY   512
-
+#define GEOMETRY_CAPACITY          512U
+#define TRAJECTORY_BUFFER_CAPACITY 256U
+#define TRAJECTORY_PREFILL_SAMPLES 128U
 
 /* Robot model. */
 static RobotConfig trajectory_robot;
 
-
-/* --------------------------------------------------------------------------
- * Geometry workspace
- * --------------------------------------------------------------------------
- */
-
+/* Fixed-size Cartesian geometry workspace. */
 static Vec3 trajectory_raw_geometry[GEOMETRY_CAPACITY];
 static Vec3 trajectory_arc_geometry[GEOMETRY_CAPACITY];
-
 static real_t trajectory_l_original[GEOMETRY_CAPACITY];
 static real_t trajectory_l_arc[GEOMETRY_CAPACITY];
-
-
-/* --------------------------------------------------------------------------
- * S-curve workspace
- * --------------------------------------------------------------------------
- */
-
-static real_t trajectory_temp_t[TRAJECTORY_CAPACITY];
-static real_t trajectory_temp_s[TRAJECTORY_CAPACITY];
-static real_t trajectory_temp_s_dot[TRAJECTORY_CAPACITY];
-static real_t trajectory_temp_s_ddot[TRAJECTORY_CAPACITY];
-static real_t trajectory_temp_s_dddot[TRAJECTORY_CAPACITY];
-
-
-/* ADLS scratch data. */
 static ADLSInfo trajectory_ik_scratch;
 
+static SingleLineStreamWorkspace trajectory_stream_workspace;
+static SingleLineStream trajectory_stream;
 
-/* --------------------------------------------------------------------------
- * Final trajectory
- * --------------------------------------------------------------------------
- */
+/* Fixed-size execution FIFO: 256 samples = 256 ms at 1 kHz. */
+static JointVector trajectory_buffer_storage[TRAJECTORY_BUFFER_CAPACITY];
+static TrajectoryBuffer trajectory_buffer;
 
-static real_t trajectory_t[TRAJECTORY_CAPACITY];
-static real_t trajectory_s[TRAJECTORY_CAPACITY];
-static real_t trajectory_s_dot[TRAJECTORY_CAPACITY];
-static real_t trajectory_s_ddot[TRAJECTORY_CAPACITY];
-static real_t trajectory_s_dddot[TRAJECTORY_CAPACITY];
+typedef struct
+{
+    bool positionLimitsPass;
+    bool velocityLimitsPass;
 
-static real_t trajectory_arc_position[TRAJECTORY_CAPACITY];
-static real_t trajectory_tcp_speed[TRAJECTORY_CAPACITY];
+    size_t samples;
 
-static Vec3 trajectory_position[TRAJECTORY_CAPACITY];
-static Quat trajectory_quaternion[TRAJECTORY_CAPACITY];
+    real_t duration;
+    real_t pathLength;
+    real_t peakTCPSpeed;
+    real_t maxPositionError;
+    real_t maxOrientationError;
 
-static JointVector trajectory_q[TRAJECTORY_CAPACITY];
-static JointVector trajectory_q_dot[TRAJECTORY_CAPACITY];
-static JointVector trajectory_q_ddot[TRAJECTORY_CAPACITY];
+    int maxIKIterations;
 
-static int trajectory_ik_iterations[TRAJECTORY_CAPACITY];
+    real_t peakJointVelocity[ROBOT_DOF];
+    real_t maxJointStep[ROBOT_DOF];
 
-static real_t trajectory_position_error[TRAJECTORY_CAPACITY];
-static real_t trajectory_orientation_error[TRAJECTORY_CAPACITY];
+} StreamingPlanReport;
 
+static StreamingPlanReport trajectory_report;
 
-static SingleLineWorkspace trajectory_workspace;
+/* Execution progress / planner-executor shared state. */
+static volatile size_t trajectory_index = 0;
+static volatile size_t trajectory_total_samples = 0;
+static volatile size_t trajectory_executed_samples = 0;
 
-static SingleLineTrajectory trajectory;
-
-static SingleLineReport trajectory_report;
-
-
-/*
- * Number of the trajectory point currently being executed later.
- */
-static size_t trajectory_index = 0;
-
-
-/*
- * True once ControlCore has successfully planned the complete motion.
- */
 static volatile bool trajectory_ready = false;
+static volatile bool trajectory_generation_finished = false;
+static volatile bool planner_cancel_requested = false;
+static volatile bool trajectory_underrun = false;
+
+/* q[0] is retained for PREPOSITION without consuming the FIFO. */
+static JointVector trajectory_start_sample;
+static volatile bool trajectory_have_start_sample = false;
+
+/* Final q is retained so FINISHED can hold the exact final reference. */
+static JointVector trajectory_final_sample;
+static volatile bool trajectory_have_final_sample = false;
 
 
 /* ============================================================================
@@ -468,231 +412,6 @@ static void handle_sigint(int signal_number)
 
     /* Tell EtherCATTask to begin clean shutdown. */
     stop_requested = 1;
-}
-
-
-/* ============================================================================
- *                         ETHERCAT STATE PRINT HELPER
- * ============================================================================
- */
-
-/*
- * EtherCAT itself has communication states:
- *
- *      INIT
- *        ->
- *      PRE-OP
- *        ->
- *      SAFE-OP
- *        ->
- *      OPERATIONAL
- *
- * These are NOT the same thing as the CiA-402 servo-drive states
- * (Switch On Disabled, Ready to Switch On, etc.).
- *
- * This helper only converts SOEM's EtherCAT state number to readable text.
- */
-static const char *state_name(uint16_t state)
-{
-    switch (state)
-    {
-        case EC_STATE_INIT:
-            return "INIT";
-
-        case EC_STATE_PRE_OP:
-            return "PRE-OP";
-
-        case EC_STATE_SAFE_OP:
-            return "SAFE-OP";
-
-        case EC_STATE_OPERATIONAL:
-            return "OPERATIONAL";
-
-        /*
-         * EtherCAT can report SAFE-OP together with an error flag.
-         */
-        case EC_STATE_SAFE_OP + EC_STATE_ERROR:
-            return "SAFE-OP + ERROR";
-
-        default:
-            return "UNKNOWN";
-    }
-}
-
-
-/* ============================================================================
- *                         PDO BYTE-ORDER HELPERS
- * ============================================================================
- *
- * EtherCAT process data is transmitted little-endian.
- *
- * We therefore should not directly cast raw byte pointers into integer
- * pointers. These helper functions:
- *
- *      1. convert between CPU byte order and EtherCAT byte order
- *      2. copy the bytes safely using memcpy()
- *
- * This also avoids possible alignment problems.
- */
-
-
-/*
- * Write unsigned 16-bit value into EtherCAT process data.
- *
- * Used for values such as the CiA-402 Controlword.
- */
-static void write_u16(uint8_t *p, uint16_t value)
-{
-    /*
-     * htoes()
-     * = host-to-EtherCAT-short
-     *
-     * Converts the CPU representation to EtherCAT's 16-bit byte order.
-     */
-    uint16_t ethercat_value = htoes(value);
-
-    /*
-     * Copy exactly two bytes into the PDO memory.
-     */
-    memcpy(
-        p,
-        &ethercat_value,
-        sizeof(ethercat_value)
-    );
-}
-
-
-/*
- * Write signed 32-bit value into EtherCAT process data.
- *
- * Used here for target position.
- */
-static void write_i32(uint8_t *p, int32_t value)
-{
-    /*
-     * htoel()
-     * = host-to-EtherCAT-long
-     *
-     * SOEM's helper works on uint32_t, so cast first.
-     * The bit pattern remains the same for a signed two's-complement int32_t.
-     */
-    uint32_t ethercat_value =
-        htoel((uint32_t)value);
-
-    memcpy(
-        p,
-        &ethercat_value,
-        sizeof(ethercat_value)
-    );
-}
-
-
-/*
- * Read an unsigned 16-bit value from EtherCAT process data.
- *
- * Used here for the CiA-402 Statusword.
- */
-static uint16_t read_u16(const uint8_t *p)
-{
-    uint16_t value;
-
-    memcpy(
-        &value,
-        p,
-        sizeof(value)
-    );
-
-    /*
-     * etohs()
-     * = EtherCAT-to-host-short.
-     */
-    return etohs(value);
-}
-
-
-/*
- * Read a signed 32-bit value from EtherCAT process data.
- *
- * Used here for actual position.
- */
-static int32_t read_i32(const uint8_t *p)
-{
-    uint32_t value;
-
-    memcpy(
-        &value,
-        p,
-        sizeof(value)
-    );
-
-    /*
-     * Convert EtherCAT byte order back to CPU byte order.
-     */
-    value = etohl(value);
-
-    /*
-     * Reinterpret the resulting 32-bit bit pattern as signed position data.
-     */
-    return (int32_t)value;
-}
-
-/* ============================================================================
- * ROBOT JOINT ANGLE -> A6 POSITION REFERENCE UNIT
- * ============================================================================
- *
- * A6-EC:
- *      17-bit encoder
- *      131072 counts / revolution
- *
- * Current KickCAT test:
- *      electronic gear = 1:1
- *
- * Therefore:
- *
- *      drive_units = q_rad * 131072 / (2*pi)
- *
- * NOTE:
- * The real robot will later need:
- *      - gearbox ratios
- *      - joint direction signs
- *      - mechanical zero offsets
- *
- * Those are deliberately NOT added yet.
- * ============================================================================
- */
-
-#define A6_POSITION_UNITS_PER_REV 131072.0
-
-static int32_t joint_rad_to_drive_units(
-    real_t q_rad
-)
-{
-    const double two_pi =
-        6.28318530717958647692;
-
-    return (int32_t)llround(
-        q_rad *
-        A6_POSITION_UNITS_PER_REV /
-        two_pi
-    );
-}
-
-
-/*
- * Inverse conversion used to seed IK from the current simulated drive
- * feedback.
- */
-static real_t drive_units_to_joint_rad(
-    int32_t drive_units
-)
-{
-    const real_t two_pi =
-        6.28318530717958647692;
-
-    return
-        ((real_t)drive_units) *
-        two_pi /
-        A6_POSITION_UNITS_PER_REV;
 }
 
 
@@ -820,9 +539,7 @@ static void send_hmi_status(
 
     packet[4] =
         htonl(
-            trajectory_ready
-                ? (uint32_t)trajectory.count
-                : 0U
+            (uint32_t)trajectory_total_samples
         );
 
 
@@ -842,16 +559,12 @@ static void send_hmi_status(
          slave <= NUM_AXES;
          slave++)
     {
-        uint8_t *inputs =
-            soem_context
-                .slavelist[slave]
-                .inputs;
+        A6ECPDOFeedback feedback;
 
-
-        uint16_t statusword =
-            read_u16(
-                inputs + 2
-            );
+        a6ec_read_feedback(
+            slave,
+            &feedback
+        );
 
 
         packet[
@@ -859,7 +572,7 @@ static void send_hmi_status(
             (slave - 1)
         ] =
             htonl(
-                (uint32_t)statusword
+                (uint32_t)feedback.statusword
             );
     }
 
@@ -872,168 +585,6 @@ static void send_hmi_status(
         (const struct sockaddr *)status_address,
         sizeof(*status_address)
     );
-}
-
-
-/* ============================================================================
- *                       CiA-402 ENABLE STATE MACHINE
- * ============================================================================
- *
- * EtherCAT communication being OPERATIONAL does NOT automatically mean the
- * servo motor is enabled.
- *
- * The servo itself follows the separate CiA-402 drive state machine:
- *
- *      Switch On Disabled
- *              |
- *              | Controlword 0x0006
- *              v
- *      Ready to Switch On
- *              |
- *              | Controlword 0x0007
- *              v
- *      Switched On
- *              |
- *              | Controlword 0x000F
- *              v
- *      Operation Enabled
- *
- * The current drive state is inferred from the Statusword.
- *
- * This function receives the decoded drive_state bits and returns the
- * Controlword that should be sent next.
- */
-
-static uint16_t get_enable_controlword(
-    uint16_t drive_state
-)
-{
-    if (drive_state == 0x0040)
-    {
-        /*
-         * Current state:
-         *      Switch On Disabled
-         *
-         * Send:
-         *      0x0006 = Shutdown command
-         *
-         * Desired next state:
-         *      Ready to Switch On
-         */
-        return 0x0006;
-    }
-
-    if (drive_state == 0x0021)
-    {
-        /*
-         * Current state:
-         *      Ready to Switch On
-         *
-         * Send:
-         *      0x0007 = Switch On
-         *
-         * Desired next state:
-         *      Switched On
-         */
-        return 0x0007;
-    }
-
-    if (drive_state == 0x0023)
-    {
-        /*
-         * Current state:
-         *      Switched On
-         *
-         * Send:
-         *      0x000F = Enable Operation
-         *
-         * Desired next state:
-         *      Operation Enabled
-         */
-        return 0x000F;
-    }
-
-    if (drive_state == 0x0027)
-    {
-        /*
-         * Current state:
-         *      Operation Enabled
-         *
-         * Keep sending 0x000F so the drive remains enabled.
-         */
-        return 0x000F;
-    }
-
-    /*
-     * Fallback:
-     *
-     * If we encounter an unhandled/non-fault state, start again with the
-     * Shutdown command.
-     *
-     * NOTE:
-     * Real hardware will need more complete handling for FAULT, QUICK STOP,
-     * FAULT REACTION ACTIVE, etc.
-     */
-    return 0x0006;
-}
-
-
-/* ============================================================================
- *                       CiA-402 DISABLE STATE MACHINE
- * ============================================================================
- *
- * This performs the reverse sequence when Ctrl+C is pressed.
- *
- *      Operation Enabled
- *              |
- *              | 0x0007
- *              v
- *      Switched On
- *              |
- *              | 0x0006
- *              v
- *      Ready to Switch On
- *              |
- *              | 0x0000
- *              v
- *      Switch On Disabled
- *
- * The point is to shut the drives down cleanly instead of instantly exiting
- * while they are still enabled.
- */
-
-static uint16_t get_disable_controlword(
-    uint16_t drive_state
-)
-{
-    if (drive_state == 0x0027)
-    {
-        /*
-         * Operation Enabled -> Switched On
-         */
-        return 0x0007;
-    }
-
-    if (drive_state == 0x0023)
-    {
-        /*
-         * Switched On -> Ready to Switch On
-         */
-        return 0x0006;
-    }
-
-    if (drive_state == 0x0021)
-    {
-        /*
-         * Ready to Switch On -> Switch On Disabled
-         */
-        return 0x0000;
-    }
-
-    /*
-     * Default shutdown request.
-     */
-    return 0x0000;
 }
 
 
@@ -1342,8 +893,35 @@ static void receive_hmi_commands(
              * The EtherCAT executor will therefore hold measured position while
              * the planner task builds qPath in the background.
              */
+            taskENTER_CRITICAL();
+
+            planner_cancel_requested =
+                false;
+
+            trajectory_buffer_reset(
+                &trajectory_buffer
+            );
+
             trajectory_ready =
                 false;
+
+            trajectory_generation_finished =
+                false;
+
+            trajectory_underrun =
+                false;
+
+            trajectory_have_start_sample =
+                false;
+
+            trajectory_have_final_sample =
+                false;
+
+            trajectory_total_samples =
+                0;
+
+            trajectory_executed_samples =
+                0;
 
             trajectory_index =
                 0;
@@ -1356,6 +934,8 @@ static void receive_hmi_commands(
 
             motion_state =
                 MOTION_PLANNING;
+
+            taskEXIT_CRITICAL();
 
 
             if (
@@ -1448,11 +1028,28 @@ static void receive_hmi_commands(
             }
 
 
+            taskENTER_CRITICAL();
+
             hmi_hold_requested =
                 true;
 
+            planner_cancel_requested =
+                true;
+
+            trajectory_ready =
+                false;
+
+            trajectory_generation_finished =
+                false;
+
+            trajectory_buffer_reset(
+                &trajectory_buffer
+            );
+
             motion_state =
                 MOTION_HOLD;
+
+            taskEXIT_CRITICAL();
 
 
             printf(
@@ -1495,15 +1092,7 @@ static void receive_hmi_commands(
  */
 
 /* ============================================================================
- * INITIALIZE CONTROLCORE TRAJECTORY STORAGE
- * ============================================================================
- *
- * This only binds the static workspace/output buffers.
- *
- * It does NOT create a trajectory.
- *
- * The controller starts in HOLD and waits for an RBT2 PLAN + RUN request from
- * hmi.c.
+ * INITIALIZE STREAMING CONTROLCORE STORAGE
  * ============================================================================
  */
 
@@ -1513,101 +1102,64 @@ static void initialize_trajectory_storage(void)
         &trajectory_robot
     );
 
-
-    trajectory_workspace.geometryCapacity =
+    trajectory_stream_workspace.geometryCapacity =
         GEOMETRY_CAPACITY;
 
-    trajectory_workspace.rawGeometry =
+    trajectory_stream_workspace.rawGeometry =
         trajectory_raw_geometry;
 
-    trajectory_workspace.arcGeometry =
+    trajectory_stream_workspace.arcGeometry =
         trajectory_arc_geometry;
 
-    trajectory_workspace.lOriginal =
+    trajectory_stream_workspace.lOriginal =
         trajectory_l_original;
 
-    trajectory_workspace.lArc =
+    trajectory_stream_workspace.lArc =
         trajectory_l_arc;
 
-
-    trajectory_workspace.timeCapacity =
-        TRAJECTORY_CAPACITY;
-
-    trajectory_workspace.tempT =
-        trajectory_temp_t;
-
-    trajectory_workspace.tempS =
-        trajectory_temp_s;
-
-    trajectory_workspace.tempSDot =
-        trajectory_temp_s_dot;
-
-    trajectory_workspace.tempSDDot =
-        trajectory_temp_s_ddot;
-
-    trajectory_workspace.tempSDDDot =
-        trajectory_temp_s_dddot;
-
-    trajectory_workspace.ikScratch =
+    trajectory_stream_workspace.ikScratch =
         &trajectory_ik_scratch;
 
+    if (
+        !trajectory_buffer_init(
+            &trajectory_buffer,
+            trajectory_buffer_storage,
+            TRAJECTORY_BUFFER_CAPACITY
+        )
+    )
+    {
+        printf(
+            "ERROR: could not initialize trajectory execution buffer\n"
+        );
 
-    trajectory.capacity =
-        TRAJECTORY_CAPACITY;
-
-    trajectory.count =
-        0;
-
-    trajectory.t =
-        trajectory_t;
-
-    trajectory.s =
-        trajectory_s;
-
-    trajectory.sDot =
-        trajectory_s_dot;
-
-    trajectory.sDDot =
-        trajectory_s_ddot;
-
-    trajectory.sDDDot =
-        trajectory_s_dddot;
-
-    trajectory.arcPosition =
-        trajectory_arc_position;
-
-    trajectory.tcpSpeed =
-        trajectory_tcp_speed;
-
-    trajectory.pDesired =
-        trajectory_position;
-
-    trajectory.quatDesired =
-        trajectory_quaternion;
-
-    trajectory.qPath =
-        trajectory_q;
-
-    trajectory.qDot =
-        trajectory_q_dot;
-
-    trajectory.qDDot =
-        trajectory_q_ddot;
-
-    trajectory.ikIterations =
-        trajectory_ik_iterations;
-
-    trajectory.positionError =
-        trajectory_position_error;
-
-    trajectory.orientationError =
-        trajectory_orientation_error;
-
+        exit(1);
+    }
 
     trajectory_index =
         0;
 
+    trajectory_total_samples =
+        0;
+
+    trajectory_executed_samples =
+        0;
+
     trajectory_ready =
+        false;
+
+    trajectory_generation_finished =
+        false;
+
+    trajectory_have_start_sample =
+        false;
+
+    trajectory_have_final_sample =
+        false;
+
+    trajectory_underrun =
+        false;
+
+    planner_cancel_requested =
         false;
 
     motion_state =
@@ -1622,30 +1174,433 @@ static void initialize_trajectory_storage(void)
 
 
 /* ============================================================================
- * LOWER-PRIORITY CONTROLCORE PLANNER TASK
+ * STREAMING-PLANNER HELPERS
  * ============================================================================
+ */
+
+static bool planner_is_cancelled(void)
+{
+    bool cancelled;
+
+    taskENTER_CRITICAL();
+
+    cancelled =
+        planner_cancel_requested ||
+        stop_requested;
+
+    taskEXIT_CRITICAL();
+
+    return cancelled;
+}
+
+
+static void update_velocity_validation(
+    StreamingPlanReport *report,
+    int joint,
+    real_t velocity
+)
+{
+    real_t magnitude =
+        fabs(
+            velocity
+        );
+
+    if (
+        magnitude >
+        report->peakJointVelocity[joint]
+    )
+    {
+        report->peakJointVelocity[joint] =
+            magnitude;
+    }
+
+    if (
+        magnitude >
+        trajectory_robot.limits.qdMax[joint]
+    )
+    {
+        report->velocityLimitsPass =
+            false;
+    }
+}
+
+
+/*
+ * Validate the ENTIRE requested path before execution starts.
  *
- * The EtherCAT task must keep cycling every 1 ms.
- *
- * Sequential ADLS over thousands of points can take much longer than one
- * EtherCAT cycle, so trajectory generation must NOT execute inside the cyclic
- * EtherCAT loop.
- *
- * The EtherCAT task:
- *
- *      receives RBT2
- *          ->
- *      snapshots current q as qSeed
- *          ->
- *      queues TrajectoryPlanCommand
- *
- * This lower-priority task:
- *
- *      converts absolute A/B YPR to quaternions
- *          ->
- *      calls plan_single_segment_line()
- *          ->
- *      publishes qPath only after planning fully succeeds
+ * This is still memory-bounded: only a rolling three-sample window is used
+ * for velocity checks. No trajectory-sized qPath[] exists.
+ */
+static bool validate_streaming_trajectory(
+    const SingleLineRequest *request,
+    StreamingPlanReport *report
+)
+{
+    if (
+        request == NULL ||
+        report == NULL
+    )
+    {
+        return false;
+    }
+
+    memset(
+        report,
+        0,
+        sizeof(*report)
+    );
+
+    report->positionLimitsPass =
+        true;
+
+    report->velocityLimitsPass =
+        true;
+
+    SingleLineStream validation_stream;
+
+    if (
+        !single_line_stream_init(
+            &validation_stream,
+            &trajectory_robot,
+            request,
+            &trajectory_stream_workspace
+        )
+    )
+    {
+        printf(
+            "Streaming validation init failed: %s\n",
+            single_line_stream_status_string(
+                single_line_stream_status(
+                    &validation_stream
+                )
+            )
+        );
+
+        return false;
+    }
+
+    report->samples =
+        single_line_stream_sample_count(
+            &validation_stream
+        );
+
+    report->duration =
+        validation_stream.profile.info.T;
+
+    report->pathLength =
+        validation_stream.segmentLength;
+
+    SingleLineStreamSample previous_previous;
+    SingleLineStreamSample previous;
+
+    bool have_previous_previous =
+        false;
+
+    bool have_previous =
+        false;
+
+    size_t generated =
+        0;
+
+    for (;;)
+    {
+        if (
+            planner_is_cancelled()
+        )
+        {
+            return false;
+        }
+
+        SingleLineStreamSample sample;
+
+        if (
+            !single_line_stream_next(
+                &validation_stream,
+                &sample
+            )
+        )
+        {
+            if (
+                single_line_stream_is_finished(
+                    &validation_stream
+                )
+            )
+            {
+                break;
+            }
+
+            printf(
+                "Streaming validation stopped: %s\n",
+                single_line_stream_status_string(
+                    single_line_stream_status(
+                        &validation_stream
+                    )
+                )
+            );
+
+            return false;
+        }
+
+        generated++;
+
+        if (
+            sample.tcpSpeed >
+            report->peakTCPSpeed
+        )
+        {
+            report->peakTCPSpeed =
+                sample.tcpSpeed;
+        }
+
+        if (
+            sample.positionError >
+            report->maxPositionError
+        )
+        {
+            report->maxPositionError =
+                sample.positionError;
+        }
+
+        if (
+            sample.orientationError >
+            report->maxOrientationError
+        )
+        {
+            report->maxOrientationError =
+                sample.orientationError;
+        }
+
+        if (
+            sample.ikIterations >
+            report->maxIKIterations
+        )
+        {
+            report->maxIKIterations =
+                sample.ikIterations;
+        }
+
+        for (int joint = 0;
+             joint < ROBOT_DOF;
+             joint++)
+        {
+            if (
+                sample.q.q[joint] <
+                    trajectory_robot.limits.qMin[joint] ||
+                sample.q.q[joint] >
+                    trajectory_robot.limits.qMax[joint]
+            )
+            {
+                report->positionLimitsPass =
+                    false;
+            }
+
+            if (
+                have_previous
+            )
+            {
+                real_t step =
+                    fabs(
+                        sample.q.q[joint] -
+                        previous.q.q[joint]
+                    );
+
+                if (
+                    step >
+                    report->maxJointStep[joint]
+                )
+                {
+                    report->maxJointStep[joint] =
+                        step;
+                }
+            }
+        }
+
+        /*
+         * Same gradient convention as the existing validated full planner:
+         * first = forward, interior = central, last = backward.
+         */
+        if (
+            have_previous &&
+            !have_previous_previous
+        )
+        {
+            real_t dt_first =
+                sample.t -
+                previous.t;
+
+            if (
+                fabs(dt_first) >
+                1e-15
+            )
+            {
+                for (int joint = 0;
+                     joint < ROBOT_DOF;
+                     joint++)
+                {
+                    update_velocity_validation(
+                        report,
+                        joint,
+                        (
+                            sample.q.q[joint] -
+                            previous.q.q[joint]
+                        ) /
+                        dt_first
+                    );
+                }
+            }
+        }
+        else if (
+            have_previous &&
+            have_previous_previous
+        )
+        {
+            real_t dt_central =
+                sample.t -
+                previous_previous.t;
+
+            if (
+                fabs(dt_central) >
+                1e-15
+            )
+            {
+                for (int joint = 0;
+                     joint < ROBOT_DOF;
+                     joint++)
+                {
+                    update_velocity_validation(
+                        report,
+                        joint,
+                        (
+                            sample.q.q[joint] -
+                            previous_previous.q.q[joint]
+                        ) /
+                        dt_central
+                    );
+                }
+            }
+        }
+
+        if (
+            have_previous
+        )
+        {
+            previous_previous =
+                previous;
+
+            have_previous_previous =
+                true;
+        }
+
+        previous =
+            sample;
+
+        have_previous =
+            true;
+    }
+
+    if (
+        generated !=
+        report->samples
+    )
+    {
+        return false;
+    }
+
+    /* Final sample: backward difference. */
+    if (
+        have_previous &&
+        have_previous_previous
+    )
+    {
+        real_t dt_last =
+            previous.t -
+            previous_previous.t;
+
+        if (
+            fabs(dt_last) >
+            1e-15
+        )
+        {
+            for (int joint = 0;
+                 joint < ROBOT_DOF;
+                 joint++)
+            {
+                update_velocity_validation(
+                    report,
+                    joint,
+                    (
+                        previous.q.q[joint] -
+                        previous_previous.q.q[joint]
+                    ) /
+                    dt_last
+                );
+            }
+        }
+    }
+
+    return
+        report->samples > 0 &&
+        report->positionLimitsPass &&
+        report->velocityLimitsPass;
+}
+
+
+static void abort_streaming_plan(
+    bool preserve_hold_state
+)
+{
+    taskENTER_CRITICAL();
+
+    trajectory_buffer_reset(
+        &trajectory_buffer
+    );
+
+    trajectory_ready =
+        false;
+
+    trajectory_generation_finished =
+        false;
+
+    trajectory_have_start_sample =
+        false;
+
+    trajectory_have_final_sample =
+        false;
+
+    trajectory_total_samples =
+        0;
+
+    trajectory_executed_samples =
+        0;
+
+    trajectory_index =
+        0;
+
+    hmi_hold_requested =
+        true;
+
+    planner_busy =
+        false;
+
+    if (
+        preserve_hold_state
+    )
+    {
+        motion_state =
+            MOTION_HOLD;
+    }
+    else
+    {
+        motion_state =
+            MOTION_WAITING_FOR_PLAN;
+    }
+
+    taskEXIT_CRITICAL();
+}
+
+
+/* ============================================================================
+ * LOWER-PRIORITY STREAMING CONTROLCORE PLANNER TASK
  * ============================================================================
  */
 
@@ -1655,11 +1610,9 @@ static void TrajectoryPlannerTask(
 {
     (void)pvParameters;
 
-
     for (;;)
     {
         TrajectoryPlanCommand command;
-
 
         if (
             xQueueReceive(
@@ -1672,7 +1625,6 @@ static void TrajectoryPlannerTask(
             continue;
         }
 
-
         SingleLineRequest request;
 
         memset(
@@ -1681,20 +1633,8 @@ static void TrajectoryPlannerTask(
             sizeof(request)
         );
 
-
-        /*
-         * qSeed only helps ADLS choose/converge to the first IK solution.
-         *
-         * It does NOT define Cartesian waypoint A.
-         */
         request.qSeed =
             command.qSeed;
-
-
-        /* --------------------------------------------------------------------
-         * ABSOLUTE WAYPOINT A
-         * --------------------------------------------------------------------
-         */
 
         request.startPosition =
             (Vec3)
@@ -1703,7 +1643,6 @@ static void TrajectoryPlannerTask(
                 (real_t)command.waypointA[1],
                 (real_t)command.waypointA[2]
             }};
-
 
         Mat3 R_A =
             eul_zyx(
@@ -1718,17 +1657,10 @@ static void TrajectoryPlannerTask(
                 )
             );
 
-
         request.startOrientation =
             rotm_to_quat(
                 R_A
             );
-
-
-        /* --------------------------------------------------------------------
-         * ABSOLUTE WAYPOINT B
-         * --------------------------------------------------------------------
-         */
 
         request.endPosition =
             (Vec3)
@@ -1737,7 +1669,6 @@ static void TrajectoryPlannerTask(
                 (real_t)command.waypointB[1],
                 (real_t)command.waypointB[2]
             }};
-
 
         Mat3 R_B =
             eul_zyx(
@@ -1752,17 +1683,10 @@ static void TrajectoryPlannerTask(
                 )
             );
 
-
         request.endOrientation =
             rotm_to_quat(
                 R_B
             );
-
-
-        /* --------------------------------------------------------------------
-         * SAME VALIDATED CONTROLCORE SETTINGS
-         * --------------------------------------------------------------------
-         */
 
         request.numGeometryPointsPerSegment =
             100;
@@ -1779,123 +1703,36 @@ static void TrajectoryPlannerTask(
         request.desiredTCPJerk =
             (real_t)command.tcpJerk;
 
-        /*
-         * One planned sample maps one-to-one onto one 1 ms EtherCAT CSP cycle.
-         */
         request.dt =
             0.001;
-
 
         adls_default_parameters(
             &request.ikParameters
         );
 
-
         printf(
-            "\nPlanning HMI Cartesian line #%u with ControlCore...\n",
+            "\nValidating HMI Cartesian line #%u with streaming ControlCore...\n",
             command.sequence
         );
 
         fflush(stdout);
 
-
-        bool success =
-            plan_single_segment_line(
-                &trajectory_robot,
+        bool validation_success =
+            validate_streaming_trajectory(
                 &request,
-                &trajectory_workspace,
-                &trajectory,
                 &trajectory_report
             );
 
-
-        /*
-         * ControlCore reports joint-limit results separately from basic
-         * generation success. Arbitrary HMI waypoints must not be executed if
-         * either joint position or joint velocity limits fail.
-         */
         if (
-            success &&
-            (
-                trajectory.count == 0 ||
-                !trajectory_report.positionLimitsPass ||
-                !trajectory_report.velocityLimitsPass
-            )
+            planner_is_cancelled()
         )
         {
-            success =
-                false;
-        }
+            abort_streaming_plan(
+                true
+            );
 
-
-        /*
-         * Publish the newly generated trajectory only AFTER all ControlCore
-         * validation has completed.
-         */
-        taskENTER_CRITICAL();
-
-        if (success)
-        {
-            trajectory_index =
-                0;
-
-            trajectory_ready =
-                true;
-
-
-            /*
-             * If STOP arrived while planning, preserve HOLD.
-             *
-             * Otherwise automatically enter the simulator pre-position phase,
-             * then the executor will run qPath at exactly 1 ms/sample.
-             */
-            if (
-                hmi_hold_requested ||
-                motion_state == MOTION_HOLD
-            )
-            {
-                motion_state =
-                    MOTION_HOLD;
-            }
-            else
-            {
-                motion_state =
-                    MOTION_PREPOSITION;
-            }
-        }
-        else
-        {
-            trajectory.count =
-                0;
-
-            trajectory_ready =
-                false;
-
-            hmi_hold_requested =
-                true;
-
-            motion_state =
-                MOTION_WAITING_FOR_PLAN;
-        }
-
-
-        planner_busy =
-            false;
-
-        taskEXIT_CRITICAL();
-
-
-        if (!success)
-        {
             printf(
-                "\n"
-                "============================================================\n"
-                " CONTROLCORE PLAN #%u FAILED\n"
-                "============================================================\n"
-                "The robot remains in HOLD.\n"
-                "Check reachability, orientation, IK convergence, motion limits,\n"
-                "and trajectory buffer capacity.\n"
-                "============================================================\n",
+                "Planner #%u cancelled -> HOLD\n",
                 command.sequence
             );
 
@@ -1903,40 +1740,392 @@ static void TrajectoryPlannerTask(
             continue;
         }
 
+        if (
+            !validation_success
+        )
+        {
+            printf(
+                "\n"
+                "============================================================\n"
+                " CONTROLCORE PLAN #%u FAILED VALIDATION\n"
+                "============================================================\n"
+                "The robot remains in HOLD.\n"
+                "Joint position limits: %s\n"
+                "Joint velocity limits: %s\n"
+                "Check reachability, orientation, IK convergence and limits.\n"
+                "============================================================\n",
+                command.sequence,
+                trajectory_report.positionLimitsPass ? "PASS" : "FAIL",
+                trajectory_report.velocityLimitsPass ? "PASS" : "FAIL"
+            );
+
+            fflush(stdout);
+
+            abort_streaming_plan(
+                false
+            );
+
+            continue;
+        }
+
+        /*
+         * Deterministic second pass: generate the exact same q[k] sequence,
+         * now feeding the fixed execution FIFO.
+         */
+        if (
+            !single_line_stream_init(
+                &trajectory_stream,
+                &trajectory_robot,
+                &request,
+                &trajectory_stream_workspace
+            )
+        )
+        {
+            printf(
+                "Execution stream init failed: %s\n",
+                single_line_stream_status_string(
+                    single_line_stream_status(
+                        &trajectory_stream
+                    )
+                )
+            );
+
+            abort_streaming_plan(
+                false
+            );
+
+            continue;
+        }
+
+        const size_t total_samples =
+            single_line_stream_sample_count(
+                &trajectory_stream
+            );
+
+        taskENTER_CRITICAL();
+
+        trajectory_total_samples =
+            total_samples;
+
+        trajectory_executed_samples =
+            0;
+
+        trajectory_index =
+            0;
+
+        trajectory_generation_finished =
+            false;
+
+        trajectory_have_start_sample =
+            false;
+
+        trajectory_have_final_sample =
+            false;
+
+        trajectory_ready =
+            false;
+
+        trajectory_underrun =
+            false;
+
+        taskEXIT_CRITICAL();
+
+        bool ready_announced =
+            false;
+
+        bool producer_failed =
+            false;
+
+        for (;;)
+        {
+            if (
+                planner_is_cancelled()
+            )
+            {
+                break;
+            }
+
+            bool buffer_full;
+
+            taskENTER_CRITICAL();
+
+            buffer_full =
+                trajectory_buffer_is_full(
+                    &trajectory_buffer
+                );
+
+            taskEXIT_CRITICAL();
+
+            if (
+                buffer_full
+            )
+            {
+                vTaskDelay(
+                    pdMS_TO_TICKS(1)
+                );
+
+                continue;
+            }
+
+            SingleLineStreamSample generated_sample;
+
+            if (
+                !single_line_stream_next(
+                    &trajectory_stream,
+                    &generated_sample
+                )
+            )
+            {
+                if (
+                    single_line_stream_is_finished(
+                        &trajectory_stream
+                    )
+                )
+                {
+                    break;
+                }
+
+                printf(
+                    "Execution stream failed: %s\n",
+                    single_line_stream_status_string(
+                        single_line_stream_status(
+                            &trajectory_stream
+                        )
+                    )
+                );
+
+                producer_failed =
+                    true;
+
+                break;
+            }
+
+            bool publish_ready =
+                false;
+
+            bool generated_final_sample =
+                (
+                    single_line_stream_samples_generated(
+                        &trajectory_stream
+                    ) >=
+                    total_samples
+                );
+
+            size_t queued_samples =
+                0;
+
+            taskENTER_CRITICAL();
+
+            /*
+             * STOP might arrive while ADLS is calculating this sample.
+             * Never publish a stale post-STOP reference.
+             */
+            if (
+                planner_cancel_requested ||
+                stop_requested
+            )
+            {
+                taskEXIT_CRITICAL();
+                break;
+            }
+
+            if (
+                !trajectory_have_start_sample
+            )
+            {
+                trajectory_start_sample =
+                    generated_sample.q;
+
+                trajectory_have_start_sample =
+                    true;
+            }
+
+            if (
+                !trajectory_buffer_push(
+                    &trajectory_buffer,
+                    &generated_sample.q
+                )
+            )
+            {
+                taskEXIT_CRITICAL();
+
+                producer_failed =
+                    true;
+
+                printf(
+                    "ERROR: trajectory buffer push failed unexpectedly\n"
+                );
+
+                break;
+            }
+
+            if (
+                generated_final_sample
+            )
+            {
+                trajectory_final_sample =
+                    generated_sample.q;
+
+                trajectory_have_final_sample =
+                    true;
+
+                trajectory_generation_finished =
+                    true;
+            }
+
+            queued_samples =
+                trajectory_buffer_count(
+                    &trajectory_buffer
+                );
+
+            if (
+                !trajectory_ready &&
+                trajectory_have_start_sample &&
+                (
+                    queued_samples >=
+                        TRAJECTORY_PREFILL_SAMPLES ||
+                    trajectory_generation_finished
+                )
+            )
+            {
+                trajectory_ready =
+                    true;
+
+                publish_ready =
+                    true;
+
+                if (
+                    !hmi_hold_requested &&
+                    motion_state != MOTION_HOLD
+                )
+                {
+                    motion_state =
+                        MOTION_PREPOSITION;
+                }
+            }
+
+            taskEXIT_CRITICAL();
+
+            if (
+                publish_ready &&
+                !ready_announced
+            )
+            {
+                ready_announced =
+                    true;
+
+                printf(
+                    "\n"
+                    "============================================================\n"
+                    " CONTROLCORE PLAN #%u VALIDATED + BUFFERED\n"
+                    "============================================================\n"
+                    "Waypoint A:        [%.6f %.6f %.6f] m\n"
+                    "Waypoint B:        [%.6f %.6f %.6f] m\n"
+                    "Total samples:     %zu\n"
+                    "Duration:          %.6f s\n"
+                    "Path length:       %.6f m\n"
+                    "Peak TCP speed:    %.6f m/s\n"
+                    "Max pos error:     %.6e m\n"
+                    "Max rot error:     %.6e rad\n"
+                    "Joint pos limits:  PASS\n"
+                    "Joint vel limits:  PASS\n"
+                    "Execution buffer:  %zu / %u samples\n"
+                    "Next state:        %s\n"
+                    "============================================================\n",
+                    command.sequence,
+                    command.waypointA[0],
+                    command.waypointA[1],
+                    command.waypointA[2],
+                    command.waypointB[0],
+                    command.waypointB[1],
+                    command.waypointB[2],
+                    trajectory_report.samples,
+                    trajectory_report.duration,
+                    trajectory_report.pathLength,
+                    trajectory_report.peakTCPSpeed,
+                    trajectory_report.maxPositionError,
+                    trajectory_report.maxOrientationError,
+                    queued_samples,
+                    (unsigned)TRAJECTORY_BUFFER_CAPACITY,
+                    motion_state_name(
+                        motion_state
+                    )
+                );
+
+                fflush(stdout);
+            }
+        }
+
+        if (
+            planner_is_cancelled()
+        )
+        {
+            abort_streaming_plan(
+                true
+            );
+
+            printf(
+                "Planner #%u cancelled -> HOLD\n",
+                command.sequence
+            );
+
+            fflush(stdout);
+            continue;
+        }
+
+        if (
+            producer_failed
+        )
+        {
+            printf(
+                "\n"
+                "============================================================\n"
+                " CONTROLCORE PRODUCER #%u FAILED\n"
+                "============================================================\n"
+                "The robot is forced to HOLD.\n"
+                "============================================================\n",
+                command.sequence
+            );
+
+            fflush(stdout);
+
+            abort_streaming_plan(
+                false
+            );
+
+            continue;
+        }
+
+        taskENTER_CRITICAL();
+
+        if (
+            trajectory_generation_finished &&
+            !trajectory_ready &&
+            trajectory_have_start_sample
+        )
+        {
+            trajectory_ready =
+                true;
+
+            if (
+                !hmi_hold_requested &&
+                motion_state != MOTION_HOLD
+            )
+            {
+                motion_state =
+                    MOTION_PREPOSITION;
+            }
+        }
+
+        planner_busy =
+            false;
+
+        taskEXIT_CRITICAL();
 
         printf(
-            "\n"
-            "============================================================\n"
-            " CONTROLCORE PLAN #%u READY\n"
-            "============================================================\n"
-            "Waypoint A:     [%.6f %.6f %.6f] m\n"
-            "Waypoint B:     [%.6f %.6f %.6f] m\n"
-            "Samples:        %zu\n"
-            "Duration:       %.6f s\n"
-            "Path length:    %.6f m\n"
-            "Peak TCP speed: %.6f m/s\n"
-            "Max pos error:  %.6e m\n"
-            "Max rot error:  %.6e rad\n"
-            "Joint pos lim:  %s\n"
-            "Joint vel lim:  %s\n"
-            "Next state:     %s\n"
-            "============================================================\n",
+            "Trajectory producer #%u complete: %zu samples generated.\n",
             command.sequence,
-            command.waypointA[0],
-            command.waypointA[1],
-            command.waypointA[2],
-            command.waypointB[0],
-            command.waypointB[1],
-            command.waypointB[2],
-            trajectory.count,
-            trajectory_report.duration,
-            trajectory_report.pathLength,
-            trajectory_report.peakTCPSpeed,
-            trajectory_report.maxPositionError,
-            trajectory_report.maxOrientationError,
-            trajectory_report.positionLimitsPass ? "PASS" : "FAIL",
-            trajectory_report.velocityLimitsPass ? "PASS" : "FAIL",
-            motion_state_name(motion_state)
+            total_samples
         );
 
         fflush(stdout);
@@ -1968,336 +2157,83 @@ static void EtherCATTask(void *pvParameters)
 
 
     /* ========================================================================
-     *  RESET SOEM DATA STRUCTURES
+     *  ETHERCAT MASTER STARTUP
+     * ========================================================================
+     *
+     * Same tested startup sequence as before, now routed through EtherCATComm:
+     *
+     *      open ecatA
+     *      -> discover exactly 6 slaves
+     *      -> map PDOs
+     *      -> configure A6-EC CSP mode
+     *      -> configure Distributed Clocks / 1 ms SYNC0
+     *      -> SAFE-OP
+     *      -> first process-data exchange
+     *      -> OPERATIONAL
+     *      -> expected WKC
      * ========================================================================
      */
 
-    /*
-     * Clear the SOEM context before use.
-     *
-     * This ensures no stale values exist in SOEM's internal structures.
-     */
-    memset(
-        &soem_context,
-        0,
-        sizeof(soem_context)
-    );
-
-    /*
-     * Clear the process-data buffer.
-     */
-    memset(
-        IOmap,
-        0,
-        sizeof(IOmap)
-    );
-
-
-    /* ========================================================================
-     *  1. OPEN THE ETHERCAT NETWORK INTERFACE
-     * ========================================================================
-     *
-     * In the simulation, "ecatA" is the virtual EtherCAT interface.
-     *
-     * On real hardware, this would instead be the network interface connected
-     * to the EtherCAT slave chain.
-     */
-
-    printf(
-        "Opening SOEM on ecatA...\n"
-    );
-
-    /*
-     * ecx_init():
-     *
-     * Ask SOEM to open the specified Ethernet interface for raw EtherCAT frame
-     * communication.
-     *
-     * This does NOT yet discover slaves.
-     */
-    if (!ecx_init(
-            &soem_context,
-            "ecatA"
-        ))
+    EtherCATMasterConfig ethercat_config =
     {
-        printf(
-            "ERROR: Could not open ecatA\n"
-        );
+        .interfaceName = "ecatA",
+        .expectedSlaveCount = NUM_AXES,
+        .cycleTimeNs = CYCLE_TIME_NS
+    };
 
-        /*
-         * Stay alive instead of immediately killing the process.
-         *
-         * Because this is a FreeRTOS task, vTaskDelay() lets other tasks run
-         * while this task sleeps.
-         */
-        for (;;)
-        {
-            vTaskDelay(
-                pdMS_TO_TICKS(1000)
-            );
-        }
+
+    if (
+        !ethercat_master_init(
+            &ethercat_config
+        ) ||
+        !ethercat_master_open()
+    )
+    {
+        exit(1);
     }
 
-    printf(
-        "SOEM initialized successfully\n"
-    );
 
-
-    /* ========================================================================
-     *  2. DISCOVER ETHERCAT SLAVES
-     * ========================================================================
-     */
-
-    printf(
-        "\nScanning EtherCAT bus...\n"
-    );
-
-    /*
-     * ecx_config_init():
-     *
-     * SOEM scans the EtherCAT network and discovers all slaves.
-     *
-     * The returned value is the number of slaves found.
-     *
-     * SOEM also populates:
-     *
-     *      soem_context.slavelist[1]
-     *      soem_context.slavelist[2]
-     *      ...
-     *
-     * NOTE:
-     * slavelist[0] is a special aggregate entry representing all slaves.
-     */
     int slave_count =
-        ecx_config_init(
-            &soem_context
-        );
+        ethercat_master_scan();
 
-    /*
-     * No slaves means there is no useful EtherCAT system to control.
-     */
-    if (slave_count <= 0)
+
+    if (
+        slave_count <= 0 ||
+        slave_count != NUM_AXES
+    )
     {
-        printf(
-            "ERROR: No EtherCAT slaves found\n"
-        );
-
-        if (telemetry_socket >= 0)
-        {
-            close(telemetry_socket);
-            telemetry_socket = -1;
-        }
-
-        /* Close the EtherCAT interface. */
-        ecx_close(&soem_context);
-
-        exit(1);
-    }
-
-    printf(
-        "%d EtherCAT slave(s) found\n",
-        slave_count
-    );
-
-    /*
-     * Print the name reported by each EtherCAT slave.
-     */
-    for (int slave = 1;
-         slave <= slave_count;
-         slave++)
-    {
-        printf(
-            "Slave %d: %s\n",
-            slave,
-            soem_context.slavelist[slave].name
-        );
-    }
-
-    /*
-     * This robot expects exactly six servo drives.
-     *
-     * Finding fewer or more than six indicates that the system topology does
-     * not match the expected robot.
-     */
-    if (slave_count != NUM_AXES)
-    {
-        printf(
-            "\nERROR: Expected %d slaves "
-            "but found %d\n",
-            NUM_AXES,
-            slave_count
-        );
-
-        if (telemetry_socket >= 0)
-        {
-            close(telemetry_socket);
-            telemetry_socket = -1;
-        }
-
-        ecx_close(&soem_context);
-
+        ethercat_master_close();
         exit(1);
     }
 
 
-    /* ========================================================================
-     *  3/4. MAP PDOs INTO IOmap
-     * ========================================================================
-     *
-     * PDO = Process Data Object
-     *
-     * PDOs are the fast cyclic variables exchanged every EtherCAT cycle.
-     *
-     * Typical examples:
-     *
-     *      Master -> Drive:
-     *          Controlword
-     *          Target Position
-     *
-     *      Drive -> Master:
-     *          Statusword
-     *          Actual Position
-     *
-     * ecx_config_map_group() builds the process-data layout and assigns each
-     * slave's:
-     *
-     *      slavelist[slave].outputs
-     *      slavelist[slave].inputs
-     *
-     * pointers into IOmap.
-     */
-
-    printf(
-        "\nMapping PDOs...\n"
-    );
-
-    int mapped_bytes =
-        ecx_config_map_group(
-            &soem_context,
-            IOmap,
-            0               /* EtherCAT group 0 */
-        );
-
-    printf(
-        "Mapped bytes: %d\n",
-        mapped_bytes
-    );
-
-    printf(
-        "Outputs: %d bytes | "
-        "Inputs: %d bytes\n",
-        soem_context.grouplist[0].Obytes,
-        soem_context.grouplist[0].Ibytes
-    );
+    ethercat_master_map_pdos();
 
 
     /* ========================================================================
-     *  CONFIGURE EVERY DRIVE FOR CSP
+     *  CONFIGURE EVERY A6-EC DRIVE FOR CSP
      * ========================================================================
-     *
-     * CiA-402 object:
-     *
-     *      0x6060 = Modes of Operation
-     *
-     * CSP mode number:
-     *
-     *      8
-     *
-     * Here we use SDO communication because this is configuration/startup
-     * traffic, not the fast cyclic control loop.
-     *
-     * Recall:
-     *
-     *      SDO = setup / configuration / parameter access
-     *      PDO = fast cyclic process data
      */
 
     printf(
         "\nSetting all drives to CSP...\n"
     );
 
+
     for (int slave = 1;
          slave <= NUM_AXES;
          slave++)
     {
-        int8_t mode = CSP_MODE;
+        int8_t mode_readback =
+            0;
 
-        /*
-         * Write:
-         *
-         *      slave      = current drive
-         *      index      = 0x6060
-         *      subindex   = 0x00
-         *      value      = 8 (CSP)
-         */
-        int sdo_wkc =
-            ecx_SDOwrite(
-                &soem_context,
+
+        if (
+            a6ec_set_csp_mode(
                 slave,
-                0x6060,
-                0x00,
-                FALSE,
-                sizeof(mode),
-                &mode,
-                EC_TIMEOUTRXM
-            );
-
-        /*
-         * SDO write failed.
-         */
-        if (sdo_wkc <= 0)
-        {
-            printf(
-                "Slave %d: ERROR writing 0x6060\n",
-                slave
-            );
-
-            /*
-             * SOEM stores protocol errors in an internal error list.
-             * Print and drain that list.
-             */
-            while (soem_context.ecaterror)
-            {
-                printf(
-                    "    SOEM: %s\n",
-                    ecx_elist2string(
-                        &soem_context
-                    )
-                );
-            }
-
-            /*
-             * Skip verification for this slave and move to the next.
-             */
-            continue;
-        }
-
-
-        /*
-         * Read 0x6060 back immediately to verify that the write succeeded.
-         *
-         * NOTE:
-         * A real implementation may also inspect 0x6061
-         * "Modes of Operation Display" to verify the active operating mode.
-         */
-        int8_t mode_readback = 0;
-
-        int mode_size =
-            sizeof(mode_readback);
-
-        int read_wkc =
-            ecx_SDOread(
-                &soem_context,
-                slave,
-                0x6060,
-                0x00,
-                FALSE,
-                &mode_size,
-                &mode_readback,
-                EC_TIMEOUTRXM
-            );
-
-        if (read_wkc > 0)
+                &mode_readback
+            )
+        )
         {
             printf(
                 "Slave %d: CSP write OK | "
@@ -2309,297 +2245,49 @@ static void EtherCATTask(void *pvParameters)
         else
         {
             printf(
-                "Slave %d: ERROR reading 0x6060\n",
+                "Slave %d: ERROR configuring 0x6060\n",
                 slave
             );
 
-            while (soem_context.ecaterror)
+
+            while (
+                ethercat_master_has_error()
+            )
             {
                 printf(
                     "    SOEM: %s\n",
-                    ecx_elist2string(
-                        &soem_context
-                    )
+                    ethercat_master_pop_error_string()
                 );
             }
         }
     }
 
 
-    /* ========================================================================
-     *  5. CONFIGURE ETHERCAT DISTRIBUTED CLOCKS
-     * ========================================================================
-     *
-     * Multi-axis robots need all drives to update at nearly the same instant.
-     *
-     * EtherCAT Distributed Clocks (DC) synchronize the slave clocks so their
-     * cyclic actions can be aligned.
-     */
-
-    printf(
-        "\nConfiguring Distributed Clocks...\n"
-    );
-
-    /*
-     * ecx_configdc():
-     *
-     * Detect and configure Distributed Clock capable slaves.
-     */
-    boolean dc_found =
-        ecx_configdc(
-            &soem_context
-        );
-
-    printf(
-        "DC-capable bus: %s\n",
-        dc_found ? "YES" : "NO"
-    );
-
-    for (int slave = 1;
-         slave <= NUM_AXES;
-         slave++)
-    {
-        /*
-         * hasdc tells us whether this slave supports EtherCAT Distributed
-         * Clocks.
-         */
-        if (soem_context.slavelist[slave].hasdc)
-        {
-            printf(
-                "Slave %d: DC supported "
-                "-> requesting 1 ms SYNC0\n",
-                slave
-            );
-
-            /*
-             * ecx_dcsync0():
-             *
-             * Enable each slave's SYNC0 event.
-             *
-             * TRUE          = enable SYNC0
-             * 1,000,000 ns  = 1 ms period
-             * 0             = zero phase shift
-             */
-            ecx_dcsync0(
-                &soem_context,
-                slave,
-                TRUE,
-                CYCLE_TIME_NS,
-                0
-            );
-        }
-        else
-        {
-            printf(
-                "Slave %d: no DC support\n",
-                slave
-            );
-        }
-    }
+    ethercat_master_configure_distributed_clocks();
 
 
-    /* ========================================================================
-     *  6. WAIT FOR ETHERCAT SAFE-OP
-     * ========================================================================
-     *
-     * IMPORTANT:
-     *
-     * EtherCAT SAFE-OP is a COMMUNICATION state.
-     * It is different from the CiA-402 servo-drive state machine.
-     *
-     * In SAFE-OP, input process data can be exchanged, but outputs are not yet
-     * fully active for normal operation.
-     */
+    ethercat_master_wait_for_safe_op();
 
-    printf(
-        "\nWaiting for SAFE-OP...\n"
-    );
 
-    /*
-     * Ask SOEM to wait until all slaves reach SAFE-OP.
-     *
-     * slave = 0 means "all slaves".
-     */
-    ecx_statecheck(
-        &soem_context,
-        0,
-        EC_STATE_SAFE_OP,
-        EC_TIMEOUTSTATE * 4
-    );
+    /* Same initial process-data exchange used before OPERATIONAL. */
+    ethercat_master_exchange();
 
-    /*
-     * Refresh SOEM's stored copy of every slave's EtherCAT state.
-     */
-    ecx_readstate(
-        &soem_context
-    );
 
-    for (int slave = 1;
-         slave <= NUM_AXES;
-         slave++)
+    if (
+        !ethercat_master_request_operational()
+    )
     {
         printf(
-            "Slave %d: %s\n",
-            slave,
-            state_name(
-                soem_context
-                    .slavelist[slave]
-                    .state
-            )
+            "ERROR: EtherCAT bus did not reach OPERATIONAL\n"
         );
+
+        ethercat_master_close();
+        exit(1);
     }
 
-
-    /* ========================================================================
-     *  SEND FIRST PROCESS-DATA FRAME
-     * ========================================================================
-     *
-     * Sending/receiving at least one valid process-data frame helps establish
-     * process-data exchange before requesting OPERATIONAL.
-     */
-
-    ecx_send_processdata(
-        &soem_context
-    );
-
-    ecx_receive_processdata(
-        &soem_context,
-        EC_TIMEOUTRET
-    );
-
-
-    /* ========================================================================
-     *  7. REQUEST ETHERCAT OPERATIONAL STATE
-     * ========================================================================
-     *
-     * Again:
-     *
-     *      EtherCAT OPERATIONAL
-     *
-     * is NOT the same as:
-     *
-     *      CiA-402 Operation Enabled.
-     *
-     * First we make the EtherCAT network OPERATIONAL.
-     * Later, inside the cyclic loop, we enable each servo using Controlword.
-     */
-
-    printf(
-        "\nRequesting OPERATIONAL...\n"
-    );
-
-    /*
-     * slavelist[0] represents the complete slave group.
-     *
-     * Request OPERATIONAL for all slaves.
-     */
-    soem_context.slavelist[0].state =
-        EC_STATE_OPERATIONAL;
-
-    /*
-     * Write the requested EtherCAT state onto the bus.
-     */
-    ecx_writestate(
-        &soem_context,
-        0
-    );
-
-    /*
-     * Give the slaves multiple chances to enter OPERATIONAL.
-     *
-     * Process data continues to be exchanged while we wait.
-     */
-    for (int attempt = 0;
-         attempt < 50;
-         attempt++)
-    {
-        ecx_send_processdata(
-            &soem_context
-        );
-
-        ecx_receive_processdata(
-            &soem_context,
-            EC_TIMEOUTRET
-        );
-
-        ecx_statecheck(
-            &soem_context,
-            0,
-            EC_STATE_OPERATIONAL,
-            EC_TIMEOUTSTATE / 10
-        );
-
-        if (soem_context
-                .slavelist[0]
-                .state ==
-            EC_STATE_OPERATIONAL)
-        {
-            break;
-        }
-    }
-
-
-    /*
-     * Refresh states and print the final result.
-     */
-    ecx_readstate(
-        &soem_context
-    );
-
-    for (int slave = 1;
-         slave <= NUM_AXES;
-         slave++)
-    {
-        printf(
-            "Slave %d final state: %s "
-            "(0x%02X)\n",
-            slave,
-            state_name(
-                soem_context
-                    .slavelist[slave]
-                    .state
-            ),
-            soem_context
-                .slavelist[slave]
-                .state
-        );
-    }
-
-
-    /* ========================================================================
-     *  CALCULATE EXPECTED WKC
-     * ========================================================================
-     *
-     * WKC = Working Counter.
-     *
-     * EtherCAT slaves increment the Working Counter when they successfully
-     * process the parts of a frame addressed to them.
-     *
-     * Therefore:
-     *
-     *      correct WKC  -> expected slaves processed the process data
-     *      low WKC      -> communication/slave/process-data problem
-     *
-     * SOEM's normal expected-WKC formula is:
-     *
-     *      outputsWKC * 2 + inputsWKC
-     */
 
     int expected_wkc =
-        (
-            soem_context
-                .grouplist[0]
-                .outputsWKC * 2
-        )
-        +
-        soem_context
-            .grouplist[0]
-            .inputsWKC;
-
-    printf(
-        "\nExpected WKC = %d\n",
-        expected_wkc
-    );
+        ethercat_master_expected_wkc();
 
 
     /* ========================================================================
@@ -2741,7 +2429,7 @@ static void EtherCATTask(void *pvParameters)
             telemetry_socket = -1;
         }
 
-        ecx_close(&soem_context);
+        ethercat_master_close();
         exit(1);
     }
 
@@ -2774,7 +2462,7 @@ static void EtherCATTask(void *pvParameters)
             telemetry_socket = -1;
         }
 
-        ecx_close(&soem_context);
+        ethercat_master_close();
         exit(1);
     }
 
@@ -2855,7 +2543,7 @@ static void EtherCATTask(void *pvParameters)
      *
      *      1. read previous Statusword
      *      2. calculate next Controlword
-     *      3. select the current ControlCore qPath sample
+     *      3. select the current buffered ControlCore q sample
      *      4. convert radians -> A6 position units and write output PDO
      *      5. send EtherCAT process data
      *      6. receive EtherCAT process data
@@ -2885,49 +2573,44 @@ static void EtherCATTask(void *pvParameters)
              slave <= NUM_AXES;
              slave++)
         {
-            uint8_t *inputs =
-                soem_context
-                    .slavelist[slave]
-                    .inputs;
+            A6ECPDOFeedback feedback;
 
-
-            uint16_t statusword =
-                read_u16(
-                    inputs + 2
-                );
+            a6ec_read_feedback(
+                slave,
+                &feedback
+            );
 
 
             uint16_t drive_state =
-                statusword &
-                0x006F;
+                cia402_get_state(
+                    feedback.statusword
+                );
 
 
-            if (drive_state != 0x0027)
+            if (
+                drive_state !=
+                CIA402_STATE_OPERATION_ENABLED
+            )
             {
                 all_operation_enabled =
                     false;
             }
 
 
-            int32_t actual_position =
-                read_i32(
-                    inputs + 4
-                );
-
-
             current_q.q[slave - 1] =
-                drive_units_to_joint_rad(
-                    actual_position
+                a6ec_position_units_to_joint_rad(
+                    feedback.actualPosition
                 );
         }
 
 
         /*
-         * This can become true only after a complete valid trajectory exists.
+         * PREPOSITION is allowed only after full-path validation and q[0]
+         * publication.
          */
         bool all_at_trajectory_start =
             trajectory_ready &&
-            trajectory.count > 0;
+            trajectory_have_start_sample;
 
 
         /*
@@ -2940,6 +2623,105 @@ static void EtherCATTask(void *pvParameters)
         );
 
 
+        /*
+         * Select exactly ONE trajectory sample for this complete six-axis
+         * EtherCAT cycle. All six joints use the same k.
+         */
+        JointVector cycle_trajectory_sample;
+
+        bool cycle_has_trajectory_sample =
+            false;
+
+        bool cycle_sample_is_final =
+            false;
+
+        bool buffer_underrun_now =
+            false;
+
+        if (
+            !stop_requested &&
+            !hmi_hold_requested &&
+            all_operation_enabled &&
+            motion_state == MOTION_RUNNING &&
+            trajectory_ready
+        )
+        {
+            taskENTER_CRITICAL();
+
+            if (
+                trajectory_buffer_pop(
+                    &trajectory_buffer,
+                    &cycle_trajectory_sample
+                )
+            )
+            {
+                cycle_has_trajectory_sample =
+                    true;
+
+                trajectory_index =
+                    trajectory_executed_samples;
+
+                trajectory_executed_samples++;
+
+                if (
+                    trajectory_generation_finished &&
+                    trajectory_buffer_is_empty(
+                        &trajectory_buffer
+                    ) &&
+                    trajectory_executed_samples >=
+                        trajectory_total_samples
+                )
+                {
+                    cycle_sample_is_final =
+                        true;
+                }
+            }
+            else if (
+                !trajectory_generation_finished
+            )
+            {
+                trajectory_underrun =
+                    true;
+
+                trajectory_ready =
+                    false;
+
+                hmi_hold_requested =
+                    true;
+
+                planner_cancel_requested =
+                    true;
+
+                motion_state =
+                    MOTION_HOLD;
+
+                buffer_underrun_now =
+                    true;
+            }
+
+            taskEXIT_CRITICAL();
+        }
+
+        if (
+            buffer_underrun_now
+        )
+        {
+            printf(
+                "\n"
+                "============================================================\n"
+                " TRAJECTORY BUFFER UNDERRUN\n"
+                "============================================================\n"
+                "Execution forced to HOLD.\n"
+                "Executed samples: %zu / %zu\n"
+                "============================================================\n",
+                trajectory_executed_samples,
+                trajectory_total_samples
+            );
+
+            fflush(stdout);
+        }
+
+
         /* ====================================================================
          *  PREPARE PDO COMMANDS FOR ALL SIX SERVO DRIVES
          * ====================================================================
@@ -2950,146 +2732,62 @@ static void EtherCATTask(void *pvParameters)
              slave++)
         {
             /*
-             * After PDO mapping, SOEM gives us direct pointers to each slave's
-             * output and input process-data regions.
-             *
-             * outputs:
-             *      master -> servo
-             *
-             * inputs:
-             *      servo -> master
+             * Read this A6-EC drive's current feedback from the mapped TPDO.
+             * The byte offsets now live only in ServoDrive/A6EC/a6ec_pdo.*.
              */
-            uint8_t *outputs =
-                soem_context
-                    .slavelist[slave]
-                    .outputs;
+            A6ECPDOFeedback feedback;
 
-            uint8_t *inputs =
-                soem_context
-                    .slavelist[slave]
-                    .inputs;
+            a6ec_read_feedback(
+                slave,
+                &feedback
+            );
 
 
-            /*
-             * Read CiA-402 Statusword from this slave's input PDO.
-             *
-             * CURRENT SIMULATOR PDO LAYOUT:
-             *
-             *      inputs + 2 -> Statusword
-             *
-             * This offset comes from the simulator PDO layout and must be
-             * rechecked against the real A6-EC mapping later.
-             */
-            uint16_t statusword =
-                read_u16(
-                    inputs + 2
+            uint16_t drive_state =
+                cia402_get_state(
+                    feedback.statusword
                 );
 
-            /*
-             * Mask the Statusword down to the bits used to identify the
-             * important CiA-402 drive states.
-             *
-             * Examples after masking:
-             *
-             *      0x0040 = Switch On Disabled
-             *      0x0021 = Ready to Switch On
-             *      0x0023 = Switched On
-             *      0x0027 = Operation Enabled
-             */
-            uint16_t drive_state =
-                statusword & 0x006F;
 
-
-            /*
-             * Controlword that we will write to this drive's output PDO.
-             */
             uint16_t controlword;
 
 
-            /*
-             * If Ctrl+C has been pressed:
-             *
-             *      walk DOWN the CiA-402 state machine.
-             *
-             * Otherwise:
-             *
-             *      walk UP the CiA-402 state machine toward Operation Enabled.
-             */
             if (stop_requested)
             {
                 controlword =
-                    get_disable_controlword(
+                    cia402_get_disable_controlword(
                         drive_state
                     );
             }
             else
             {
                 controlword =
-                    get_enable_controlword(
+                    cia402_get_enable_controlword(
                         drive_state
                     );
             }
 
-
-            /*
-             * Write CiA-402 Controlword into the output PDO.
-             *
-             * CURRENT SIMULATOR PDO LAYOUT:
-             *
-             *      outputs + 0 -> Controlword
-             */
-            write_u16(
-                outputs + 0,
-                controlword
-            );
-
-
-            /*
-             * ================================================================
-             *  TARGET POSITION SELECTION
-             * ================================================================
-             *
-             * WAITING / PLANNING / HOLD
-             *      -> hold measured position
-             *
-             * PREPOSITION
-             *      -> move simulated axes to qPath[0]
-             *
-             * RUNNING
-             *      -> one precomputed qPath sample per 1 ms EtherCAT cycle
-             *
-             * FINISHED
-             *      -> hold final qPath sample
-             *
-             * No interpolation is added here.
-             */
 
             const int joint =
                 slave - 1;
 
 
             int32_t actual_position =
-                read_i32(
-                    inputs + 4
-                );
+                feedback.actualPosition;
 
 
-            /*
-             * Avoid touching qPath[0] until the planner has fully published a
-             * successful trajectory.
-             */
             int32_t start_position =
                 actual_position;
 
 
             if (
                 trajectory_ready &&
-                trajectory.count > 0
+                trajectory_have_start_sample
             )
             {
                 start_position =
-                    joint_rad_to_drive_units(
-                        trajectory.qPath[0].q[joint]
+                    a6ec_joint_rad_to_position_units(
+                        trajectory_start_sample.q[joint]
                     );
 
 
@@ -3098,7 +2796,10 @@ static void EtherCATTask(void *pvParameters)
                     (long long)start_position;
 
 
-                if (llabs(start_error) > 5)
+                if (
+                    llabs(start_error) >
+                    5
+                )
                 {
                     all_at_trajectory_start =
                         false;
@@ -3115,21 +2816,11 @@ static void EtherCATTask(void *pvParameters)
                 actual_position;
 
 
-            if (stop_requested)
-            {
-                /*
-                 * Ctrl+C shutdown:
-                 * hold measured position while CiA-402 walks down.
-                 */
-                target_position =
-                    actual_position;
-            }
-            else if (!all_operation_enabled)
-            {
-                target_position =
-                    actual_position;
-            }
-            else if (hmi_hold_requested)
+            if (
+                stop_requested ||
+                !all_operation_enabled ||
+                hmi_hold_requested
+            )
             {
                 target_position =
                     actual_position;
@@ -3150,56 +2841,54 @@ static void EtherCATTask(void *pvParameters)
                         actual_position;
                 }
                 else if (
-                    state == MOTION_PREPOSITION
+                    state == MOTION_PREPOSITION &&
+                    trajectory_have_start_sample
                 )
                 {
                     /*
-                     * SIMULATOR-ONLY pre-position stage.
-                     *
-                     * This is separate from the requested Cartesian line.
-                     * Real hardware later needs a deliberately planned safe
-                     * point-to-point move to waypoint A.
+                     * Simulator-only pre-position to q[0].
+                     * Final hardware should replace this with a planned safe
+                     * point-to-point move.
                      */
                     target_position =
                         start_position;
                 }
                 else if (
                     state == MOTION_RUNNING &&
-                    trajectory_ready &&
-                    trajectory.count > 0
+                    cycle_has_trajectory_sample
                 )
                 {
                     target_position =
-                        joint_rad_to_drive_units(
-                            trajectory
-                                .qPath[trajectory_index]
-                                .q[joint]
+                        a6ec_joint_rad_to_position_units(
+                            cycle_trajectory_sample.q[joint]
                         );
                 }
                 else if (
                     state == MOTION_FINISHED &&
-                    trajectory_ready &&
-                    trajectory.count > 0
+                    trajectory_have_final_sample
                 )
                 {
                     target_position =
-                        joint_rad_to_drive_units(
-                            trajectory
-                                .qPath[trajectory.count - 1]
-                                .q[joint]
+                        a6ec_joint_rad_to_position_units(
+                            trajectory_final_sample.q[joint]
                         );
                 }
             }
 
 
             /*
-             * CURRENT SIMULATOR PDO LAYOUT:
-             *
-             *      outputs + 2 -> Target Position
+             * Same command as before, now encoded by the A6-EC PDO module.
              */
-            write_i32(
-                outputs + 2,
-                target_position
+            A6ECPDOCommand command =
+            {
+                .controlword = controlword,
+                .targetPosition = target_position
+            };
+
+
+            a6ec_write_command(
+                slave,
+                &command
             );
 
         }
@@ -3220,29 +2909,12 @@ static void EtherCATTask(void *pvParameters)
          *      ecx_receive_processdata()
          */
 
-        ecx_send_processdata(
-            &soem_context
-        );
-
-        /*
-         * Receive slave input PDOs and obtain actual WKC.
-         *
-         * After this call, each slave's .inputs memory contains the latest
-         * process data received from that slave.
-         */
         wkc =
-            ecx_receive_processdata(
-                &soem_context,
-                EC_TIMEOUTRET
-            );
+            ethercat_master_exchange();
 
 
         /* ====================================================================
-         *  CONTROLCORE TRAJECTORY EXECUTION STATE
-         * ====================================================================
-         *
-         * trajectory_index advances ONCE per EtherCAT cycle, only after all
-         * six axes used the same sample.
+         *  CONTROLCORE STREAMING TRAJECTORY EXECUTION STATE
          * ====================================================================
          */
 
@@ -3253,10 +2925,9 @@ static void EtherCATTask(void *pvParameters)
         )
         {
             /*
-             * PREPOSITION -> RUNNING
+             * PREPOSITION -> RUNNING.
              *
-             * The requested Cartesian line does not begin until all six
-             * simulated axes have reached qPath[0].
+             * The FIFO is not consumed during PREPOSITION.
              */
             if (
                 motion_state ==
@@ -3271,65 +2942,54 @@ static void EtherCATTask(void *pvParameters)
                     trajectory_index =
                         0;
 
+                    trajectory_executed_samples =
+                        0;
+
                     motion_state =
                         MOTION_RUNNING;
-
 
                     printf(
                         "\n"
                         "============================================================\n"
-                        " CONTROLCORE TRAJECTORY EXECUTION START\n"
+                        " CONTROLCORE STREAMING EXECUTION START\n"
                         "============================================================\n"
-                        "Samples:  %zu\n"
-                        "dt:       0.001 s\n"
-                        "Duration: %.6f s\n"
+                        "Samples:       %zu\n"
+                        "dt:            0.001 s\n"
+                        "Duration:      %.6f s\n"
+                        "FIFO capacity: %u samples\n"
                         "============================================================\n",
-                        trajectory.count,
-                        trajectory_report.duration
+                        trajectory_total_samples,
+                        trajectory_report.duration,
+                        (unsigned)TRAJECTORY_BUFFER_CAPACITY
                     );
 
                     fflush(stdout);
                 }
             }
-
-            /*
-             * RUNNING:
-             *
-             * one qPath point per 1 ms CSP cycle.
-             */
             else if (
                 motion_state ==
-                MOTION_RUNNING
+                    MOTION_RUNNING &&
+                cycle_has_trajectory_sample &&
+                cycle_sample_is_final
             )
             {
-                if (
-                    trajectory_index + 1 <
-                    trajectory.count
-                )
-                {
-                    trajectory_index++;
-                }
-                else
-                {
-                    motion_state =
-                        MOTION_FINISHED;
+                motion_state =
+                    MOTION_FINISHED;
 
+                printf(
+                    "\n"
+                    "============================================================\n"
+                    " CONTROLCORE STREAMING EXECUTION COMPLETE\n"
+                    "============================================================\n"
+                    "Final sample: %zu / %zu\n"
+                    "Duration:     %.6f s\n"
+                    "============================================================\n",
+                    trajectory_executed_samples,
+                    trajectory_total_samples,
+                    trajectory_report.duration
+                );
 
-                    printf(
-                        "\n"
-                        "============================================================\n"
-                        " CONTROLCORE TRAJECTORY EXECUTION COMPLETE\n"
-                        "============================================================\n"
-                        "Final sample: %zu / %zu\n"
-                        "Duration:     %.6f s\n"
-                        "============================================================\n",
-                        trajectory_index + 1,
-                        trajectory.count,
-                        trajectory_report.duration
-                    );
-
-                    fflush(stdout);
-                }
+                fflush(stdout);
             }
         }
 
@@ -3379,20 +3039,16 @@ static void EtherCATTask(void *pvParameters)
                  slave <= NUM_AXES;
                  slave++)
             {
-                uint8_t *inputs =
-                    soem_context
-                        .slavelist[slave]
-                        .inputs;
+                A6ECPDOFeedback feedback;
 
-                /*
-                 * Read each drive's Actual Position.
-                 *
-                 * CURRENT SIMULATOR OFFSET:
-                 *
-                 *      inputs + 4
-                 */
+                a6ec_read_feedback(
+                    slave,
+                    &feedback
+                );
+
+
                 actual_positions[slave - 1] =
-                    read_i32(inputs + 4);
+                    feedback.actualPosition;
             }
 
             /*
@@ -3469,41 +3125,32 @@ static void EtherCATTask(void *pvParameters)
                  slave <= NUM_AXES;
                  slave++)
             {
-                uint8_t *outputs =
-                    soem_context
-                        .slavelist[slave]
-                        .outputs;
-
-                uint8_t *inputs =
-                    soem_context
-                        .slavelist[slave]
-                        .inputs;
+                A6ECPDOCommand command;
+                A6ECPDOFeedback feedback;
 
 
-                /*
-                 * Read the target that OUR MASTER currently placed into the
-                 * output PDO.
-                 */
+                a6ec_read_command(
+                    slave,
+                    &command
+                );
+
+
+                a6ec_read_feedback(
+                    slave,
+                    &feedback
+                );
+
+
                 int32_t target =
-                    read_i32(
-                        outputs + 2
-                    );
+                    command.targetPosition;
 
-                /*
-                 * Read the actual position returned by the drive.
-                 */
+
                 int32_t actual =
-                    read_i32(
-                        inputs + 4
-                    );
+                    feedback.actualPosition;
 
-                /*
-                 * Read full raw CiA-402 Statusword.
-                 */
+
                 uint16_t status =
-                    read_u16(
-                        inputs + 2
-                    );
+                    feedback.statusword;
 
 
                 printf(
@@ -3532,7 +3179,7 @@ static void EtherCATTask(void *pvParameters)
          *
          * Once Ctrl+C sets stop_requested:
          *
-         *      get_disable_controlword()
+         *      cia402_get_disable_controlword()
          *
          * progressively walks every drive back toward:
          *
@@ -3554,25 +3201,24 @@ static void EtherCATTask(void *pvParameters)
                  slave <= NUM_AXES;
                  slave++)
             {
-                uint8_t *inputs =
-                    soem_context
-                        .slavelist[slave]
-                        .inputs;
+                A6ECPDOFeedback feedback;
 
+                a6ec_read_feedback(
+                    slave,
+                    &feedback
+                );
 
-                uint16_t statusword =
-                    read_u16(
-                        inputs + 2
-                    );
 
                 uint16_t drive_state =
-                    statusword & 0x006F;
+                    cia402_get_state(
+                        feedback.statusword
+                    );
 
 
-                /*
-                 * 0x0040 = CiA-402 Switch On Disabled.
-                 */
-                if (drive_state != 0x0040)
+                if (
+                    drive_state !=
+                    CIA402_STATE_SWITCH_ON_DISABLED
+                )
                 {
                     all_disabled = 0;
                 }
@@ -3593,52 +3239,27 @@ static void EtherCATTask(void *pvParameters)
                     "Closing EtherCAT...\n"
                 );
 
-                /*
-                 * Disable EtherCAT SYNC0 generation before closing.
-                 */
-                for (int slave = 1;
-                     slave <= NUM_AXES;
-                     slave++)
-                {
-                    if (soem_context
-                            .slavelist[slave]
-                            .hasdc)
-                    {
-                        ecx_dcsync0(
-                            &soem_context,
-                            slave,
-                            FALSE,          /* disable SYNC0 */
-                            CYCLE_TIME_NS,
-                            0
-                        );
-                    }
-                }
-
-
-                /*
-                 * Close MATLAB telemetry socket if it was created.
-                 */
+                /* Close MATLAB telemetry socket if it was created. */
                 if (telemetry_socket >= 0)
                 {
                     close(telemetry_socket);
                     telemetry_socket = -1;
                 }
 
-                /*
-                 * Close Cartesian-HMI command socket.
-                 */
+
+                /* Close Cartesian-HMI command socket. */
                 if (command_socket >= 0)
                 {
                     close(command_socket);
                     command_socket = -1;
                 }
 
+
                 /*
-                 * Close SOEM's Ethernet/EtherCAT interface.
+                 * Disable SYNC0 on DC-capable slaves and close the EtherCAT
+                 * master backend.
                  */
-                ecx_close(
-                    &soem_context
-                );
+                ethercat_master_close();
 
                 printf(
                     "EtherCAT closed cleanly\n"

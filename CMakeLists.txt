@@ -45,7 +45,27 @@ add_subdirectory(
 
 add_executable(
     freertos_pc_test
+
     main.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    freertos_pc_test
+    PRIVATE
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
 )
 
 target_link_libraries(
@@ -56,6 +76,7 @@ target_link_libraries(
     soem
     pthread
 )
+
 # ============================================================================
 # RAYLIB
 # ============================================================================
