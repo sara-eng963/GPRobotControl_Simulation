@@ -28,6 +28,7 @@ add_library(
     Execution/trajectory_buffer.c
 
     Pipeline/single_segment_line.c
+    Pipeline/single_segment_line_stream.c
 )
 
 target_include_directories(
@@ -88,6 +89,18 @@ add_executable(
 
 target_link_libraries(
     s_curve_profile_test
+    PRIVATE
+    control_core
+    m
+)
+
+add_executable(
+    single_segment_line_stream_test
+    Tests/single_segment_line_stream_test.c
+)
+
+target_link_libraries(
+    single_segment_line_stream_test
     PRIVATE
     control_core
     m
