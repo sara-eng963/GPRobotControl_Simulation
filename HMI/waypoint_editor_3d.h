@@ -7,6 +7,7 @@
 
 #include "hmi_theme.h"
 #include "hmi_types.h"
+#include "workspace_monitor.h"
 
 typedef enum
 {
@@ -50,6 +51,8 @@ typedef struct
 
     HmiNumericField xyzFields[3];
     bool xyzFieldsDirty;
+
+    HmiWorkspaceMonitor workspaceMonitor;
 
     char message[160];
 } HmiWaypointEditor3D;
