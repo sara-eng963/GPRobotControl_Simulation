@@ -1,0 +1,21 @@
+# CMake build output
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Compiled files
+*.o
+*.a
+*.so
+*.out
+*.exe
+
+# Generated test output
+single_segment_line_c.csv
+
+# Editor / OS junk
+.vscode/
+.DS_Store
+Thumbs.db
