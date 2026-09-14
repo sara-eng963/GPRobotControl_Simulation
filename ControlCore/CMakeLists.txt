@@ -121,3 +121,19 @@ target_link_libraries(
     control_core
     m
 )
+
+# ============================================================================
+# STREAMING PLANNER PERFORMANCE BENCHMARK
+# ============================================================================
+
+add_executable(
+    streaming_planner_benchmark
+    Tests/streaming_planner_benchmark.c
+)
+
+target_link_libraries(
+    streaming_planner_benchmark
+    PRIVATE
+    control_core
+    m
+)
