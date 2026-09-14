@@ -21,6 +21,7 @@ add_library(
     Kinematics/adls_ik.c
 
     Trajectory/generate_line_waypoints.c
+    Trajectory/circular_path.c
     Trajectory/arc_length_parameterize.c
     Trajectory/s_curve_time_scaling.c
     Trajectory/s_curve_profile.c
@@ -29,6 +30,7 @@ add_library(
 
     Pipeline/single_segment_line.c
     Pipeline/single_segment_line_stream.c
+    Pipeline/single_segment_circular.c
 )
 
 target_include_directories(
@@ -65,6 +67,18 @@ add_executable(
 
 target_link_libraries(
     single_segment_line_test
+    PRIVATE
+    control_core
+    m
+)
+
+add_executable(
+    single_segment_circular_test
+    Tests/single_segment_circular_test.c
+)
+
+target_link_libraries(
+    single_segment_circular_test
     PRIVATE
     control_core
     m
