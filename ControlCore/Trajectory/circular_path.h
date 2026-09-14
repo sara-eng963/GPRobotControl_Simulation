@@ -18,29 +18,43 @@
  *      - full circles
  *
  * The three supplied Cartesian points define the circle plane, center,
- * radius, and reference normal.
+ * radius, in-plane basis, and reference normal.
  *
- * VALIDATION NOTE:
+ * MATLAB REFERENCE
+ * ----------------
+ * This implementation now follows the MATLAB helper files uploaded by the
+ * trajectory team:
  *
- * The circular geometry routines in this module were independently
- * constructed from the interface and expected behavior of the available
- * MATLAB trajectory pipelines. The original MATLAB circle-geometry helper
- * implementations were not present in the reference repository at the time
- * this C implementation was written.
+ *      Control/Trajectory/generateCircleWaypoints.m
+ *      Control/Trajectory/generateFullCircleWaypoints.m
  *
- * The implementation is therefore functionally tested and mathematically
- * consistent, but direct source-to-source validation against the original
- * MATLAB geometry helpers is still pending until those files are available.
+ * In particular, the C implementation mirrors the MATLAB sequence:
+ *
+ *      plane normal from cross(P2-P1, P3-P1)
+ *          ->
+ *      circumcenter from the 3x3 linear system A*C = rhs
+ *          ->
+ *      e1/e2 in-plane orthonormal basis
+ *          ->
+ *      signed arc-sweep selection through the middle point
+ *          ->
+ *      uniform angular sampling
+ *
+ * The earlier independently reconstructed geometry has therefore been replaced
+ * by a source-matched port of the uploaded MATLAB implementation.
  * ============================================================================
  */
 
 typedef struct
 {
     Vec3 center;
-    Vec3 axis;          /* unit plane normal */
+    Vec3 axis;          /* MATLAB b: unit plane normal */
 
     real_t radius;
     real_t thetaTotal;  /* signed sweep [rad] */
+
+    Vec3 e1;            /* unit vector center -> start */
+    Vec3 e2;            /* cross(axis, e1) */
 
 } CircularPathInfo;
 
@@ -49,14 +63,11 @@ typedef struct
  * THREE-POINT ARC
  * ============================================================================
  *
+ * Direct C equivalent of generateCircleWaypoints.m.
+ *
  * Generates the circular arc that starts at start, passes through mid,
- * and ends at end.
- *
- * The returned axis direction is chosen from:
- *
- *      cross(mid - start, end - start)
- *
- * so thetaTotal is positive for the ordered start -> mid -> end arc.
+ * and ends at end. The signed sweep is selected using the same CCW/CW
+ * candidate test as the MATLAB helper.
  * ============================================================================
  */
 
@@ -73,6 +84,8 @@ bool generate_arc_waypoints(
 /* ============================================================================
  * FULL CIRCLE
  * ============================================================================
+ *
+ * Direct C equivalent of generateFullCircleWaypoints.m.
  *
  * p1 is the start/end point. p2 and p3 define the same circle geometry.
  *
