@@ -116,6 +116,46 @@ static const char *waypoint_name(int waypoint)
     }
 }
 
+static HmiWorkspaceCheck workspace_check_for_pose(
+    const HmiWaypointEditor3D *editor,
+    const HmiPose *pose
+)
+{
+    if (editor == NULL || pose == NULL)
+    {
+        HmiWorkspaceCheck unavailable = {0};
+        unavailable.status = HMI_WORKSPACE_CHECK_UNAVAILABLE;
+        return unavailable;
+    }
+
+    return
+        hmi_workspace_monitor_check(
+            &editor->workspaceMonitor,
+            (double)pose->value[0],
+            (double)pose->value[1],
+            (double)pose->value[2]
+        );
+}
+
+static Color waypoint_display_color(
+    const HmiWaypointEditor3D *editor,
+    int waypoint
+)
+{
+    HmiWorkspaceCheck check =
+        workspace_check_for_pose(
+            editor,
+            &editor->working[waypoint]
+        );
+
+    if (check.status == HMI_WORKSPACE_CHECK_OUTSIDE)
+    {
+        return HMI_C_BAD;
+    }
+
+    return waypoint_color(waypoint);
+}
+
 static const char *view_name(HmiTeachView view)
 {
     switch (view)
@@ -774,10 +814,21 @@ static void draw_waypoints_3d(
         }
 
         Vector3 position = pose_to_render(&editor->working[i]);
-        Color color = waypoint_color(i);
+        Color color = waypoint_display_color(editor, i);
+
+        HmiWorkspaceCheck check =
+            workspace_check_for_pose(
+                editor,
+                &editor->working[i]
+            );
 
         DrawSphere(position, 0.022f, color);
         DrawSphereWires(position, 0.026f, 8, 8, Fade(WHITE, 0.75f));
+
+        if (check.status == HMI_WORKSPACE_CHECK_OUTSIDE)
+        {
+            DrawSphereWires(position, 0.043f, 12, 12, HMI_C_BAD);
+        }
 
         if (i == editor->activeWaypoint)
         {
@@ -843,7 +894,7 @@ static void draw_texture_labels(
             (int)screen.x + 10,
             (int)screen.y - 18,
             18,
-            waypoint_color(i)
+            waypoint_display_color(editor, i)
         );
     }
 
@@ -881,6 +932,17 @@ static void draw_texture_labels(
             axis_color(axis)
         );
     }
+
+    if (editor->workspaceMonitor.ready)
+    {
+        DrawText(
+            "RED WAYPOINT = OUTSIDE SAMPLED FK WORKSPACE",
+            18,
+            18,
+            15,
+            HMI_C_MUTED
+        );
+    }
 }
 
 static void render_workspace_texture(
@@ -904,6 +966,125 @@ static void render_workspace_texture(
     draw_texture_labels(editor);
 
     EndTextureMode();
+}
+
+static void draw_workspace_status(
+    HmiWaypointEditor3D *editor,
+    Rectangle panel
+)
+{
+    HmiWorkspaceCheck check =
+        workspace_check_for_pose(
+            editor,
+            &editor->working[editor->activeWaypoint]
+        );
+
+    hmi_ui_text(
+        "SAMPLED KINEMATIC WORKSPACE",
+        panel.x + 16.0f,
+        panel.y + 307.0f,
+        12.0f,
+        HMI_C_MUTED,
+        true
+    );
+
+    char detail[160];
+
+    if (check.status == HMI_WORKSPACE_CHECK_INSIDE)
+    {
+        hmi_ui_text(
+            "INSIDE SAMPLED WORKSPACE",
+            panel.x + 16.0f,
+            panel.y + 331.0f,
+            12.0f,
+            HMI_C_GOOD,
+            true
+        );
+
+        snprintf(
+            detail,
+            sizeof(detail),
+            "rho %.3f m | local sampled range %.3f .. %.3f m",
+            check.rho,
+            check.rhoMin,
+            check.rhoMax
+        );
+
+        hmi_ui_text(
+            detail,
+            panel.x + 16.0f,
+            panel.y + 351.0f,
+            10.5f,
+            HMI_C_FAINT,
+            false
+        );
+    }
+    else if (check.status == HMI_WORKSPACE_CHECK_OUTSIDE)
+    {
+        hmi_ui_text(
+            "WARNING: OUTSIDE SAMPLED WORKSPACE",
+            panel.x + 16.0f,
+            panel.y + 331.0f,
+            12.0f,
+            HMI_C_BAD,
+            true
+        );
+
+        if (
+            check.z < check.zMin - 0.025 ||
+            check.z > check.zMax + 0.025
+        )
+        {
+            snprintf(
+                detail,
+                sizeof(detail),
+                "Z %.3f m | sampled Z range %.3f .. %.3f m",
+                check.z,
+                check.zMin,
+                check.zMax
+            );
+        }
+        else
+        {
+            snprintf(
+                detail,
+                sizeof(detail),
+                "rho %.3f m | local sampled range %.3f .. %.3f m",
+                check.rho,
+                check.rhoMin,
+                check.rhoMax
+            );
+        }
+
+        hmi_ui_text(
+            detail,
+            panel.x + 16.0f,
+            panel.y + 351.0f,
+            10.5f,
+            HMI_C_BAD,
+            false
+        );
+    }
+    else
+    {
+        hmi_ui_text(
+            "WORKSPACE CHECK UNAVAILABLE",
+            panel.x + 16.0f,
+            panel.y + 331.0f,
+            12.0f,
+            HMI_C_WARN,
+            true
+        );
+    }
+
+    hmi_ui_text(
+        "Position-only FK sampling; not IK/orientation/collision validation.",
+        panel.x + 16.0f,
+        panel.y + 373.0f,
+        10.2f,
+        HMI_C_FAINT,
+        false
+    );
 }
 
 static void draw_sidebar_coordinates(
@@ -1029,10 +1210,12 @@ static void draw_sidebar_coordinates(
         active->value[2] = (float)values[2];
     }
 
+    draw_workspace_status(editor, panel);
+
     hmi_ui_text(
         "HOW TO MOVE",
         panel.x + 16.0f,
-        panel.y + 319.0f,
+        panel.y + 407.0f,
         12.0f,
         HMI_C_MUTED,
         true
@@ -1041,7 +1224,7 @@ static void draw_sidebar_coordinates(
     hmi_ui_text(
         "Click viewport: move in current view plane",
         panel.x + 16.0f,
-        panel.y + 344.0f,
+        panel.y + 432.0f,
         11.5f,
         HMI_C_FAINT,
         false
@@ -1050,7 +1233,7 @@ static void draw_sidebar_coordinates(
     hmi_ui_text(
         "Drag X / Y / Z gizmo: move on one axis",
         panel.x + 16.0f,
-        panel.y + 365.0f,
+        panel.y + 453.0f,
         11.5f,
         HMI_C_FAINT,
         false
@@ -1059,7 +1242,7 @@ static void draw_sidebar_coordinates(
     hmi_ui_text(
         "Right-drag: orbit  |  Wheel: zoom",
         panel.x + 16.0f,
-        panel.y + 386.0f,
+        panel.y + 474.0f,
         11.5f,
         HMI_C_FAINT,
         false
@@ -1068,7 +1251,7 @@ static void draw_sidebar_coordinates(
     hmi_ui_text(
         "Tip: Top keeps Z, Front keeps Y, Side keeps X.",
         panel.x + 16.0f,
-        panel.y + 419.0f,
+        panel.y + 507.0f,
         11.0f,
         HMI_C_WARN,
         false
@@ -1101,6 +1284,14 @@ bool hmi_waypoint_editor_init(HmiWaypointEditor3D *editor)
         );
     }
 
+    if (!hmi_workspace_monitor_init(&editor->workspaceMonitor))
+    {
+        fprintf(
+            stderr,
+            "Warning: sampled workspace monitor could not be initialized; 3D teaching will continue without workspace warnings.\n"
+        );
+    }
+
     editor->dragAxis = -1;
     editor->orbitYaw = 0.78f;
     editor->orbitPitch = 0.45f;
@@ -1115,6 +1306,8 @@ void hmi_waypoint_editor_shutdown(HmiWaypointEditor3D *editor)
     {
         return;
     }
+
+    hmi_workspace_monitor_shutdown(&editor->workspaceMonitor);
 
     if (editor->renderTargetReady)
     {
@@ -1152,11 +1345,22 @@ void hmi_waypoint_editor_open(
     apply_view_preset(editor, HMI_TEACH_VIEW_PERSPECTIVE);
     sync_xyz_fields_from_active(editor);
 
-    snprintf(
-        editor->message,
-        sizeof(editor->message),
-        "Free-space teaching: select A/B/C, click near the point, then drag X/Y/Z for exact 3D placement."
-    );
+    if (editor->workspaceMonitor.ready)
+    {
+        snprintf(
+            editor->message,
+            sizeof(editor->message),
+            "Workspace warning active: a red waypoint is outside the sampled FK workspace."
+        );
+    }
+    else
+    {
+        snprintf(
+            editor->message,
+            sizeof(editor->message),
+            "Free-space teaching active. Sampled workspace warning is unavailable."
+        );
+    }
 
     editor->open = true;
 }
@@ -1328,12 +1532,20 @@ HmiWaypointEditorResult hmi_waypoint_editor_frame(
     hmi_ui_panel(sidebar, HMI_C_PANEL);
     draw_sidebar_coordinates(editor, sidebar, mouse);
 
+    HmiWorkspaceCheck activeCheck =
+        workspace_check_for_pose(
+            editor,
+            &editor->working[editor->activeWaypoint]
+        );
+
     hmi_ui_text(
         editor->message,
         bounds.x + 18.0f,
         bounds.y + bounds.height - 39.0f,
         11.5f,
-        HMI_C_MUTED,
+        activeCheck.status == HMI_WORKSPACE_CHECK_OUTSIDE
+            ? HMI_C_BAD
+            : HMI_C_MUTED,
         false
     );
 
@@ -1375,7 +1587,9 @@ HmiWaypointEditorResult hmi_waypoint_editor_frame(
         hmi_ui_button(
             applyButton,
             "APPLY XYZ",
-            HMI_BUTTON_PRIMARY,
+            activeCheck.status == HMI_WORKSPACE_CHECK_OUTSIDE
+                ? HMI_BUTTON_DANGER
+                : HMI_BUTTON_PRIMARY,
             true,
             mouse,
             false
