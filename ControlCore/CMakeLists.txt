@@ -2,19 +2,9 @@ cmake_minimum_required(VERSION 3.16)
 
 project(ControlCore C)
 
-
-# ============================================================================
-# C STANDARD
-# ============================================================================
-
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
-
-
-# ============================================================================
-# CONTROL CORE LIBRARY
-# ============================================================================
 
 add_library(
     control_core
@@ -33,16 +23,12 @@ add_library(
     Trajectory/generate_line_waypoints.c
     Trajectory/arc_length_parameterize.c
     Trajectory/s_curve_time_scaling.c
+    Trajectory/s_curve_profile.c
 
     Execution/trajectory_buffer.c
 
     Pipeline/single_segment_line.c
 )
-
-
-# ============================================================================
-# INCLUDE DIRECTORIES
-# ============================================================================
 
 target_include_directories(
     control_core
@@ -56,21 +42,11 @@ target_include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/Pipeline
 )
 
-
-# ============================================================================
-# MATH LIBRARY
-# ============================================================================
-
 target_link_libraries(
     control_core
     PUBLIC
     m
 )
-
-
-# ============================================================================
-# WARNINGS
-# ============================================================================
 
 target_compile_options(
     control_core
@@ -81,40 +57,38 @@ target_compile_options(
     -Wpedantic
 )
 
-
-# ============================================================================
-# SINGLE-SEGMENT LINE TEST
-# ============================================================================
-
 add_executable(
     single_segment_line_test
-
     Tests/single_segment_line_test.c
 )
 
 target_link_libraries(
     single_segment_line_test
     PRIVATE
-
     control_core
     m
 )
 
-
-# ============================================================================
-# TRAJECTORY BUFFER TEST
-# ============================================================================
-
 add_executable(
     trajectory_buffer_test
-
     Tests/trajectory_buffer_test.c
 )
 
 target_link_libraries(
     trajectory_buffer_test
     PRIVATE
+    control_core
+    m
+)
 
+add_executable(
+    s_curve_profile_test
+    Tests/s_curve_profile_test.c
+)
+
+target_link_libraries(
+    s_curve_profile_test
+    PRIVATE
     control_core
     m
 )
