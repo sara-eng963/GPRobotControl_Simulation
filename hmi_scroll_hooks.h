@@ -3,31 +3,31 @@
 
 /*
  * ============================================================================
- * HMI FIXED-SCALE VIEWPORT / SCROLL LAYER
+ * HMI FIXED-SCALE RESPONSIVE VIEWPORT
  * ============================================================================
  *
- * UX RULES
- * --------
- * 1. The HMI has ONE visual scale: its native 1440 x 900 design size.
- * 2. Resizing the desktop window NEVER zooms or shrinks the interface.
- * 3. If the window is smaller than the design canvas, the window becomes a
- *    viewport and scrollbars appear only on the overflowing axes.
- * 4. If the window is larger than the design canvas, the canvas is centered.
- * 5. Mouse hit-testing follows the scrolled viewport exactly.
+ * UX rule:
  *
- * Navigation
- * ----------
- *      Mouse wheel                vertical scroll
- *      Shift + mouse wheel        horizontal scroll
- *      Horizontal trackpad wheel  horizontal scroll
- *      Drag scrollbar thumb       direct navigation
- *      Click scrollbar track      jump toward that position
+ *   - The operator does NOT zoom the HMI.
+ *   - The HMI always renders at one fixed, readable design scale.
+ *   - Resizing the desktop window only changes the visible viewport.
+ *   - Scrollbars appear only when the viewport is smaller than the content.
  *
- * When only one axis overflows, the normal wheel follows that axis. There is
- * deliberately NO zoom gesture, zoom hotkey, zoom factor, or auto-fit scaling.
+ * The original 1440 x 900 layout is intentionally rendered at 90%.
+ * This keeps the entire interface comfortably inside a typical laptop-height
+ * window while avoiding the tiny text produced by "fit everything to width".
  *
- * This header is force-included only for mock_hmi. It changes presentation
- * only; trajectory values, UDP packets and controller behavior are untouched.
+ * Controls:
+ *
+ *      Mouse wheel          vertical scroll
+ *      Shift + mouse wheel  horizontal scroll
+ *      Horizontal wheel     horizontal scroll (trackpads / tilt wheels)
+ *      Drag scrollbar thumb direct navigation
+ *
+ * If content overflows only horizontally, the normal wheel moves horizontally,
+ * matching the behavior of the earlier HMI.
+ *
+ * There is no zoom state, no zoom keyboard shortcut, and no auto-fit-to-width.
  * ============================================================================
  */
 
@@ -36,38 +36,27 @@
 #include <math.h>
 #include <stdbool.h>
 
+#define HMI_VIEW_LOGICAL_WIDTH    1440.0f
+#define HMI_VIEW_LOGICAL_HEIGHT    900.0f
 
-#define HMI_VIEW_CONTENT_WIDTH     1440.0f
-#define HMI_VIEW_CONTENT_HEIGHT     900.0f
+/* Fixed visual scale. This is a design choice, not user zoom. */
+#define HMI_VIEW_SCALE               0.90f
 
-#define HMI_VIEW_SCROLLBAR_GUTTER     14.0f
-#define HMI_VIEW_TRACK_INSET            3.0f
-#define HMI_VIEW_SCROLL_STEP            62.0f
-#define HMI_VIEW_MIN_THUMB              52.0f
+#define HMI_VIEW_CONTENT_WIDTH  (HMI_VIEW_LOGICAL_WIDTH  * HMI_VIEW_SCALE)
+#define HMI_VIEW_CONTENT_HEIGHT (HMI_VIEW_LOGICAL_HEIGHT * HMI_VIEW_SCALE)
 
+#define HMI_SCROLLBAR_SIZE           13.0f
+#define HMI_SCROLL_STEP              64.0f
+#define HMI_SCROLL_MIN_THUMB         52.0f
+#define HMI_SCROLL_EDGE_MARGIN        3.0f
 
-static float hmi_view_scroll_x = 0.0f;
-static float hmi_view_scroll_y = 0.0f;
+static float hmi_scroll_x = 0.0f;
+static float hmi_scroll_y = 0.0f;
 
-static bool hmi_view_drag_x = false;
-static bool hmi_view_drag_y = false;
-
-static float hmi_view_drag_offset_x = 0.0f;
-static float hmi_view_drag_offset_y = 0.0f;
-
-
-typedef struct
-{
-    float viewportWidth;
-    float viewportHeight;
-
-    float maxScrollX;
-    float maxScrollY;
-
-    bool showHorizontal;
-    bool showVertical;
-
-} HmiViewportMetrics;
+static bool hmi_drag_x = false;
+static bool hmi_drag_y = false;
+static float hmi_drag_offset_x = 0.0f;
+static float hmi_drag_offset_y = 0.0f;
 
 
 static float hmi_view_clampf(
@@ -90,252 +79,206 @@ static float hmi_view_clampf(
 }
 
 
-/*
- * Resolve viewport dimensions and scrollbar visibility. A scrollbar on one
- * axis can create overflow on the other, so the calculation is stabilized in
- * two passes.
- */
-static HmiViewportMetrics hmi_view_metrics(void)
+static void hmi_view_limits(
+    float *max_x,
+    float *max_y,
+    float *viewport_w,
+    float *viewport_h,
+    float *origin_x,
+    float *origin_y
+)
 {
-    HmiViewportMetrics metrics = {0};
+    float actual_w = (float)GetScreenWidth();
+    float actual_h = (float)GetScreenHeight();
 
-    float windowWidth =
-        (float)GetScreenWidth();
+    bool need_x = HMI_VIEW_CONTENT_WIDTH > actual_w;
+    bool need_y = HMI_VIEW_CONTENT_HEIGHT > actual_h;
 
-    float windowHeight =
-        (float)GetScreenHeight();
+    float usable_w =
+        actual_w - (need_y ? HMI_SCROLLBAR_SIZE : 0.0f);
 
-    if (windowWidth < 1.0f)
+    float usable_h =
+        actual_h - (need_x ? HMI_SCROLLBAR_SIZE : 0.0f);
+
+    /* One scrollbar can force the other axis to overflow. */
+    need_x = HMI_VIEW_CONTENT_WIDTH > usable_w;
+    need_y = HMI_VIEW_CONTENT_HEIGHT > usable_h;
+
+    usable_w =
+        actual_w - (need_y ? HMI_SCROLLBAR_SIZE : 0.0f);
+
+    usable_h =
+        actual_h - (need_x ? HMI_SCROLLBAR_SIZE : 0.0f);
+
+    if (usable_w < 1.0f)
     {
-        windowWidth = 1.0f;
+        usable_w = 1.0f;
     }
 
-    if (windowHeight < 1.0f)
+    if (usable_h < 1.0f)
     {
-        windowHeight = 1.0f;
+        usable_h = 1.0f;
     }
 
-    bool horizontal =
-        windowWidth < HMI_VIEW_CONTENT_WIDTH;
+    float local_max_x =
+        fmaxf(0.0f, HMI_VIEW_CONTENT_WIDTH - usable_w);
 
-    bool vertical =
-        windowHeight < HMI_VIEW_CONTENT_HEIGHT;
+    float local_max_y =
+        fmaxf(0.0f, HMI_VIEW_CONTENT_HEIGHT - usable_h);
 
-    for (int pass = 0; pass < 2; pass++)
-    {
-        float availableWidth =
-            windowWidth -
-            (vertical ? HMI_VIEW_SCROLLBAR_GUTTER : 0.0f);
+    float local_origin_x =
+        local_max_x <= 0.0f
+        ? (usable_w - HMI_VIEW_CONTENT_WIDTH) * 0.5f
+        : 0.0f;
 
-        float availableHeight =
-            windowHeight -
-            (horizontal ? HMI_VIEW_SCROLLBAR_GUTTER : 0.0f);
+    float local_origin_y =
+        local_max_y <= 0.0f
+        ? (usable_h - HMI_VIEW_CONTENT_HEIGHT) * 0.5f
+        : 0.0f;
 
-        horizontal =
-            availableWidth < HMI_VIEW_CONTENT_WIDTH;
-
-        vertical =
-            availableHeight < HMI_VIEW_CONTENT_HEIGHT;
-    }
-
-    metrics.showHorizontal = horizontal;
-    metrics.showVertical = vertical;
-
-    metrics.viewportWidth =
-        windowWidth -
-        (vertical ? HMI_VIEW_SCROLLBAR_GUTTER : 0.0f);
-
-    metrics.viewportHeight =
-        windowHeight -
-        (horizontal ? HMI_VIEW_SCROLLBAR_GUTTER : 0.0f);
-
-    if (metrics.viewportWidth < 1.0f)
-    {
-        metrics.viewportWidth = 1.0f;
-    }
-
-    if (metrics.viewportHeight < 1.0f)
-    {
-        metrics.viewportHeight = 1.0f;
-    }
-
-    metrics.maxScrollX =
-        fmaxf(
-            0.0f,
-            HMI_VIEW_CONTENT_WIDTH -
-            metrics.viewportWidth
-        );
-
-    metrics.maxScrollY =
-        fmaxf(
-            0.0f,
-            HMI_VIEW_CONTENT_HEIGHT -
-            metrics.viewportHeight
-        );
-
-    return metrics;
+    if (max_x != NULL) *max_x = local_max_x;
+    if (max_y != NULL) *max_y = local_max_y;
+    if (viewport_w != NULL) *viewport_w = usable_w;
+    if (viewport_h != NULL) *viewport_h = usable_h;
+    if (origin_x != NULL) *origin_x = local_origin_x;
+    if (origin_y != NULL) *origin_y = local_origin_y;
 }
 
 
-static Rectangle hmi_view_horizontal_track(
-    HmiViewportMetrics metrics
+static Rectangle hmi_horizontal_track(
+    float viewport_w,
+    float viewport_h
 )
 {
     return
         (Rectangle)
         {
-            HMI_VIEW_TRACK_INSET,
-            metrics.viewportHeight + HMI_VIEW_TRACK_INSET,
+            HMI_SCROLL_EDGE_MARGIN,
+            viewport_h + 2.0f,
             fmaxf(
                 1.0f,
-                metrics.viewportWidth -
-                2.0f * HMI_VIEW_TRACK_INSET
+                viewport_w - 2.0f * HMI_SCROLL_EDGE_MARGIN
             ),
-            HMI_VIEW_SCROLLBAR_GUTTER -
-                2.0f * HMI_VIEW_TRACK_INSET
+            HMI_SCROLLBAR_SIZE - 4.0f
         };
 }
 
 
-static Rectangle hmi_view_vertical_track(
-    HmiViewportMetrics metrics
+static Rectangle hmi_vertical_track(
+    float viewport_w,
+    float viewport_h
 )
 {
     return
         (Rectangle)
         {
-            metrics.viewportWidth + HMI_VIEW_TRACK_INSET,
-            HMI_VIEW_TRACK_INSET,
-            HMI_VIEW_SCROLLBAR_GUTTER -
-                2.0f * HMI_VIEW_TRACK_INSET,
+            viewport_w + 2.0f,
+            HMI_SCROLL_EDGE_MARGIN,
+            HMI_SCROLLBAR_SIZE - 4.0f,
             fmaxf(
                 1.0f,
-                metrics.viewportHeight -
-                2.0f * HMI_VIEW_TRACK_INSET
+                viewport_h - 2.0f * HMI_SCROLL_EDGE_MARGIN
             )
         };
 }
 
 
-static Rectangle hmi_view_horizontal_thumb(
-    HmiViewportMetrics metrics,
-    Rectangle track
+static Rectangle hmi_horizontal_thumb(
+    Rectangle track,
+    float viewport_w,
+    float max_x
 )
 {
-    float thumbWidth =
+    float thumb_w =
         track.width *
-        (
-            metrics.viewportWidth /
-            HMI_VIEW_CONTENT_WIDTH
-        );
+        (viewport_w / HMI_VIEW_CONTENT_WIDTH);
 
-    thumbWidth =
+    thumb_w =
         hmi_view_clampf(
-            thumbWidth,
-            HMI_VIEW_MIN_THUMB,
+            thumb_w,
+            HMI_SCROLL_MIN_THUMB,
             track.width
         );
 
-    float travel =
-        track.width -
-        thumbWidth;
+    float travel = track.width - thumb_w;
+    float x = track.x;
 
-    float thumbX =
-        track.x;
-
-    if (
-        metrics.maxScrollX > 0.0f &&
-        travel > 0.0f
-    )
+    if (max_x > 0.0f && travel > 0.0f)
     {
-        thumbX +=
-            (
-                hmi_view_scroll_x /
-                metrics.maxScrollX
-            ) *
-            travel;
+        x += (hmi_scroll_x / max_x) * travel;
     }
 
     return
         (Rectangle)
         {
-            thumbX,
+            x,
             track.y,
-            thumbWidth,
+            thumb_w,
             track.height
         };
 }
 
 
-static Rectangle hmi_view_vertical_thumb(
-    HmiViewportMetrics metrics,
-    Rectangle track
+static Rectangle hmi_vertical_thumb(
+    Rectangle track,
+    float viewport_h,
+    float max_y
 )
 {
-    float thumbHeight =
+    float thumb_h =
         track.height *
-        (
-            metrics.viewportHeight /
-            HMI_VIEW_CONTENT_HEIGHT
-        );
+        (viewport_h / HMI_VIEW_CONTENT_HEIGHT);
 
-    thumbHeight =
+    thumb_h =
         hmi_view_clampf(
-            thumbHeight,
-            HMI_VIEW_MIN_THUMB,
+            thumb_h,
+            HMI_SCROLL_MIN_THUMB,
             track.height
         );
 
-    float travel =
-        track.height -
-        thumbHeight;
+    float travel = track.height - thumb_h;
+    float y = track.y;
 
-    float thumbY =
-        track.y;
-
-    if (
-        metrics.maxScrollY > 0.0f &&
-        travel > 0.0f
-    )
+    if (max_y > 0.0f && travel > 0.0f)
     {
-        thumbY +=
-            (
-                hmi_view_scroll_y /
-                metrics.maxScrollY
-            ) *
-            travel;
+        y += (hmi_scroll_y / max_y) * travel;
     }
 
     return
         (Rectangle)
         {
             track.x,
-            thumbY,
+            y,
             track.width,
-            thumbHeight
+            thumb_h
         };
 }
 
 
-static bool hmi_view_pointer_on_scrollbar(void)
+static bool hmi_pointer_on_scrollbar(void)
 {
-    HmiViewportMetrics metrics =
-        hmi_view_metrics();
+    float max_x;
+    float max_y;
+    float viewport_w;
+    float viewport_h;
 
-    Vector2 mouse =
-        GetMousePosition();
+    hmi_view_limits(
+        &max_x,
+        &max_y,
+        &viewport_w,
+        &viewport_h,
+        NULL,
+        NULL
+    );
 
-    if (metrics.showHorizontal)
+    Vector2 mouse = GetMousePosition();
+
+    if (max_x > 0.0f)
     {
-        Rectangle track =
-            hmi_view_horizontal_track(
-                metrics
-            );
-
         if (
             CheckCollisionPointRec(
                 mouse,
-                track
+                hmi_horizontal_track(viewport_w, viewport_h)
             )
         )
         {
@@ -343,17 +286,12 @@ static bool hmi_view_pointer_on_scrollbar(void)
         }
     }
 
-    if (metrics.showVertical)
+    if (max_y > 0.0f)
     {
-        Rectangle track =
-            hmi_view_vertical_track(
-                metrics
-            );
-
         if (
             CheckCollisionPointRec(
                 mouse,
-                track
+                hmi_vertical_track(viewport_w, viewport_h)
             )
         )
         {
@@ -365,507 +303,339 @@ static bool hmi_view_pointer_on_scrollbar(void)
 }
 
 
-static void hmi_view_clamp_scroll(
-    HmiViewportMetrics metrics
-)
+static void hmi_scroll_update(void)
 {
-    hmi_view_scroll_x =
-        hmi_view_clampf(
-            hmi_view_scroll_x,
-            0.0f,
-            metrics.maxScrollX
-        );
+    float max_x;
+    float max_y;
+    float viewport_w;
+    float viewport_h;
 
-    hmi_view_scroll_y =
-        hmi_view_clampf(
-            hmi_view_scroll_y,
-            0.0f,
-            metrics.maxScrollY
-        );
+    hmi_view_limits(
+        &max_x,
+        &max_y,
+        &viewport_w,
+        &viewport_h,
+        NULL,
+        NULL
+    );
 
-    if (!metrics.showHorizontal)
+    if (max_x <= 0.0f)
     {
-        hmi_view_scroll_x = 0.0f;
-        hmi_view_drag_x = false;
+        hmi_scroll_x = 0.0f;
+        hmi_drag_x = false;
     }
 
-    if (!metrics.showVertical)
+    if (max_y <= 0.0f)
     {
-        hmi_view_scroll_y = 0.0f;
-        hmi_view_drag_y = false;
+        hmi_scroll_y = 0.0f;
+        hmi_drag_y = false;
     }
-}
 
-
-static void hmi_view_update_wheel(
-    HmiViewportMetrics metrics
-)
-{
-    Vector2 wheel =
-        GetMouseWheelMoveV();
+    Vector2 wheel = GetMouseWheelMoveV();
 
     bool shift =
         IsKeyDown(KEY_LEFT_SHIFT) ||
         IsKeyDown(KEY_RIGHT_SHIFT);
 
-    /*
-     * Native horizontal wheel/trackpad motion gets first priority.
-     */
     if (
-        metrics.showHorizontal &&
-        fabsf(wheel.x) > 1e-6f
+        max_x > 0.0f &&
+        fabsf(wheel.x) > 1e-4f
     )
     {
-        hmi_view_scroll_x -=
+        hmi_scroll_x -=
             wheel.x *
-            HMI_VIEW_SCROLL_STEP;
+            HMI_SCROLL_STEP;
     }
 
-    if (fabsf(wheel.y) <= 1e-6f)
+    if (fabsf(wheel.y) > 1e-4f)
     {
-        return;
-    }
-
-    if (
-        metrics.showHorizontal &&
-        (
-            shift ||
-            !metrics.showVertical
+        if (
+            max_x > 0.0f &&
+            (shift || max_y <= 0.0f)
         )
-    )
-    {
-        hmi_view_scroll_x -=
-            wheel.y *
-            HMI_VIEW_SCROLL_STEP;
+        {
+            hmi_scroll_x -=
+                wheel.y *
+                HMI_SCROLL_STEP;
+        }
+        else if (max_y > 0.0f)
+        {
+            hmi_scroll_y -=
+                wheel.y *
+                HMI_SCROLL_STEP;
+        }
     }
-    else if (metrics.showVertical)
+
+    Vector2 mouse = GetMousePosition();
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
     {
-        hmi_view_scroll_y -=
-            wheel.y *
-            HMI_VIEW_SCROLL_STEP;
-    }
-}
-
-
-static void hmi_view_update_scrollbar_drag(
-    HmiViewportMetrics metrics
-)
-{
-    Vector2 mouse =
-        GetMousePosition();
-
-    if (
-        IsMouseButtonPressed(
-            MOUSE_BUTTON_LEFT
-        )
-    )
-    {
-        if (metrics.showHorizontal)
+        if (max_x > 0.0f)
         {
             Rectangle track =
-                hmi_view_horizontal_track(
-                    metrics
+                hmi_horizontal_track(
+                    viewport_w,
+                    viewport_h
                 );
 
             Rectangle thumb =
-                hmi_view_horizontal_thumb(
-                    metrics,
-                    track
+                hmi_horizontal_thumb(
+                    track,
+                    viewport_w,
+                    max_x
                 );
 
-            if (
-                CheckCollisionPointRec(
-                    mouse,
-                    thumb
-                )
-            )
+            if (CheckCollisionPointRec(mouse, thumb))
             {
-                hmi_view_drag_x = true;
-
-                hmi_view_drag_offset_x =
-                    mouse.x -
-                    thumb.x;
+                hmi_drag_x = true;
+                hmi_drag_offset_x =
+                    mouse.x - thumb.x;
             }
-            else if (
-                CheckCollisionPointRec(
-                    mouse,
-                    track
-                )
-            )
+            else if (CheckCollisionPointRec(mouse, track))
             {
                 float travel =
-                    track.width -
-                    thumb.width;
+                    track.width - thumb.width;
 
-                float thumbX =
+                float new_thumb_x =
                     hmi_view_clampf(
-                        mouse.x -
-                            thumb.width * 0.5f,
+                        mouse.x - thumb.width * 0.5f,
                         track.x,
                         track.x + travel
                     );
 
                 if (travel > 0.0f)
                 {
-                    hmi_view_scroll_x =
-                        (
-                            (thumbX - track.x) /
-                            travel
-                        ) *
-                        metrics.maxScrollX;
+                    hmi_scroll_x =
+                        ((new_thumb_x - track.x) / travel) *
+                        max_x;
                 }
 
-                hmi_view_drag_x = true;
-                hmi_view_drag_offset_x =
+                hmi_drag_x = true;
+                hmi_drag_offset_x =
                     thumb.width * 0.5f;
             }
         }
 
-        if (metrics.showVertical)
+        if (max_y > 0.0f)
         {
             Rectangle track =
-                hmi_view_vertical_track(
-                    metrics
+                hmi_vertical_track(
+                    viewport_w,
+                    viewport_h
                 );
 
             Rectangle thumb =
-                hmi_view_vertical_thumb(
-                    metrics,
-                    track
+                hmi_vertical_thumb(
+                    track,
+                    viewport_h,
+                    max_y
                 );
 
-            if (
-                CheckCollisionPointRec(
-                    mouse,
-                    thumb
-                )
-            )
+            if (CheckCollisionPointRec(mouse, thumb))
             {
-                hmi_view_drag_y = true;
-
-                hmi_view_drag_offset_y =
-                    mouse.y -
-                    thumb.y;
+                hmi_drag_y = true;
+                hmi_drag_offset_y =
+                    mouse.y - thumb.y;
             }
-            else if (
-                CheckCollisionPointRec(
-                    mouse,
-                    track
-                )
-            )
+            else if (CheckCollisionPointRec(mouse, track))
             {
                 float travel =
-                    track.height -
-                    thumb.height;
+                    track.height - thumb.height;
 
-                float thumbY =
+                float new_thumb_y =
                     hmi_view_clampf(
-                        mouse.y -
-                            thumb.height * 0.5f,
+                        mouse.y - thumb.height * 0.5f,
                         track.y,
                         track.y + travel
                     );
 
                 if (travel > 0.0f)
                 {
-                    hmi_view_scroll_y =
-                        (
-                            (thumbY - track.y) /
-                            travel
-                        ) *
-                        metrics.maxScrollY;
+                    hmi_scroll_y =
+                        ((new_thumb_y - track.y) / travel) *
+                        max_y;
                 }
 
-                hmi_view_drag_y = true;
-                hmi_view_drag_offset_y =
+                hmi_drag_y = true;
+                hmi_drag_offset_y =
                     thumb.height * 0.5f;
             }
         }
     }
 
-    if (hmi_view_drag_x)
+    if (hmi_drag_x)
     {
-        if (
-            IsMouseButtonDown(
-                MOUSE_BUTTON_LEFT
-            )
-        )
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
         {
             Rectangle track =
-                hmi_view_horizontal_track(
-                    metrics
-                );
+                hmi_horizontal_track(viewport_w, viewport_h);
 
             Rectangle thumb =
-                hmi_view_horizontal_thumb(
-                    metrics,
-                    track
-                );
+                hmi_horizontal_thumb(track, viewport_w, max_x);
 
-            float travel =
-                track.width -
-                thumb.width;
+            float travel = track.width - thumb.width;
 
-            float thumbX =
+            float new_thumb_x =
                 hmi_view_clampf(
-                    mouse.x -
-                        hmi_view_drag_offset_x,
+                    mouse.x - hmi_drag_offset_x,
                     track.x,
                     track.x + travel
                 );
 
             if (travel > 0.0f)
             {
-                hmi_view_scroll_x =
-                    (
-                        (thumbX - track.x) /
-                        travel
-                    ) *
-                    metrics.maxScrollX;
+                hmi_scroll_x =
+                    ((new_thumb_x - track.x) / travel) *
+                    max_x;
             }
         }
         else
         {
-            hmi_view_drag_x = false;
+            hmi_drag_x = false;
         }
     }
 
-    if (hmi_view_drag_y)
+    if (hmi_drag_y)
     {
-        if (
-            IsMouseButtonDown(
-                MOUSE_BUTTON_LEFT
-            )
-        )
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
         {
             Rectangle track =
-                hmi_view_vertical_track(
-                    metrics
-                );
+                hmi_vertical_track(viewport_w, viewport_h);
 
             Rectangle thumb =
-                hmi_view_vertical_thumb(
-                    metrics,
-                    track
-                );
+                hmi_vertical_thumb(track, viewport_h, max_y);
 
-            float travel =
-                track.height -
-                thumb.height;
+            float travel = track.height - thumb.height;
 
-            float thumbY =
+            float new_thumb_y =
                 hmi_view_clampf(
-                    mouse.y -
-                        hmi_view_drag_offset_y,
+                    mouse.y - hmi_drag_offset_y,
                     track.y,
                     track.y + travel
                 );
 
             if (travel > 0.0f)
             {
-                hmi_view_scroll_y =
-                    (
-                        (thumbY - track.y) /
-                        travel
-                    ) *
-                    metrics.maxScrollY;
+                hmi_scroll_y =
+                    ((new_thumb_y - track.y) / travel) *
+                    max_y;
             }
         }
         else
         {
-            hmi_view_drag_y = false;
+            hmi_drag_y = false;
         }
     }
+
+    hmi_scroll_x =
+        hmi_view_clampf(hmi_scroll_x, 0.0f, max_x);
+
+    hmi_scroll_y =
+        hmi_view_clampf(hmi_scroll_y, 0.0f, max_y);
 }
 
 
-static void hmi_view_update_input(void)
+static void hmi_draw_scrollbars(void)
 {
-    HmiViewportMetrics metrics =
-        hmi_view_metrics();
+    float max_x;
+    float max_y;
+    float viewport_w;
+    float viewport_h;
 
-    hmi_view_clamp_scroll(
-        metrics
+    hmi_view_limits(
+        &max_x,
+        &max_y,
+        &viewport_w,
+        &viewport_h,
+        NULL,
+        NULL
     );
 
-    hmi_view_update_wheel(
-        metrics
-    );
+    Vector2 mouse = GetMousePosition();
 
-    hmi_view_update_scrollbar_drag(
-        metrics
-    );
+    const Color track_color =
+        (Color){18, 22, 29, 255};
 
-    hmi_view_clamp_scroll(
-        metrics
-    );
-}
+    const Color thumb_color =
+        (Color){75, 88, 108, 255};
 
+    const Color thumb_hover =
+        (Color){101, 120, 146, 255};
 
-static Vector2 hmi_view_canvas_origin(void)
-{
-    HmiViewportMetrics metrics =
-        hmi_view_metrics();
-
-    float x =
-        metrics.showHorizontal
-        ? -hmi_view_scroll_x
-        : fmaxf(
-            0.0f,
-            (
-                metrics.viewportWidth -
-                HMI_VIEW_CONTENT_WIDTH
-            ) *
-            0.5f
-        );
-
-    float y =
-        metrics.showVertical
-        ? -hmi_view_scroll_y
-        : fmaxf(
-            0.0f,
-            (
-                metrics.viewportHeight -
-                HMI_VIEW_CONTENT_HEIGHT
-            ) *
-            0.5f
-        );
-
-    return
-        (Vector2)
-        {
-            x,
-            y
-        };
-}
-
-
-static void hmi_view_draw_scrollbars(void)
-{
-    HmiViewportMetrics metrics =
-        hmi_view_metrics();
-
-    Vector2 mouse =
-        GetMousePosition();
-
-    const Color gutterColor =
-        (Color){15, 18, 24, 255};
-
-    const Color trackColor =
-        (Color){24, 29, 38, 255};
-
-    const Color thumbColor =
-        (Color){73, 86, 106, 255};
-
-    const Color thumbHover =
-        (Color){94, 111, 137, 255};
-
-    const Color thumbActive =
+    const Color thumb_active =
         (Color){88, 166, 255, 255};
 
-    if (metrics.showHorizontal)
+    if (max_x > 0.0f)
     {
-        DrawRectangle(
-            0,
-            (int)metrics.viewportHeight,
-            (int)metrics.viewportWidth,
-            (int)HMI_VIEW_SCROLLBAR_GUTTER,
-            gutterColor
-        );
-
         Rectangle track =
-            hmi_view_horizontal_track(
-                metrics
+            hmi_horizontal_track(
+                viewport_w,
+                viewport_h
             );
 
         Rectangle thumb =
-            hmi_view_horizontal_thumb(
-                metrics,
-                track
-            );
-
-        bool hovered =
-            CheckCollisionPointRec(
-                mouse,
-                thumb
+            hmi_horizontal_thumb(
+                track,
+                viewport_w,
+                max_x
             );
 
         DrawRectangleRounded(
             track,
             1.0f,
             8,
-            trackColor
+            track_color
         );
+
+        Color thumb_fill =
+            hmi_drag_x
+            ? thumb_active
+            : CheckCollisionPointRec(mouse, thumb)
+                ? thumb_hover
+                : thumb_color;
 
         DrawRectangleRounded(
             thumb,
             1.0f,
             8,
-            hmi_view_drag_x
-                ? thumbActive
-                : hovered
-                    ? thumbHover
-                    : thumbColor
+            thumb_fill
         );
     }
 
-    if (metrics.showVertical)
+    if (max_y > 0.0f)
     {
-        DrawRectangle(
-            (int)metrics.viewportWidth,
-            0,
-            (int)HMI_VIEW_SCROLLBAR_GUTTER,
-            (int)metrics.viewportHeight,
-            gutterColor
-        );
-
         Rectangle track =
-            hmi_view_vertical_track(
-                metrics
+            hmi_vertical_track(
+                viewport_w,
+                viewport_h
             );
 
         Rectangle thumb =
-            hmi_view_vertical_thumb(
-                metrics,
-                track
-            );
-
-        bool hovered =
-            CheckCollisionPointRec(
-                mouse,
-                thumb
+            hmi_vertical_thumb(
+                track,
+                viewport_h,
+                max_y
             );
 
         DrawRectangleRounded(
             track,
             1.0f,
             8,
-            trackColor
+            track_color
         );
+
+        Color thumb_fill =
+            hmi_drag_y
+            ? thumb_active
+            : CheckCollisionPointRec(mouse, thumb)
+                ? thumb_hover
+                : thumb_color;
 
         DrawRectangleRounded(
             thumb,
             1.0f,
             8,
-            hmi_view_drag_y
-                ? thumbActive
-                : hovered
-                    ? thumbHover
-                    : thumbColor
-        );
-    }
-
-    if (
-        metrics.showHorizontal &&
-        metrics.showVertical
-    )
-    {
-        DrawRectangle(
-            (int)metrics.viewportWidth,
-            (int)metrics.viewportHeight,
-            (int)HMI_VIEW_SCROLLBAR_GUTTER,
-            (int)HMI_VIEW_SCROLLBAR_GUTTER,
-            gutterColor
+            thumb_fill
         );
     }
 }
@@ -876,35 +646,32 @@ static void hmi_view_draw_scrollbars(void)
  * ============================================================================
  */
 
-/*
- * hmi.c calculates a fit scale from GetScreenWidth()/GetScreenHeight(). Give it
- * the exact design dimensions so its own calculation always resolves to 1.0.
- * There is intentionally no zoom state anywhere in this file.
- */
-static int hmi_view_virtual_width(void)
+static int hmi_virtual_width(void)
 {
     return
-        (int)HMI_VIEW_CONTENT_WIDTH;
+        (int)lroundf(
+            HMI_VIEW_LOGICAL_WIDTH *
+            HMI_VIEW_SCALE
+        );
 }
 
 
-static int hmi_view_virtual_height(void)
+static int hmi_virtual_height(void)
 {
     return
-        (int)HMI_VIEW_CONTENT_HEIGHT;
+        (int)lroundf(
+            HMI_VIEW_LOGICAL_HEIGHT *
+            HMI_VIEW_SCALE
+        );
 }
 
 
-/*
- * Translate real window coordinates into the fixed 1440 x 900 canvas. Hide
- * scrollbar clicks from controls underneath the scrollbar gutters.
- */
 static Vector2 hmi_view_mouse_position(void)
 {
     if (
-        hmi_view_drag_x ||
-        hmi_view_drag_y ||
-        hmi_view_pointer_on_scrollbar()
+        hmi_drag_x ||
+        hmi_drag_y ||
+        hmi_pointer_on_scrollbar()
     )
     {
         return
@@ -915,18 +682,31 @@ static Vector2 hmi_view_mouse_position(void)
             };
     }
 
-    Vector2 mouse =
-        GetMousePosition();
+    float origin_x;
+    float origin_y;
 
-    Vector2 origin =
-        hmi_view_canvas_origin();
+    hmi_view_limits(
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        &origin_x,
+        &origin_y
+    );
 
-    return
-        (Vector2)
-        {
-            mouse.x - origin.x,
-            mouse.y - origin.y
-        };
+    Vector2 mouse = GetMousePosition();
+
+    mouse.x =
+        mouse.x -
+        origin_x +
+        hmi_scroll_x;
+
+    mouse.y =
+        mouse.y -
+        origin_y +
+        hmi_scroll_y;
+
+    return mouse;
 }
 
 
@@ -934,10 +714,26 @@ static void hmi_view_begin_mode_2d(
     Camera2D camera
 )
 {
-    hmi_view_update_input();
+    hmi_scroll_update();
+
+    float origin_x;
+    float origin_y;
+
+    hmi_view_limits(
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        &origin_x,
+        &origin_y
+    );
 
     camera.offset =
-        hmi_view_canvas_origin();
+        (Vector2)
+        {
+            origin_x - hmi_scroll_x,
+            origin_y - hmi_scroll_y
+        };
 
     camera.target =
         (Vector2)
@@ -947,7 +743,7 @@ static void hmi_view_begin_mode_2d(
         };
 
     camera.rotation = 0.0f;
-    camera.zoom = 1.0f;
+    camera.zoom = HMI_VIEW_SCALE;
 
     BeginMode2D(camera);
 }
@@ -955,17 +751,17 @@ static void hmi_view_begin_mode_2d(
 
 static void hmi_view_end_drawing(void)
 {
-    hmi_view_draw_scrollbars();
+    hmi_draw_scrollbars();
     EndDrawing();
 }
 
 
 /*
- * Apply hooks only after all helpers above compile, so helper calls still reach
- * raylib's real window/input functions instead of recursively calling wrappers.
+ * Apply hooks only after the helpers above are compiled so they continue to
+ * call raylib's real functions and cannot recurse into the wrappers.
  */
-#define GetScreenWidth()     hmi_view_virtual_width()
-#define GetScreenHeight()    hmi_view_virtual_height()
+#define GetScreenWidth()     hmi_virtual_width()
+#define GetScreenHeight()    hmi_virtual_height()
 #define GetMousePosition()   hmi_view_mouse_position()
 #define BeginMode2D(camera)  hmi_view_begin_mode_2d((camera))
 #define EndDrawing()         hmi_view_end_drawing()
