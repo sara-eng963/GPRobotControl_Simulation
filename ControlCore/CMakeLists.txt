@@ -20,6 +20,8 @@ add_library(
     Kinematics/control_jacobian.c
     Kinematics/adls_ik.c
 
+    Analysis/workspace.c
+
     Trajectory/generate_line_waypoints.c
     Trajectory/circular_path.c
     Trajectory/arc_length_parameterize.c
@@ -41,6 +43,7 @@ target_include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/Config
     ${CMAKE_CURRENT_SOURCE_DIR}/Math
     ${CMAKE_CURRENT_SOURCE_DIR}/Kinematics
+    ${CMAKE_CURRENT_SOURCE_DIR}/Analysis
     ${CMAKE_CURRENT_SOURCE_DIR}/Trajectory
     ${CMAKE_CURRENT_SOURCE_DIR}/Execution
     ${CMAKE_CURRENT_SOURCE_DIR}/Pipeline
