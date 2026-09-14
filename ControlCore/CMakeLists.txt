@@ -105,3 +105,19 @@ target_link_libraries(
     control_core
     m
 )
+
+# ============================================================================
+# BUFFERED STREAMING TRAJECTORY TEST
+# ============================================================================
+
+add_executable(
+    buffered_stream_test
+    Tests/buffered_stream_test.c
+)
+
+target_link_libraries(
+    buffered_stream_test
+    PRIVATE
+    control_core
+    m
+)
