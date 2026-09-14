@@ -6,10 +6,10 @@
  * Desktop-side raylib HMI for the robot control PC test.
  *
  * UI behavior:
- *   - fixed 1:1 logical scale for readable text
+ *   - fixed 118% operator-facing scale for readable text and controls
  *   - resizable OS window
  *   - horizontal + vertical scrolling when the window is smaller than the HMI
- *   - no automatic zooming/shrinking of the interface
+ *   - no user zoom and no automatic fit-to-window shrinking
  *
  * Live controller execution currently supports the straight-line command only.
  * Arc/full-circle configuration remains visible, but live execution is disabled
@@ -57,18 +57,22 @@ typedef enum
  * FIXED-SCALE UI CANVAS + SCROLLING
  * ============================================================================
  *
- * The HMI always renders at 1:1 scale. Resizing the window never makes text or
- * controls smaller. If the viewport cannot show the full canvas, scrollbars are
- * displayed instead.
+ * UI_WIDTH/UI_HEIGHT are logical design coordinates. UI_SCALE enlarges the
+ * complete operator interface uniformly while preserving those coordinates.
+ * Resizing the OS window never changes this scale; a smaller viewport scrolls.
  * ============================================================================
  */
 
 #define UI_WIDTH              1280.0f
 #define UI_HEIGHT              800.0f
+#define UI_SCALE                 1.18f
 #define UI_SCROLL_STEP          62.0f
 #define UI_SCROLLBAR_MARGIN      6.0f
 #define UI_SCROLLBAR_SIZE        9.0f
 #define UI_SCROLLBAR_MIN_THUMB  48.0f
+
+#define UI_CONTENT_WIDTH  (UI_WIDTH  * UI_SCALE)
+#define UI_CONTENT_HEIGHT (UI_HEIGHT * UI_SCALE)
 
 static float ui_scroll_x = 0.0f;
 static float ui_scroll_y = 0.0f;
@@ -94,8 +98,8 @@ static Vector2 ui_mouse_position(void)
 
     return (Vector2)
     {
-        mouse.x + ui_scroll_x,
-        mouse.y + ui_scroll_y
+        (mouse.x + ui_scroll_x) / UI_SCALE,
+        (mouse.y + ui_scroll_y) / UI_SCALE
     };
 }
 
@@ -103,7 +107,7 @@ static Rectangle horizontal_scroll_track(void)
 {
     float screen_width = (float)GetScreenWidth();
     float screen_height = (float)GetScreenHeight();
-    bool vertical_visible = UI_HEIGHT > screen_height;
+    bool vertical_visible = UI_CONTENT_HEIGHT > screen_height;
 
     float width =
         screen_width -
@@ -125,7 +129,7 @@ static Rectangle vertical_scroll_track(void)
 {
     float screen_width = (float)GetScreenWidth();
     float screen_height = (float)GetScreenHeight();
-    bool horizontal_visible = UI_WIDTH > screen_width;
+    bool horizontal_visible = UI_CONTENT_WIDTH > screen_width;
 
     float height =
         screen_height -
@@ -149,7 +153,7 @@ static Rectangle horizontal_scroll_thumb(Rectangle track, float max_scroll)
 
     float thumb_width =
         track.width *
-        (viewport / UI_WIDTH);
+        (viewport / UI_CONTENT_WIDTH);
 
     thumb_width =
         clampf_local(
@@ -181,7 +185,7 @@ static Rectangle vertical_scroll_thumb(Rectangle track, float max_scroll)
 
     float thumb_height =
         track.height *
-        (viewport / UI_HEIGHT);
+        (viewport / UI_CONTENT_HEIGHT);
 
     thumb_height =
         clampf_local(
@@ -212,8 +216,8 @@ static void update_scrollbars(void)
     float viewport_width = (float)GetScreenWidth();
     float viewport_height = (float)GetScreenHeight();
 
-    float max_scroll_x = UI_WIDTH - viewport_width;
-    float max_scroll_y = UI_HEIGHT - viewport_height;
+    float max_scroll_x = UI_CONTENT_WIDTH - viewport_width;
+    float max_scroll_y = UI_CONTENT_HEIGHT - viewport_height;
 
     if (max_scroll_x < 0.0f) max_scroll_x = 0.0f;
     if (max_scroll_y < 0.0f) max_scroll_y = 0.0f;
@@ -554,8 +558,8 @@ static void draw_scrollbars(void)
     float viewport_width = (float)GetScreenWidth();
     float viewport_height = (float)GetScreenHeight();
 
-    float max_scroll_x = UI_WIDTH - viewport_width;
-    float max_scroll_y = UI_HEIGHT - viewport_height;
+    float max_scroll_x = UI_CONTENT_WIDTH - viewport_width;
+    float max_scroll_y = UI_CONTENT_HEIGHT - viewport_height;
 
     if (max_scroll_x > 0.0f)
     {
@@ -1597,7 +1601,7 @@ int main(void)
             .offset = {-ui_scroll_x, -ui_scroll_y},
             .target = {0.0f, 0.0f},
             .rotation = 0.0f,
-            .zoom = 1.0f
+            .zoom = UI_SCALE
         };
 
         BeginDrawing();
