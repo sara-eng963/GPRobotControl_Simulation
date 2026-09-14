@@ -109,6 +109,7 @@ add_executable(
     HMI/hmi_protocol.c
     HMI/hmi_theme.c
     HMI/waypoint_editor_3d.c
+    HMI/workspace_monitor.c
 )
 
 target_compile_features(
