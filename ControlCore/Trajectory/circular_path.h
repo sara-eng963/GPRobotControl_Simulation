@@ -19,6 +19,18 @@
  *
  * The three supplied Cartesian points define the circle plane, center,
  * radius, and reference normal.
+ *
+ * VALIDATION NOTE:
+ *
+ * The circular geometry routines in this module were independently
+ * constructed from the interface and expected behavior of the available
+ * MATLAB trajectory pipelines. The original MATLAB circle-geometry helper
+ * implementations were not present in the reference repository at the time
+ * this C implementation was written.
+ *
+ * The implementation is therefore functionally tested and mathematically
+ * consistent, but direct source-to-source validation against the original
+ * MATLAB geometry helpers is still pending until those files are available.
  * ============================================================================
  */
 
