@@ -104,6 +104,18 @@ target_compile_features(
     c_std_11
 )
 
+# Force-include the desktop view controls only for the HMI target.
+# This adds mouse-wheel/keyboard zoom and middle-button panning while leaving
+# the HMI layout, UDP protocol and controller behavior unchanged.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(
+        mock_hmi
+        PRIVATE
+        -include
+        ${CMAKE_CURRENT_SOURCE_DIR}/hmi_zoom_hooks.h
+    )
+endif()
+
 target_link_libraries(
     mock_hmi
     PRIVATE
