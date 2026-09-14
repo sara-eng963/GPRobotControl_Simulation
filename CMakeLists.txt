@@ -39,8 +39,14 @@ add_subdirectory(
     SOEM-build
 )
 
+# ============================================================================
+# CONTROL CORE
+# ============================================================================
+
+add_subdirectory(ControlCore)
+
 # ----------------------------
-# Our application
+# FreeRTOS / EtherCAT application
 # ----------------------------
 
 add_executable(
@@ -75,6 +81,7 @@ target_link_libraries(
     freertos_config
     soem
     pthread
+    control_core
 )
 
 # ============================================================================
@@ -90,12 +97,18 @@ add_subdirectory(
 )
 
 # ============================================================================
-# MOCK HMI
+# MODULAR ROBOT MOTION HMI
 # ============================================================================
 
 add_executable(
     mock_hmi
+
     hmi.c
+
+    HMI/hmi_app.c
+    HMI/hmi_protocol.c
+    HMI/hmi_theme.c
+    HMI/waypoint_editor_3d.c
 )
 
 target_compile_features(
@@ -104,23 +117,16 @@ target_compile_features(
     c_std_11
 )
 
-# hmi.c owns its fixed-scale viewport and scrolling behavior directly.
-# Do not force-include the legacy hmi_scroll_hooks.h wrapper here.
+target_include_directories(
+    mock_hmi
+    PRIVATE
+    HMI
+)
 
 target_link_libraries(
     mock_hmi
     PRIVATE
     raylib
-)
-
-# ============================================================================
-# CONTROL CORE
-# ============================================================================
-
-add_subdirectory(ControlCore)
-
-target_link_libraries(
-    freertos_pc_test
-    PRIVATE
     control_core
+    m
 )
