@@ -104,17 +104,8 @@ target_compile_features(
     c_std_11
 )
 
-# Keep the HMI at its native 1440 x 900 logical size. If the desktop window is
-# resized smaller, expose horizontal/vertical scrollbars instead of shrinking
-# the UI and making the text unreadable.
-if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(
-        mock_hmi
-        PRIVATE
-        -include
-        ${CMAKE_CURRENT_SOURCE_DIR}/hmi_scroll_hooks.h
-    )
-endif()
+# hmi.c owns its fixed-scale viewport and scrolling behavior directly.
+# Do not force-include the legacy hmi_scroll_hooks.h wrapper here.
 
 target_link_libraries(
     mock_hmi
