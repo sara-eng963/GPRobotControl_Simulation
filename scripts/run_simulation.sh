@@ -6,14 +6,13 @@ set -Eeuo pipefail
 # Full PC EtherCAT simulation launcher
 # ============================================================================
 #
-# Starts the complete simulated control stack with the CPU isolation that keeps
-# the 1 ms SOEM/KickCAT exchange stable while the Raylib HMI is open:
+# Starts the complete simulated control stack with CPU isolation:
 #
 #   CPU 1 -> KickCAT network_simulator
 #   CPU 2 -> FreeRTOS + SOEM controller
 #   CPU 3 -> Raylib HMI (low priority)
 #
-# It also recreates the virtual EtherCAT link every run:
+# It recreates the virtual EtherCAT link every run:
 #
 #   SOEM master -> ecatA <---- veth pair ----> ecatB -> KickCAT slaves
 #
@@ -43,9 +42,14 @@ KICKCAT_LOG="${LOG_DIR}/kickcat.log"
 CONTROLLER_LOG="${LOG_DIR}/controller.log"
 HMI_LOG="${LOG_DIR}/hmi.log"
 
+KICKCAT_PIDFILE="${LOG_DIR}/kickcat.pid"
+CONTROLLER_PIDFILE="${LOG_DIR}/controller.pid"
+
 KICKCAT_PID=""
 CONTROLLER_PID=""
 HMI_PID=""
+KICKCAT_LAUNCHER_PID=""
+CONTROLLER_LAUNCHER_PID=""
 SUDO_KEEPALIVE_PID=""
 CLEANUP_DONE=0
 
@@ -86,18 +90,56 @@ process_alive()
     [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
 }
 
+root_process_alive()
+{
+    local pid="$1"
+    [[ -n "${pid}" ]] && sudo -n kill -0 "${pid}" 2>/dev/null
+}
+
+wait_for_pidfile()
+{
+    local pidfile="$1"
+    local launcher_pid="$2"
+    local description="$3"
+
+    for _ in $(seq 1 50)
+    do
+        if [[ -s "${pidfile}" ]]
+        then
+            cat "${pidfile}"
+            return 0
+        fi
+
+        if ! process_alive "${launcher_pid}"
+        then
+            printf 'ERROR: %s launcher exited before writing its PID.\n' \
+                "${description}" >&2
+            return 1
+        fi
+
+        sleep 0.1
+    done
+
+    printf 'ERROR: timed out waiting for %s PID.\n' "${description}" >&2
+    return 1
+}
+
 stop_old_processes()
 {
     printf '[1/6] Stopping stale simulation processes...\n'
 
-    pkill -TERM -f "${HMI_BIN}" 2>/dev/null || true
-    sudo pkill -TERM -f "${CONTROLLER_BIN}" 2>/dev/null || true
-    sudo pkill -TERM -f "${KICKCAT_BIN}" 2>/dev/null || true
+    # The bracketed first character prevents pkill from matching its own
+    # command line. The previous launcher used raw -f patterns, which could
+    # kill the sudo/pkill helper itself and made shutdown unreliable.
+    pkill -TERM -f '[m]ock_hmi' 2>/dev/null || true
+    sudo pkill -TERM -f '[f]reertos_pc_test' 2>/dev/null || true
+    sudo pkill -TERM -f '[n]etwork_simulator.*ecatB' 2>/dev/null || true
 
     sleep 0.5
 
-    sudo pkill -KILL -f "${CONTROLLER_BIN}" 2>/dev/null || true
-    sudo pkill -KILL -f "${KICKCAT_BIN}" 2>/dev/null || true
+    pkill -KILL -f '[m]ock_hmi' 2>/dev/null || true
+    sudo pkill -KILL -f '[f]reertos_pc_test' 2>/dev/null || true
+    sudo pkill -KILL -f '[n]etwork_simulator.*ecatB' 2>/dev/null || true
 }
 
 remove_virtual_ethernet()
@@ -124,24 +166,64 @@ cleanup()
 
     CLEANUP_DONE=1
     trap - EXIT INT TERM
+    set +e
 
     printf '\nStopping simulation...\n'
 
-    if [[ -n "${HMI_PID}" ]]
+    # HMI is an ordinary user process.
+    if process_alive "${HMI_PID}"
     then
-        kill "${HMI_PID}" 2>/dev/null || true
+        kill -TERM "${HMI_PID}" 2>/dev/null || true
     fi
 
-    # Give the controller SIGINT first so main.c can perform its clean servo /
-    # EtherCAT shutdown path before anything is force-killed.
-    sudo pkill -INT -f "${CONTROLLER_BIN}" 2>/dev/null || true
-    sudo pkill -INT -f "${KICKCAT_BIN}" 2>/dev/null || true
+    # The privileged programs are launched through sudo, but their real PIDs
+    # are written from inside the sudo child before exec(). Kill those exact
+    # PIDs instead of using pkill -f.
+    if root_process_alive "${CONTROLLER_PID}"
+    then
+        # SIGINT lets main.c execute its clean EtherCAT/servo shutdown path.
+        sudo -n kill -INT "${CONTROLLER_PID}" 2>/dev/null || true
+    fi
+
+    if root_process_alive "${KICKCAT_PID}"
+    then
+        sudo -n kill -TERM "${KICKCAT_PID}" 2>/dev/null || true
+    fi
 
     sleep 1
 
-    sudo pkill -TERM -f "${CONTROLLER_BIN}" 2>/dev/null || true
-    sudo pkill -TERM -f "${KICKCAT_BIN}" 2>/dev/null || true
-    pkill -TERM -f "${HMI_BIN}" 2>/dev/null || true
+    if root_process_alive "${CONTROLLER_PID}"
+    then
+        sudo -n kill -TERM "${CONTROLLER_PID}" 2>/dev/null || true
+    fi
+
+    if root_process_alive "${KICKCAT_PID}"
+    then
+        sudo -n kill -TERM "${KICKCAT_PID}" 2>/dev/null || true
+    fi
+
+    sleep 0.5
+
+    if root_process_alive "${CONTROLLER_PID}"
+    then
+        sudo -n kill -KILL "${CONTROLLER_PID}" 2>/dev/null || true
+    fi
+
+    if root_process_alive "${KICKCAT_PID}"
+    then
+        sudo -n kill -KILL "${KICKCAT_PID}" 2>/dev/null || true
+    fi
+
+    # Reap/stop the sudo launcher wrappers if they are still around.
+    if process_alive "${CONTROLLER_LAUNCHER_PID}"
+    then
+        kill -TERM "${CONTROLLER_LAUNCHER_PID}" 2>/dev/null || true
+    fi
+
+    if process_alive "${KICKCAT_LAUNCHER_PID}"
+    then
+        kill -TERM "${KICKCAT_LAUNCHER_PID}" 2>/dev/null || true
+    fi
 
     remove_virtual_ethernet
 
@@ -150,11 +232,17 @@ cleanup()
         kill "${SUDO_KEEPALIVE_PID}" 2>/dev/null || true
     fi
 
+    rm -f "${KICKCAT_PIDFILE}" "${CONTROLLER_PIDFILE}"
+
     printf 'Stopped. ecatA/ecatB removed.\n'
     printf 'Logs kept in: %s\n' "${LOG_DIR}"
 }
 
-trap cleanup EXIT INT TERM
+# Ctrl+C/TERM should leave the main loop immediately. EXIT performs the actual
+# cleanup exactly once.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 print_header
 
@@ -228,10 +316,18 @@ printf '      ecatB UP -> KickCAT simulator\n'
 : > "${KICKCAT_LOG}"
 : > "${CONTROLLER_LOG}"
 : > "${HMI_LOG}"
+rm -f "${KICKCAT_PIDFILE}" "${CONTROLLER_PIDFILE}"
 
 printf '[3/6] Starting six A6-EC KickCAT slaves on CPU %s...\n' "${KICKCAT_CPU}"
 
-sudo taskset -c "${KICKCAT_CPU}" \
+sudo sh -c '
+    pidfile="$1"
+    shift
+    printf "%s\n" "$$" > "$pidfile"
+    exec "$@"
+' sh \
+    "${KICKCAT_PIDFILE}" \
+    taskset -c "${KICKCAT_CPU}" \
     "${KICKCAT_BIN}" \
     -i ecatB \
     -s \
@@ -242,11 +338,13 @@ sudo taskset -c "${KICKCAT_CPU}" \
     "${A6_CONFIG}" \
     "${A6_CONFIG}" \
     >"${KICKCAT_LOG}" 2>&1 &
-KICKCAT_PID=$!
+KICKCAT_LAUNCHER_PID=$!
+
+KICKCAT_PID="$(wait_for_pidfile "${KICKCAT_PIDFILE}" "${KICKCAT_LAUNCHER_PID}" "KickCAT")"
 
 sleep 1
 
-if ! process_alive "${KICKCAT_PID}"
+if ! root_process_alive "${KICKCAT_PID}"
 then
     printf 'ERROR: KickCAT exited during startup. Last log lines:\n' >&2
     tail -n 40 "${KICKCAT_LOG}" >&2 || true
@@ -255,15 +353,24 @@ fi
 
 printf '[4/6] Starting FreeRTOS + SOEM controller on CPU %s...\n' "${CONTROLLER_CPU}"
 
-sudo taskset -c "${CONTROLLER_CPU}" \
+sudo sh -c '
+    pidfile="$1"
+    shift
+    printf "%s\n" "$$" > "$pidfile"
+    exec "$@"
+' sh \
+    "${CONTROLLER_PIDFILE}" \
+    taskset -c "${CONTROLLER_CPU}" \
     nice -n -10 \
     "${CONTROLLER_BIN}" \
     >"${CONTROLLER_LOG}" 2>&1 &
-CONTROLLER_PID=$!
+CONTROLLER_LAUNCHER_PID=$!
+
+CONTROLLER_PID="$(wait_for_pidfile "${CONTROLLER_PIDFILE}" "${CONTROLLER_LAUNCHER_PID}" "controller")"
 
 sleep 2
 
-if ! process_alive "${CONTROLLER_PID}"
+if ! root_process_alive "${CONTROLLER_PID}"
 then
     printf 'ERROR: controller exited during startup. Last log lines:\n' >&2
     tail -n 60 "${CONTROLLER_LOG}" >&2 || true
@@ -308,14 +415,14 @@ do
         break
     fi
 
-    if ! process_alive "${CONTROLLER_PID}"
+    if ! root_process_alive "${CONTROLLER_PID}"
     then
         printf '\nERROR: controller stopped unexpectedly. Last log lines:\n' >&2
         tail -n 60 "${CONTROLLER_LOG}" >&2 || true
         exit 1
     fi
 
-    if ! process_alive "${KICKCAT_PID}"
+    if ! root_process_alive "${KICKCAT_PID}"
     then
         printf '\nERROR: KickCAT stopped unexpectedly. Last log lines:\n' >&2
         tail -n 60 "${KICKCAT_LOG}" >&2 || true
