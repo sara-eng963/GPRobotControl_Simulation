@@ -108,6 +108,7 @@ add_executable(
     HMI/hmi_app.c
     HMI/hmi_protocol.c
     HMI/hmi_theme.c
+    HMI/hmi_runtime_guard.c
     HMI/waypoint_editor_3d.c
     HMI/workspace_monitor.c
 )
@@ -130,4 +131,21 @@ target_link_libraries(
     raylib
     control_core
     m
+)
+
+# ---------------------------------------------------------------------------
+# HMI runtime isolation for the PC EtherCAT simulation
+# ---------------------------------------------------------------------------
+#
+# hmi_runtime_guard.c wraps these raylib calls so the GUI is capped at 20 FPS
+# and 4x MSAA is removed.  This keeps WSLg rendering from competing as heavily
+# with the 1 ms FreeRTOS/SOEM + KickCAT simulation.
+#
+# The controller timing is unchanged.
+
+target_link_options(
+    mock_hmi
+    PRIVATE
+    -Wl,--wrap=SetTargetFPS
+    -Wl,--wrap=SetConfigFlags
 )
