@@ -193,3 +193,145 @@ target_link_libraries(
     pthread
     m
 )
+
+# ============================================================================
+# HOMING STATE TEST
+# ============================================================================
+
+add_executable(
+    homing_test
+
+    StateMachine/Tests/test_homing.c
+
+    StateMachine/States/state_boot.c
+    StateMachine/States/state_homing.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    homing_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    homing_test
+    PRIVATE
+
+    control_core
+    soem
+    pthread
+    m
+)
+
+# ============================================================================
+# IDLE STATE TEST
+# ============================================================================
+
+add_executable(
+    idle_test
+
+    StateMachine/Tests/test_idle.c
+
+    StateMachine/States/state_boot.c
+    StateMachine/States/state_homing.c
+    StateMachine/States/state_idle.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    idle_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    ControlCore/Config
+    ControlCore/Math
+    ControlCore/Trajectory
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    idle_test
+    PRIVATE
+
+    control_core
+    soem
+    pthread
+    m
+)
+
+# ============================================================================
+# TEACHING STATE INTEGRATION TEST
+# ============================================================================
+
+add_executable(
+    teaching_test
+
+    StateMachine/Tests/test_teaching.c
+
+    StateMachine/States/state_boot.c
+    StateMachine/States/state_homing.c
+    StateMachine/States/state_idle.c
+    StateMachine/States/state_teaching.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    teaching_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    teaching_test
+    PRIVATE
+
+    control_core
+    soem
+    pthread
+    m
+)
