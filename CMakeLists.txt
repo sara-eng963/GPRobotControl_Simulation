@@ -54,6 +54,8 @@ add_executable(
 
     main.c
 
+    StateMachine/States/state_boot.c
+
     EtherCATComm/ethercat_master.c
     EtherCATComm/SOEM/soem_backend.c
 
@@ -148,4 +150,46 @@ target_link_options(
     PRIVATE
     -Wl,--wrap=SetTargetFPS
     -Wl,--wrap=SetConfigFlags
+)
+
+# ============================================================================
+# BOOT STATE TEST
+# ============================================================================
+
+add_executable(
+    boot_test
+
+    StateMachine/Tests/test_boot.c
+    StateMachine/States/state_boot.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    boot_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    boot_test
+    PRIVATE
+
+    soem
+    pthread
+    m
 )

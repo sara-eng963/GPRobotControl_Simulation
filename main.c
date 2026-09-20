@@ -184,6 +184,17 @@ static volatile sig_atomic_t stop_requested = 0;
  * ============================================================================
  */
 
+ static double wrap_to_pi(double angle)
+{
+    while (angle > ROBOT_PI)
+        angle -= 2.0 * ROBOT_PI;
+
+    while (angle < -ROBOT_PI)
+        angle += 2.0 * ROBOT_PI;
+
+    return angle;
+}
+
 static void handle_sigint(int signal_number)
 {
     (void)signal_number;
@@ -279,7 +290,14 @@ static bool live_stream_init(
         SingleLineRequest request;
         memset(&request, 0, sizeof(request));
 
-        request.qSeed = command->qSeed;
+        request.qSeed =
+    command.qSeed;
+
+for (int joint = 0; joint < ROBOT_DOF; joint++)
+{
+    request.qSeed.q[joint] =
+        wrap_to_pi(request.qSeed.q[joint]);
+}
         request.startPosition = pose_position_from_hmi(command->waypointA);
         request.endPosition = pose_position_from_hmi(command->waypointB);
         request.startOrientation = pose_orientation_from_hmi(command->waypointA);
@@ -309,7 +327,14 @@ static bool live_stream_init(
             ? CIRCULAR_SEGMENT_ARC
             : CIRCULAR_SEGMENT_FULL_CIRCLE;
 
-    request.qSeed = command->qSeed;
+    request.qSeed =
+    command.qSeed;
+
+for (int joint = 0; joint < ROBOT_DOF; joint++)
+{
+    request.qSeed.q[joint] =
+        wrap_to_pi(request.qSeed.q[joint]);
+}
     request.point1 = pose_position_from_hmi(command->waypointA);
     request.point2 = pose_position_from_hmi(command->waypointB);
     request.point3 = pose_position_from_hmi(command->waypointC);

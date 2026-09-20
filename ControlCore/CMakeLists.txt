@@ -27,6 +27,8 @@ add_library(
     Trajectory/arc_length_parameterize.c
     Trajectory/s_curve_time_scaling.c
     Trajectory/s_curve_profile.c
+    Trajectory/quintic_time_scaling.c
+    Trajectory/joint_trajectory.c
 
     Execution/trajectory_buffer.c
 
@@ -163,6 +165,22 @@ add_executable(
 
 target_link_libraries(
     streaming_planner_benchmark
+    PRIVATE
+    control_core
+    m
+)
+
+# ============================================================================
+# JOINT-SPACE TRAJECTORY TEST
+# ============================================================================
+
+add_executable(
+    joint_trajectory_test
+    Tests/joint_trajectory_test.c
+)
+
+target_link_libraries(
+    joint_trajectory_test
     PRIVATE
     control_core
     m
