@@ -26,6 +26,14 @@ typedef struct
 
 } EtherCATMasterConfig;
 
+typedef struct
+{
+    uint32_t vendorId;
+    uint32_t productCode;
+    uint32_t revision;
+    uint32_t serialNumber;
+
+} EtherCATSlaveIdentity;
 
 typedef struct
 {

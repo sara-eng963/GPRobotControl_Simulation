@@ -145,17 +145,40 @@ int ethercat_master_scan(void)
 
 
     for (int slave = 1;
-         slave <= bus_info.slaveCount;
-         slave++)
+     slave <= bus_info.slaveCount;
+     slave++)
+{
+    printf(
+        "Slave %d: %s\n",
+        slave,
+        soem_backend_slave_name(
+            slave
+        )
+    );
+
+
+    EtherCATSlaveIdentity identity;
+
+
+    if (
+        ethercat_master_slave_identity(
+            slave,
+            &identity
+        )
+    )
     {
         printf(
-            "Slave %d: %s\n",
-            slave,
-            soem_backend_slave_name(
-                slave
-            )
+            "  Vendor ID    : 0x%08lX\n"
+            "  Product Code : 0x%08lX\n"
+            "  Revision     : 0x%08lX\n"
+            "  Serial Number: 0x%08lX\n",
+            (unsigned long)identity.vendorId,
+            (unsigned long)identity.productCode,
+            (unsigned long)identity.revision,
+            (unsigned long)identity.serialNumber
         );
     }
+}
 
 
     if (
@@ -190,6 +213,30 @@ const char *ethercat_master_slave_name(
     return
         soem_backend_slave_name(
             slave
+        );
+}
+bool ethercat_master_slave_identity(
+    int slave,
+    EtherCATSlaveIdentity *identity
+)
+{
+    if (
+        identity == NULL ||
+        slave <= 0 ||
+        slave > bus_info.slaveCount
+    )
+    {
+        return false;
+    }
+
+
+    return
+        soem_backend_slave_identity(
+            slave,
+            &identity->vendorId,
+            &identity->productCode,
+            &identity->revision,
+            &identity->serialNumber
         );
 }
 

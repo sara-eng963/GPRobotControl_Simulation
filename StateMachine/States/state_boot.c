@@ -4,8 +4,10 @@
 
 #include "../../ServoDrive/A6EC/a6ec_drive.h"
 #include "../../ServoDrive/A6EC/a6ec_registers.h"
+#include "../../ServoDrive/A6EC/a6ec_identity.h"
 
 #include "../../ServoDrive/CiA402/cia402.h"
+
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -241,30 +243,119 @@ StateStepResult state_boot_step(
          */
 
         case BOOT_PHASE_VERIFY_SLAVE_IDENTITIES:
+{
+    for (
+        int slave = 1;
+        slave <= ethercatConfig->expectedSlaveCount;
+        slave++
+    )
+    {
+        EtherCATSlaveIdentity identity;
+
+
+        if (
+            !ethercat_master_slave_identity(
+                slave,
+                &identity
+            )
+        )
         {
-            /*
-             * TODO:
-             *
-             * Later verify each expected A6-EC using proper EtherCAT identity:
-             *
-             *      Vendor ID
-             *      Product Code
-             *      Revision
-             *
-             * Current EtherCATComm does not expose those values yet.
-             *
-             * For the current KickCAT simulation we temporarily accept the
-             * discovered slaves.
-             */
+            printf(
+                "BOOT: Could not read identity of slave %d\n",
+                slave
+            );
 
-            boot_advance(
-    boot,
-    BOOT_PHASE_MAP_PDOS
-);
 
-            return
-                STATE_STEP_RUNNING;
+            return boot_fail(
+                boot,
+                BOOT_ERROR_SLAVE_IDENTITY,
+                slave
+            );
         }
+
+
+        /* ---------------------------------------------------------------
+         * VERIFY VENDOR ID
+         * ---------------------------------------------------------------
+         */
+
+        if (
+            identity.vendorId !=
+            A6EC_EXPECTED_VENDOR_ID
+        )
+        {
+            printf(
+                "BOOT: Slave %d Vendor ID mismatch\n"
+                "      Expected: 0x%08lX\n"
+                "      Actual  : 0x%08lX\n",
+                slave,
+                (unsigned long)A6EC_EXPECTED_VENDOR_ID,
+                (unsigned long)identity.vendorId
+            );
+
+
+            return boot_fail(
+                boot,
+                BOOT_ERROR_SLAVE_IDENTITY,
+                slave
+            );
+        }
+
+
+        /* ---------------------------------------------------------------
+         * VERIFY PRODUCT CODE
+         * ---------------------------------------------------------------
+         */
+
+        if (
+            identity.productCode !=
+            A6EC_EXPECTED_PRODUCT_CODE
+        )
+        {
+            printf(
+                "BOOT: Slave %d Product Code mismatch\n"
+                "      Expected: 0x%08lX\n"
+                "      Actual  : 0x%08lX\n",
+                slave,
+                (unsigned long)A6EC_EXPECTED_PRODUCT_CODE,
+                (unsigned long)identity.productCode
+            );
+
+
+            return boot_fail(
+                boot,
+                BOOT_ERROR_SLAVE_IDENTITY,
+                slave
+            );
+        }
+
+
+        /*
+         * Revision and serial number are recorded for diagnostics,
+         * but are not hard-fail conditions yet.
+         */
+        printf(
+            "BOOT: Slave %d identity OK "
+            "[Vendor=0x%08lX Product=0x%08lX "
+            "Revision=0x%08lX Serial=0x%08lX]\n",
+            slave,
+            (unsigned long)identity.vendorId,
+            (unsigned long)identity.productCode,
+            (unsigned long)identity.revision,
+            (unsigned long)identity.serialNumber
+        );
+    }
+
+
+    boot_advance(
+        boot,
+        BOOT_PHASE_MAP_PDOS
+    );
+
+
+    return
+        STATE_STEP_RUNNING;
+}
 
 
         /* ====================================================================

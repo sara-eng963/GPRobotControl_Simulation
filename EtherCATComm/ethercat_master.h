@@ -49,6 +49,11 @@ const char *ethercat_master_slave_name(
     int slave
 );
 
+bool ethercat_master_slave_identity(
+    int slave,
+    EtherCATSlaveIdentity *identity
+);
+
 
 /* Map PDO process data into the existing SOEM IOmap. */
 int ethercat_master_map_pdos(void);

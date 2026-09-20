@@ -34,6 +34,14 @@ const char *soem_backend_slave_name(
     int slave
 );
 
+bool soem_backend_slave_identity(
+    int slave,
+    uint32_t *vendor_id,
+    uint32_t *product_code,
+    uint32_t *revision,
+    uint32_t *serial_number
+);
+
 
 int soem_backend_map_pdos(void);
 

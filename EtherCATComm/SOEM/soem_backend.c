@@ -83,6 +83,53 @@ const char *soem_backend_slave_name(
             .name;
 }
 
+bool soem_backend_slave_identity(
+    int slave,
+    uint32_t *vendor_id,
+    uint32_t *product_code,
+    uint32_t *revision,
+    uint32_t *serial_number
+)
+{
+    if (
+        slave <= 0 ||
+        vendor_id == NULL ||
+        product_code == NULL ||
+        revision == NULL ||
+        serial_number == NULL
+    )
+    {
+        return false;
+    }
+
+
+    *vendor_id =
+        soem_context
+            .slavelist[slave]
+            .eep_man;
+
+
+    *product_code =
+        soem_context
+            .slavelist[slave]
+            .eep_id;
+
+
+    *revision =
+        soem_context
+            .slavelist[slave]
+            .eep_rev;
+
+
+    *serial_number =
+        soem_context
+            .slavelist[slave]
+            .eep_ser;
+
+
+    return true;
+}
+
 
 /* ============================================================================
  *  PDO MAPPING
