@@ -34,6 +34,14 @@ const char *soem_backend_slave_name(
     int slave
 );
 
+bool soem_backend_slave_identity(
+    int slave,
+    uint32_t *vendor_id,
+    uint32_t *product_code,
+    uint32_t *revision,
+    uint32_t *serial_number
+);
+
 
 int soem_backend_map_pdos(void);
 
@@ -91,9 +99,53 @@ uint16_t soem_backend_statecheck(
 
 int soem_backend_read_states(void);
 
+bool soem_backend_acknowledge_slave_error(
+    int slave
+);
+
+
+bool soem_backend_request_slave_operational(
+    int slave
+);
+
+
+bool soem_backend_reconfigure_slave(
+    int slave
+);
+
+
+bool soem_backend_recover_slave(
+    int slave
+);
+
+bool soem_backend_test_request_safe_op(
+    int slave
+);
+
+/*
+ * TEST ONLY:
+ * Simulate a slave reporting SAFE-OP + ERROR.
+ */
+bool soem_backend_test_force_safe_op_error(
+    int slave
+);
 
 uint16_t soem_backend_slave_state(
     int slave
+);
+
+uint16_t soem_backend_slave_al_status_code(
+    int slave
+);
+
+
+bool soem_backend_slave_is_lost(
+    int slave
+);
+
+
+const char *soem_backend_al_status_name(
+    uint16_t al_status_code
 );
 
 

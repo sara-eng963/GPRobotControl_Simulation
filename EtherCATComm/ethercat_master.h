@@ -49,6 +49,11 @@ const char *ethercat_master_slave_name(
     int slave
 );
 
+bool ethercat_master_slave_identity(
+    int slave,
+    EtherCATSlaveIdentity *identity
+);
+
 
 /* Map PDO process data into the existing SOEM IOmap. */
 int ethercat_master_map_pdos(void);
@@ -125,11 +130,29 @@ uint16_t ethercat_master_slave_state(
     int slave
 );
 
+bool ethercat_master_slave_status(
+    int slave,
+    EtherCATSlaveStatus *status
+);
+
+
+void ethercat_master_refresh_slave_states(void);
+
+void ethercat_master_print_slave_diagnostics(void);
+
+const char *ethercat_master_al_status_name(
+    uint16_t alStatusCode
+);
+
 
 const char *ethercat_master_state_name(
     uint16_t state
 );
 
+bool ethercat_master_all_slaves_operational(
+    int slaveCount,
+    int *failedSlave
+);
 
 /*
  * Disable SYNC0 on DC-capable slaves and close SOEM.
@@ -170,5 +193,8 @@ int32_t ethercat_pdo_read_i32(
     const uint8_t *p
 );
 
+EtherCATRecoveryAction ethercat_master_recovery_step(
+    int slave
+);
 
 #endif /* ETHERCAT_MASTER_H */

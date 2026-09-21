@@ -39,14 +39,22 @@ add_subdirectory(
     SOEM-build
 )
 
+# ============================================================================
+# CONTROL CORE
+# ============================================================================
+
+add_subdirectory(ControlCore)
+
 # ----------------------------
-# Our application
+# FreeRTOS / EtherCAT application
 # ----------------------------
 
 add_executable(
     freertos_pc_test
 
     main.c
+
+    StateMachine/States/state_boot.c
 
     EtherCATComm/ethercat_master.c
     EtherCATComm/SOEM/soem_backend.c
@@ -75,6 +83,7 @@ target_link_libraries(
     freertos_config
     soem
     pthread
+    control_core
 )
 
 # ============================================================================
@@ -90,12 +99,20 @@ add_subdirectory(
 )
 
 # ============================================================================
-# MOCK HMI
+# MODULAR ROBOT MOTION HMI
 # ============================================================================
 
 add_executable(
     mock_hmi
+
     hmi.c
+
+    HMI/hmi_app.c
+    HMI/hmi_protocol.c
+    HMI/hmi_theme.c
+    HMI/hmi_runtime_guard.c
+    HMI/waypoint_editor_3d.c
+    HMI/workspace_monitor.c
 )
 
 target_compile_features(
@@ -104,20 +121,217 @@ target_compile_features(
     c_std_11
 )
 
+target_include_directories(
+    mock_hmi
+    PRIVATE
+    HMI
+)
+
 target_link_libraries(
     mock_hmi
     PRIVATE
     raylib
+    control_core
+    m
+)
+
+# ---------------------------------------------------------------------------
+# HMI runtime isolation for the PC EtherCAT simulation
+# ---------------------------------------------------------------------------
+#
+# hmi_runtime_guard.c wraps these raylib calls so the GUI is capped at 20 FPS
+# and 4x MSAA is removed.  This keeps WSLg rendering from competing as heavily
+# with the 1 ms FreeRTOS/SOEM + KickCAT simulation.
+#
+# The controller timing is unchanged.
+
+target_link_options(
+    mock_hmi
+    PRIVATE
+    -Wl,--wrap=SetTargetFPS
+    -Wl,--wrap=SetConfigFlags
 )
 
 # ============================================================================
-# CONTROL CORE
+# BOOT STATE TEST
 # ============================================================================
 
-add_subdirectory(ControlCore)
+add_executable(
+    boot_test
+
+    StateMachine/Tests/test_boot.c
+    StateMachine/States/state_boot.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    boot_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
 
 target_link_libraries(
-    freertos_pc_test
+    boot_test
     PRIVATE
+
+    soem
+    pthread
+    m
+)
+
+# ============================================================================
+# HOMING STATE TEST
+# ============================================================================
+
+add_executable(
+    homing_test
+
+    StateMachine/Tests/test_homing.c
+
+    StateMachine/States/state_boot.c
+    StateMachine/States/state_homing.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    homing_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    homing_test
+    PRIVATE
+
     control_core
+    soem
+    pthread
+    m
+)
+
+# ============================================================================
+# IDLE STATE TEST
+# ============================================================================
+
+add_executable(
+    idle_test
+
+    StateMachine/Tests/test_idle.c
+
+    StateMachine/States/state_boot.c
+    StateMachine/States/state_homing.c
+    StateMachine/States/state_idle.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    idle_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    ControlCore/Config
+    ControlCore/Math
+    ControlCore/Trajectory
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    idle_test
+    PRIVATE
+
+    control_core
+    soem
+    pthread
+    m
+)
+
+# ============================================================================
+# TEACHING STATE INTEGRATION TEST
+# ============================================================================
+
+add_executable(
+    teaching_test
+
+    StateMachine/Tests/test_teaching.c
+
+    StateMachine/States/state_boot.c
+    StateMachine/States/state_homing.c
+    StateMachine/States/state_idle.c
+    StateMachine/States/state_teaching.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    teaching_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    teaching_test
+    PRIVATE
+
+    control_core
+    soem
+    pthread
+    m
 )

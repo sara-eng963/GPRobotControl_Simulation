@@ -145,17 +145,40 @@ int ethercat_master_scan(void)
 
 
     for (int slave = 1;
-         slave <= bus_info.slaveCount;
-         slave++)
+     slave <= bus_info.slaveCount;
+     slave++)
+{
+    printf(
+        "Slave %d: %s\n",
+        slave,
+        soem_backend_slave_name(
+            slave
+        )
+    );
+
+
+    EtherCATSlaveIdentity identity;
+
+
+    if (
+        ethercat_master_slave_identity(
+            slave,
+            &identity
+        )
+    )
     {
         printf(
-            "Slave %d: %s\n",
-            slave,
-            soem_backend_slave_name(
-                slave
-            )
+            "  Vendor ID    : 0x%08lX\n"
+            "  Product Code : 0x%08lX\n"
+            "  Revision     : 0x%08lX\n"
+            "  Serial Number: 0x%08lX\n",
+            (unsigned long)identity.vendorId,
+            (unsigned long)identity.productCode,
+            (unsigned long)identity.revision,
+            (unsigned long)identity.serialNumber
         );
     }
+}
 
 
     if (
@@ -190,6 +213,30 @@ const char *ethercat_master_slave_name(
     return
         soem_backend_slave_name(
             slave
+        );
+}
+bool ethercat_master_slave_identity(
+    int slave,
+    EtherCATSlaveIdentity *identity
+)
+{
+    if (
+        identity == NULL ||
+        slave <= 0 ||
+        slave > bus_info.slaveCount
+    )
+    {
+        return false;
+    }
+
+
+    return
+        soem_backend_slave_identity(
+            slave,
+            &identity->vendorId,
+            &identity->productCode,
+            &identity->revision,
+            &identity->serialNumber
         );
 }
 
@@ -560,6 +607,62 @@ uint16_t ethercat_master_slave_state(
         );
 }
 
+bool ethercat_master_slave_status(
+    int slave,
+    EtherCATSlaveStatus *status
+)
+{
+    if (
+        status == NULL ||
+        slave <= 0 ||
+        slave > bus_info.slaveCount
+    )
+    {
+        return false;
+    }
+
+
+    status->slave =
+        slave;
+
+
+    status->state =
+        soem_backend_slave_state(
+            slave
+        );
+
+
+    status->alStatusCode =
+        soem_backend_slave_al_status_code(
+            slave
+        );
+
+
+    status->lost =
+        soem_backend_slave_is_lost(
+            slave
+        );
+
+
+    return true;
+}
+
+
+void ethercat_master_refresh_slave_states(void)
+{
+    soem_backend_read_states();
+}
+
+
+const char *ethercat_master_al_status_name(
+    uint16_t alStatusCode
+)
+{
+    return
+        soem_backend_al_status_name(
+            alStatusCode
+        );
+}
 
 const char *ethercat_master_state_name(
     uint16_t state
@@ -651,4 +754,234 @@ int32_t ethercat_pdo_read_i32(
         soem_backend_read_i32(
             p
         );
+}
+
+void ethercat_master_print_slave_diagnostics(void)
+{
+    /*
+     * EtherCAT state fields are cached inside SOEM.
+     * Refresh them from the bus before reporting diagnostics.
+     */
+    ethercat_master_refresh_slave_states();
+
+
+    printf(
+        "\nEtherCAT slave diagnostics:\n"
+    );
+
+
+    for (
+        int slave = 1;
+        slave <= bus_info.slaveCount;
+        slave++
+    )
+    {
+        EtherCATSlaveStatus status;
+
+
+        if (
+            !ethercat_master_slave_status(
+                slave,
+                &status
+            )
+        )
+        {
+            continue;
+        }
+
+
+        printf(
+            "Slave %d: State=%s (0x%02X)"
+            " | AL=0x%04X (%s)"
+            " | Lost=%s\n",
+            slave,
+            ethercat_master_state_name(
+                status.state
+            ),
+            status.state,
+            status.alStatusCode,
+            ethercat_master_al_status_name(
+                status.alStatusCode
+            ),
+            status.lost ? "YES" : "NO"
+        );
+    }
+}
+
+EtherCATRecoveryAction ethercat_master_recovery_step(
+    int slave
+)
+{
+    EtherCATSlaveStatus status;
+
+
+    ethercat_master_refresh_slave_states();
+
+
+    if (
+        !ethercat_master_slave_status(
+            slave,
+            &status
+        )
+    )
+    {
+        return
+            ETHERCAT_RECOVERY_ACTION_FAILED;
+    }
+
+
+    /* Already healthy. */
+    if (
+        status.state ==
+        EC_STATE_OPERATIONAL
+    )
+    {
+        return
+            ETHERCAT_RECOVERY_ACTION_NONE;
+    }
+
+
+    /* SAFE-OP + ERROR -> acknowledge error. */
+    if (
+        status.state ==
+        (EC_STATE_SAFE_OP + EC_STATE_ERROR)
+    )
+    {
+        if (
+            soem_backend_acknowledge_slave_error(
+                slave
+            )
+        )
+        {
+            return
+                ETHERCAT_RECOVERY_ACTION_ACK_ERROR;
+        }
+
+
+        return
+            ETHERCAT_RECOVERY_ACTION_FAILED;
+    }
+
+
+    /* SAFE-OP -> request OP again. */
+    if (
+        status.state ==
+        EC_STATE_SAFE_OP
+    )
+    {
+        if (
+            soem_backend_request_slave_operational(
+                slave
+            )
+        )
+        {
+            return
+                ETHERCAT_RECOVERY_ACTION_REQUEST_OPERATIONAL;
+        }
+
+
+        return
+            ETHERCAT_RECOVERY_ACTION_FAILED;
+    }
+
+
+    /* No response -> try recovering lost slave. */
+    if (
+        status.state ==
+        EC_STATE_NONE
+    )
+    {
+        if (
+            soem_backend_recover_slave(
+                slave
+            )
+        )
+        {
+            return
+                ETHERCAT_RECOVERY_ACTION_RECOVER_LOST;
+        }
+
+
+        return
+            ETHERCAT_RECOVERY_ACTION_FAILED;
+    }
+
+
+    /*
+     * Other responding states such as
+     * PRE-OP or INIT -> reconfigure.
+     */
+    if (
+        soem_backend_reconfigure_slave(
+            slave
+        )
+    )
+    {
+        return
+            ETHERCAT_RECOVERY_ACTION_RECONFIGURE;
+    }
+
+
+    return
+        ETHERCAT_RECOVERY_ACTION_FAILED;
+}
+
+bool ethercat_master_all_slaves_operational(
+    int slaveCount,
+    int *failedSlave
+)
+{
+    ethercat_master_refresh_slave_states();
+
+
+    if (failedSlave != NULL)
+    {
+        *failedSlave =
+            0;
+    }
+
+
+    for (
+        int slave = 1;
+        slave <= slaveCount;
+        slave++
+    )
+    {
+        EtherCATSlaveStatus status;
+
+
+        if (
+            !ethercat_master_slave_status(
+                slave,
+                &status
+            )
+        )
+        {
+            if (failedSlave != NULL)
+            {
+                *failedSlave =
+                    slave;
+            }
+
+            return false;
+        }
+
+
+        if (
+            status.state !=
+            EC_STATE_OPERATIONAL
+        )
+        {
+            if (failedSlave != NULL)
+            {
+                *failedSlave =
+                    slave;
+            }
+
+            return false;
+        }
+    }
+
+
+    return true;
 }

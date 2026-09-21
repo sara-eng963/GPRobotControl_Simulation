@@ -17,6 +17,8 @@
 
 
 /* CiA-402 drive objects. */
+#define A6EC_OD_ERROR_CODE                  0x603FU
+
 #define A6EC_OD_CONTROLWORD                 0x6040U
 #define A6EC_OD_STATUSWORD                  0x6041U
 

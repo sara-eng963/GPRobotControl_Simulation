@@ -15,6 +15,10 @@ compile_commands.json
 # Generated test output
 single_segment_line_c.csv
 
+# Vendor / teammate-shared EtherCAT ESI file
+# Keep this out of Git; setup_environment.sh copies it into KickCAT.
+A6-EC.xml
+
 # Editor / OS junk
 .vscode/
 .DS_Store

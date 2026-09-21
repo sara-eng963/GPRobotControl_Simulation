@@ -80,6 +80,55 @@ bool a6ec_set_csp_mode(
 
     return true;
 }
+/* ============================================================================
+ *  CiA-402 ERROR CODE
+ * ============================================================================
+ */
+
+bool a6ec_read_error_code(
+    int slave,
+    uint16_t *error_code
+)
+{
+    if (error_code == NULL)
+    {
+        return false;
+    }
+
+
+    uint16_t code =
+        0U;
+
+
+    size_t code_size =
+        sizeof(code);
+
+
+    int read_wkc =
+        ethercat_master_sdo_read(
+            slave,
+            A6EC_OD_ERROR_CODE,
+            A6EC_SUBINDEX_0,
+            &code_size,
+            &code
+        );
+
+
+    if (
+        read_wkc <= 0 ||
+        code_size != sizeof(code)
+    )
+    {
+        return false;
+    }
+
+
+    *error_code =
+        code;
+
+
+    return true;
+}
 
 
 /* ============================================================================

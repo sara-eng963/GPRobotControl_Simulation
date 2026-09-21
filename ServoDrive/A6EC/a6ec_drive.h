@@ -38,6 +38,18 @@ bool a6ec_set_csp_mode(
     int8_t *mode_readback
 );
 
+/*
+ * Read the CiA-402 Error Code object:
+ *
+ *      0x603F:00
+ *
+ * Returns true when the SDO read succeeds.
+ */
+bool a6ec_read_error_code(
+    int slave,
+    uint16_t *error_code
+);
+
 
 /*
  * Convenience accessors over the existing A6-EC simulator PDO mapping.
