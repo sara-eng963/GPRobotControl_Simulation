@@ -394,24 +394,143 @@ StateStepResult state_machine_step(
 
 
             /*
-             * Validation has now finished.
-             *
-             * For now DO NOT automatically transition elsewhere.
-             *
-             * Inspect:
-             *
-             *      machine->path_validation_outputs.report.result
-             *
-             * It can be:
-             *
-             *      PV_RESULT_VALID
-             *      PV_RESULT_INVALID
-             *      PV_RESULT_CANCELLED
-             *
-             * When Preview / Edit behavior is implemented, the transition
-             * belongs here.
+             * Invalid / cancelled validation is a completed validation result.
+             * Do not enter APPROACH.
              */
+            if (
+                machine->path_validation_outputs.report.result !=
+                PV_RESULT_VALID
+            )
+            {
+                return
+                    STATE_STEP_COMPLETE;
+            }
 
+
+            /*
+             * A valid trajectory may remain available while the supervisor/HMI
+             * decides whether it will be Previewed or Welded.
+             */
+            if (
+                inputs->approach_operation ==
+                APPROACH_OPERATION_NONE
+            )
+            {
+                return
+                    STATE_STEP_COMPLETE;
+            }
+
+
+            if (
+                dependencies->robot == NULL ||
+                dependencies->validated_trajectory == NULL ||
+                dependencies->approach_config == NULL ||
+                dependencies->approach_services == NULL
+            )
+            {
+                return
+                    STATE_STEP_FAILED;
+            }
+
+
+            ApproachRequest request =
+            {
+                .operation =
+                    inputs->approach_operation,
+
+                .trajectory =
+                    dependencies->validated_trajectory,
+
+                .trajectory_ready =
+                    machine->path_validation_outputs.trajectory_ready,
+
+                .expected_program_id =
+                    dependencies->validated_trajectory->program_id,
+
+                .expected_source_revision =
+                    dependencies->validated_trajectory->source_revision,
+
+                .expected_artifact_crc =
+                    dependencies->validated_trajectory->artifact_crc,
+
+                .clearance_poses =
+                    inputs->approach_clearance_poses,
+
+                .clearance_pose_count =
+                    inputs->approach_clearance_pose_count
+            };
+
+
+            state_approach_enter(
+                &machine->approach,
+                dependencies->robot,
+                &request,
+                dependencies->approach_config,
+                dependencies->approach_services
+            );
+
+
+            if (
+                machine->approach.result !=
+                APPROACH_RESULT_RUNNING
+            )
+            {
+                state_approach_get_outputs(
+                    &machine->approach,
+                    &machine->approach_outputs
+                );
+
+                return
+                    STATE_STEP_FAILED;
+            }
+
+
+            change_state(
+                machine,
+                ROBOT_STATE_APPROACH
+            );
+
+
+            return
+                STATE_STEP_RUNNING;
+        }
+
+
+        /* ====================================================================
+         * APPROACH
+         * ==================================================================== */
+
+        case ROBOT_STATE_APPROACH:
+        {
+            StateStepResult result =
+                state_approach_step(
+                    &machine->approach,
+                    &inputs->approach_control,
+                    &machine->approach_outputs
+                );
+
+
+            if (result == STATE_STEP_FAILED)
+            {
+                return
+                    STATE_STEP_FAILED;
+            }
+
+
+            if (result == STATE_STEP_RUNNING)
+            {
+                return
+                    STATE_STEP_RUNNING;
+            }
+
+
+            /*
+             * APPROACH has completed or was aborted.
+             *
+             * Preview / Welding are not integrated yet, so the global FSM
+             * exposes the completed Approach result and does not invent the
+             * next transition here.
+             */
             return
                 STATE_STEP_COMPLETE;
         }
@@ -466,6 +585,9 @@ const char *state_machine_state_name(
 
         case ROBOT_STATE_PATH_VALIDATION:
             return "PATH_VALIDATION";
+
+        case ROBOT_STATE_APPROACH:
+            return "APPROACH";
 
         default:
             return "UNKNOWN";
