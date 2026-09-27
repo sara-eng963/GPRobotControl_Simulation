@@ -20,6 +20,7 @@
  *      state_idle.c
  *      state_teaching.c
  *      state_path_validation.c
+ *      state_approach.c
  *
  * Instead, small stubs below simulate each state's result.
  *
@@ -30,6 +31,8 @@
  *      IDLE -> TEACHING
  *      TEACHING -> PATH_VALIDATION
  *      PATH_VALIDATION RUNNING / COMPLETE behavior
+ *      PATH_VALIDATION -> APPROACH
+ *      APPROACH RUNNING / COMPLETE behavior
  *
  * without requiring:
  *
@@ -61,6 +64,7 @@ static StateStepResult g_homing_result;
 static StateStepResult g_idle_result;
 static StateStepResult g_teaching_result;
 static StateStepResult g_path_validation_result;
+static StateStepResult g_approach_result;
 
 static bool g_teaching_validation_request;
 
@@ -68,6 +72,7 @@ static uint32_t g_teaching_submitted_revision;
 static uint32_t g_teaching_submitted_crc;
 
 static PathValidationResult g_path_validation_report_result;
+static ApproachResult g_approach_report_result;
 
 
 /* ============================================================================
@@ -90,6 +95,10 @@ static unsigned g_path_validation_enter_calls;
 static unsigned g_path_validation_step_calls;
 static unsigned g_path_validation_get_outputs_calls;
 
+static unsigned g_approach_enter_calls;
+static unsigned g_approach_step_calls;
+static unsigned g_approach_get_outputs_calls;
+
 
 /* ============================================================================
  * PATH-VALIDATION HANDOFF CAPTURE
@@ -98,6 +107,20 @@ static unsigned g_path_validation_get_outputs_calls;
 static const TaughtProgram *g_path_validation_received_program;
 static uint32_t g_path_validation_received_revision;
 static uint32_t g_path_validation_received_crc;
+
+
+/* ============================================================================
+ * APPROACH HANDOFF CAPTURE
+ * ============================================================================ */
+
+static ApproachOperation g_approach_received_operation;
+static const ValidatedTrajectory *g_approach_received_trajectory;
+static bool g_approach_received_trajectory_ready;
+static uint32_t g_approach_received_program_id;
+static uint32_t g_approach_received_revision;
+static uint32_t g_approach_received_artifact_crc;
+static const JointVector *g_approach_received_clearance_poses;
+static uint8_t g_approach_received_clearance_pose_count;
 
 
 /* ============================================================================
@@ -121,6 +144,9 @@ static void reset_stub_state(void)
     g_path_validation_result =
         STATE_STEP_RUNNING;
 
+    g_approach_result =
+        STATE_STEP_RUNNING;
+
 
     g_teaching_validation_request =
         false;
@@ -134,6 +160,9 @@ static void reset_stub_state(void)
 
     g_path_validation_report_result =
         PV_RESULT_RUNNING;
+
+    g_approach_report_result =
+        APPROACH_RESULT_RUNNING;
 
 
     g_boot_enter_calls =
@@ -169,6 +198,15 @@ static void reset_stub_state(void)
     g_path_validation_get_outputs_calls =
         0U;
 
+    g_approach_enter_calls =
+        0U;
+
+    g_approach_step_calls =
+        0U;
+
+    g_approach_get_outputs_calls =
+        0U;
+
 
     g_path_validation_received_program =
         NULL;
@@ -177,6 +215,31 @@ static void reset_stub_state(void)
         0U;
 
     g_path_validation_received_crc =
+        0U;
+
+
+    g_approach_received_operation =
+        APPROACH_OPERATION_NONE;
+
+    g_approach_received_trajectory =
+        NULL;
+
+    g_approach_received_trajectory_ready =
+        false;
+
+    g_approach_received_program_id =
+        0U;
+
+    g_approach_received_revision =
+        0U;
+
+    g_approach_received_artifact_crc =
+        0U;
+
+    g_approach_received_clearance_poses =
+        NULL;
+
+    g_approach_received_clearance_pose_count =
         0U;
 }
 
@@ -514,6 +577,127 @@ void state_path_validation_get_outputs(
 }
 
 
+/* ----------------------------------------------------------------------------
+ * APPROACH
+ * ------------------------------------------------------------------------- */
+
+void state_approach_enter(
+    ApproachState *state,
+    const RobotConfig *robot,
+    const ApproachRequest *request,
+    const ApproachConfig *config,
+    const ApproachServices *services
+)
+{
+    (void)robot;
+    (void)config;
+    (void)services;
+
+    ++g_approach_enter_calls;
+
+
+    if (request != NULL)
+    {
+        g_approach_received_operation =
+            request->operation;
+
+        g_approach_received_trajectory =
+            request->trajectory;
+
+        g_approach_received_trajectory_ready =
+            request->trajectory_ready;
+
+        g_approach_received_program_id =
+            request->expected_program_id;
+
+        g_approach_received_revision =
+            request->expected_source_revision;
+
+        g_approach_received_artifact_crc =
+            request->expected_artifact_crc;
+
+        g_approach_received_clearance_poses =
+            request->clearance_poses;
+
+        g_approach_received_clearance_pose_count =
+            request->clearance_pose_count;
+    }
+
+
+    if (state != NULL)
+    {
+        memset(
+            state,
+            0,
+            sizeof(*state)
+        );
+
+        state->initialized =
+            true;
+
+        state->result =
+            APPROACH_RESULT_RUNNING;
+
+        state->phase =
+            APPROACH_PHASE_CHECK_REQUEST;
+    }
+}
+
+
+StateStepResult state_approach_step(
+    ApproachState *state,
+    const ApproachControlInputs *inputs,
+    ApproachOutputs *outputs
+)
+{
+    (void)state;
+    (void)inputs;
+
+    ++g_approach_step_calls;
+
+
+    if (outputs != NULL)
+    {
+        memset(
+            outputs,
+            0,
+            sizeof(*outputs)
+        );
+
+        outputs->report.result =
+            g_approach_report_result;
+    }
+
+
+    return
+        g_approach_result;
+}
+
+
+void state_approach_get_outputs(
+    const ApproachState *state,
+    ApproachOutputs *outputs
+)
+{
+    (void)state;
+
+    ++g_approach_get_outputs_calls;
+
+
+    if (outputs != NULL)
+    {
+        memset(
+            outputs,
+            0,
+            sizeof(*outputs)
+        );
+
+        outputs->report.result =
+            g_approach_report_result;
+    }
+}
+
+
 /* ============================================================================
  * TEST FIXTURE
  * ============================================================================ */
@@ -537,6 +721,11 @@ typedef struct
     PathValidationStorage path_validation_storage;
 
     ValidatedTrajectory validated_trajectory;
+
+    ApproachConfig approach_config;
+    ApproachServices approach_services;
+
+    JointVector clearance_poses[APPROACH_MAX_CLEARANCE_POSES];
 
 } TestFixture;
 
@@ -584,6 +773,12 @@ static void fixture_init(
     fixture->dependencies.validated_trajectory =
         &fixture->validated_trajectory;
 
+    fixture->dependencies.approach_config =
+        &fixture->approach_config;
+
+    fixture->dependencies.approach_services =
+        &fixture->approach_services;
+
 
     fixture->inputs.idle_command =
         IDLE_COMMAND_NONE;
@@ -593,6 +788,9 @@ static void fixture_init(
 
     fixture->inputs.path_validation_sample_budget =
         8U;
+
+    fixture->inputs.approach_operation =
+        APPROACH_OPERATION_NONE;
 }
 
 
@@ -1306,6 +1504,282 @@ static void test_path_validation_valid_complete(void)
 /* ============================================================================
  * TEST 10
  *
+ * PATH VALIDATION VALID + OPERATION REQUEST -> APPROACH
+ * ============================================================================ */
+
+static void test_path_validation_to_approach(void)
+{
+    reset_stub_state();
+
+
+    TestFixture fixture;
+    fixture_init(
+        &fixture
+    );
+
+
+    assert(
+        state_machine_init(
+            &fixture.machine,
+            1U
+        )
+    );
+
+
+    fixture.machine.current_state =
+        ROBOT_STATE_PATH_VALIDATION;
+
+    fixture.machine.previous_state =
+        ROBOT_STATE_TEACHING;
+
+
+    fixture.validated_trajectory.program_id =
+        42U;
+
+    fixture.validated_trajectory.source_revision =
+        7U;
+
+    fixture.validated_trajectory.artifact_crc =
+        0xAABBCCDDU;
+
+
+    fixture.inputs.approach_operation =
+        APPROACH_OPERATION_PREVIEW;
+
+    fixture.inputs.approach_clearance_poses =
+        fixture.clearance_poses;
+
+    fixture.inputs.approach_clearance_pose_count =
+        1U;
+
+
+    g_path_validation_result =
+        STATE_STEP_COMPLETE;
+
+    g_path_validation_report_result =
+        PV_RESULT_VALID;
+
+
+    const StateStepResult result =
+        state_machine_step(
+            &fixture.machine,
+            &fixture.dependencies,
+            &fixture.inputs
+        );
+
+
+    assert(
+        result ==
+        STATE_STEP_RUNNING
+    );
+
+    assert(
+        fixture.machine.current_state ==
+        ROBOT_STATE_APPROACH
+    );
+
+    assert(
+        fixture.machine.previous_state ==
+        ROBOT_STATE_PATH_VALIDATION
+    );
+
+    assert(
+        g_approach_enter_calls ==
+        1U
+    );
+
+
+    /*
+     * Verify the global FSM passes the exact validated artifact identity and
+     * requested Approach operation into state_approach_enter().
+     */
+    assert(
+        g_approach_received_operation ==
+        APPROACH_OPERATION_PREVIEW
+    );
+
+    assert(
+        g_approach_received_trajectory ==
+        &fixture.validated_trajectory
+    );
+
+    assert(
+        g_approach_received_trajectory_ready
+    );
+
+    assert(
+        g_approach_received_program_id ==
+        42U
+    );
+
+    assert(
+        g_approach_received_revision ==
+        7U
+    );
+
+    assert(
+        g_approach_received_artifact_crc ==
+        0xAABBCCDDU
+    );
+
+    assert(
+        g_approach_received_clearance_poses ==
+        fixture.clearance_poses
+    );
+
+    assert(
+        g_approach_received_clearance_pose_count ==
+        1U
+    );
+
+
+    printf(
+        "[PASS] PATH_VALIDATION -> APPROACH handoff\n"
+    );
+}
+
+
+/* ============================================================================
+ * TEST 11
+ *
+ * APPROACH RUNNING STAYS ACTIVE
+ * ============================================================================ */
+
+static void test_approach_running(void)
+{
+    reset_stub_state();
+
+
+    TestFixture fixture;
+    fixture_init(
+        &fixture
+    );
+
+
+    assert(
+        state_machine_init(
+            &fixture.machine,
+            1U
+        )
+    );
+
+
+    fixture.machine.current_state =
+        ROBOT_STATE_APPROACH;
+
+    fixture.machine.previous_state =
+        ROBOT_STATE_PATH_VALIDATION;
+
+
+    g_approach_result =
+        STATE_STEP_RUNNING;
+
+    g_approach_report_result =
+        APPROACH_RESULT_RUNNING;
+
+
+    const StateStepResult result =
+        state_machine_step(
+            &fixture.machine,
+            &fixture.dependencies,
+            &fixture.inputs
+        );
+
+
+    assert(
+        result ==
+        STATE_STEP_RUNNING
+    );
+
+    assert(
+        fixture.machine.current_state ==
+        ROBOT_STATE_APPROACH
+    );
+
+    assert(
+        g_approach_step_calls ==
+        1U
+    );
+
+
+    printf(
+        "[PASS] APPROACH remains active while RUNNING\n"
+    );
+}
+
+
+/* ============================================================================
+ * TEST 12
+ *
+ * APPROACH COMPLETE IS EXPOSED WITHOUT INVENTING NEXT STATE
+ * ============================================================================ */
+
+static void test_approach_complete(void)
+{
+    reset_stub_state();
+
+
+    TestFixture fixture;
+    fixture_init(
+        &fixture
+    );
+
+
+    assert(
+        state_machine_init(
+            &fixture.machine,
+            1U
+        )
+    );
+
+
+    fixture.machine.current_state =
+        ROBOT_STATE_APPROACH;
+
+    fixture.machine.previous_state =
+        ROBOT_STATE_PATH_VALIDATION;
+
+
+    g_approach_result =
+        STATE_STEP_COMPLETE;
+
+    g_approach_report_result =
+        APPROACH_RESULT_COMPLETE;
+
+
+    const StateStepResult result =
+        state_machine_step(
+            &fixture.machine,
+            &fixture.dependencies,
+            &fixture.inputs
+        );
+
+
+    assert(
+        result ==
+        STATE_STEP_COMPLETE
+    );
+
+    assert(
+        fixture.machine.current_state ==
+        ROBOT_STATE_APPROACH
+    );
+
+    assert(
+        fixture.machine.approach_outputs.report.result ==
+        APPROACH_RESULT_COMPLETE
+    );
+
+
+    printf(
+        "[PASS] APPROACH COMPLETE is exposed to the supervisor\n"
+    );
+}
+
+
+/* ============================================================================
+ * TEST 13
+ *
  * PATH VALIDATION INVALID COMPLETES BUT IS NOT A GLOBAL HARDWARE FAILURE
  * ============================================================================ */
 
@@ -1381,7 +1855,7 @@ static void test_path_validation_invalid_complete(void)
 
 
 /* ============================================================================
- * TEST 11
+ * TEST 14
  *
  * NAME HELPER
  * ============================================================================ */
@@ -1433,6 +1907,15 @@ static void test_state_name_helper(void)
         ) == 0
     );
 
+    assert(
+        strcmp(
+            state_machine_state_name(
+                ROBOT_STATE_APPROACH
+            ),
+            "APPROACH"
+        ) == 0
+    );
+
 
     printf(
         "[PASS] State-name helper\n"
@@ -1471,6 +1954,12 @@ int main(void)
     test_path_validation_running();
 
     test_path_validation_valid_complete();
+
+    test_path_validation_to_approach();
+
+    test_approach_running();
+
+    test_approach_complete();
 
     test_path_validation_invalid_complete();
 
