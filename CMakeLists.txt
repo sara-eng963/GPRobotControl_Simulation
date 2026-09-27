@@ -335,3 +335,75 @@ target_link_libraries(
     pthread
     m
 )
+
+# ============================================================================
+# PATH VALIDATION STATE INTEGRATION TEST
+# ============================================================================
+
+add_executable(
+    path_validation_test
+
+    StateMachine/Tests/test_path_validation.c
+
+    StateMachine/States/state_teaching.c
+    StateMachine/States/state_path_validation.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_include_directories(
+    path_validation_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    path_validation_test
+    PRIVATE
+
+    control_core
+    soem
+    pthread
+    m
+)
+
+# ============================================================================
+# GLOBAL STATE MACHINE UNIT TEST
+# ============================================================================
+
+add_executable(
+    state_machine_test
+
+    StateMachine/Tests/test_state_machine.c
+    StateMachine/state_machine.c
+)
+
+target_include_directories(
+    state_machine_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+)
+
+target_link_libraries(
+    state_machine_test
+    PRIVATE
+
+    control_core
+    m
+)

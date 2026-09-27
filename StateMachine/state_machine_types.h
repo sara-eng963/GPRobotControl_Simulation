@@ -2,10 +2,6 @@
 #define STATE_MACHINE_TYPES_H
 
 
-/*
- * Result returned whenever one robot state
- * executes one step of its logic.
- */
 typedef enum
 {
     STATE_STEP_RUNNING = 0,
@@ -13,6 +9,23 @@ typedef enum
     STATE_STEP_FAILED
 
 } StateStepResult;
+
+
+typedef enum
+{
+    ROBOT_STATE_BOOT = 0,
+
+    ROBOT_STATE_HOMING,
+
+    ROBOT_STATE_IDLE,
+
+    ROBOT_STATE_TEACHING,
+
+    ROBOT_STATE_PATH_VALIDATION,
+
+    ROBOT_STATE_APPROACH
+
+} RobotState;
 
 
 #endif /* STATE_MACHINE_TYPES_H */

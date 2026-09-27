@@ -529,6 +529,16 @@ bool adls_ik(
     double sigmaThreshold =
         localParameters.sigmaThreshold;
 
+    if (
+    !isfinite(lambdaMax) ||
+    lambdaMax < 0.0 ||
+    !isfinite(sigmaThreshold) ||
+    sigmaThreshold <= 0.0
+)
+{
+    return false;
+}
+
 
     /* ------------------------------------------------------------------------
      * Initialize q from qSeed

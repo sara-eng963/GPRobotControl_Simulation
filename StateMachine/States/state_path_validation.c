@@ -442,7 +442,7 @@ static bool config_and_dependencies_valid(
         !finite_real(config->ik_parameters.lambdaMax) ||
         config->ik_parameters.lambdaMax < 0.0 ||
         !finite_real(config->ik_parameters.sigmaThreshold) ||
-        config->ik_parameters.sigmaThreshold < 0.0
+        config->ik_parameters.sigmaThreshold <= 0.0
     )
     {
         return false;
