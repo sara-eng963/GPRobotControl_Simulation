@@ -69,6 +69,48 @@ static const char *homing_error_name(
     }
 }
 
+
+static const char *path_validation_error_name(
+    uint32_t error
+)
+{
+    switch (error)
+    {
+        case 0U:  return "NONE";
+        case 1U:  return "NULL_ARGUMENT";
+        case 2U:  return "BUSY";
+        case 3U:  return "EMPTY_PROGRAM";
+        case 4U:  return "REVISION_MISMATCH";
+        case 5U:  return "DRAFT_CRC_MISMATCH";
+        case 6U:  return "UNSUPPORTED_SEGMENT";
+        case 7U:  return "INCOMPLETE_SEGMENT";
+        case 8U:  return "INVALID_POINT";
+        case 9U:  return "DEGENERATE_GEOMETRY";
+        case 10U: return "ARC_DIRECTION";
+        case 11U: return "INVALID_CIRCLE_DIRECTION";
+        case 12U: return "FRAME_MISMATCH";
+        case 13U: return "TOOL_MISMATCH";
+        case 14U: return "CALIBRATION_MISMATCH";
+        case 15U: return "INVALID_PARAMETER";
+        case 16U: return "ZERO_LENGTH_SEGMENT";
+        case 17U: return "SAMPLE_CAPACITY";
+        case 18U: return "IK_FAILED";
+        case 19U: return "FK_POSITION";
+        case 20U: return "FK_ORIENTATION";
+        case 21U: return "JOINT_POSITION";
+        case 22U: return "JOINT_VELOCITY";
+        case 23U: return "JOINT_ACCELERATION";
+        case 24U: return "JOINT_DISCONTINUITY";
+        case 25U: return "POSITION_CONVERSION";
+        case 26U: return "SINGULARITY_MARGIN";
+        case 27U: return "COLLISION";
+        case 28U: return "STORAGE";
+        case 29U: return "CALLBACK_MISSING";
+        case 30U: return "CANCELLED";
+        default:  return "UNKNOWN";
+    }
+}
+
 static void make_status_message(
     const HmiProtocol *protocol,
     bool online,
@@ -225,8 +267,10 @@ static void make_status_message(
                 snprintf(
                     buffer,
                     capacity,
-                    "Path validation finished. Result=%u Error=%u",
-                    status->path_validation_result,
+                    "Path INVALID: %s (error %u)",
+                    path_validation_error_name(
+                        status->path_validation_error
+                    ),
                     status->path_validation_error
                 );
             }
