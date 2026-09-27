@@ -169,7 +169,7 @@ static void make_status_message(
                 snprintf(
                     buffer,
                     capacity,
-                    "Path VALID. Press START / REPLAY to enter Approach."
+                    "Path VALID. Press PREVIEW to enter Approach."
                 );
             }
             else
@@ -614,12 +614,40 @@ int hmi_app_run(void)
             );
         }
 
+        const bool validation_running =
+            online &&
+            status->robot_state == 4U &&
+            status->path_validation_result == 1U;
+
+        const bool validation_passed =
+            online &&
+            status->robot_state == 4U &&
+            status->path_validation_result == 2U;
+
+        const bool validate_preview_enabled =
+            (
+                online &&
+                status->robot_state == 3U &&
+                status->validate_allowed
+            )
+            ||
+            validation_passed;
+
+        const char *validate_preview_label =
+            validation_running
+                ? "VALIDATING..."
+                : validation_passed
+                    ? "PREVIEW"
+                    : "VALIDATE PATH";
+
         if (
             panel_button(
                 (Rectangle){277.0F, 368.0F, 221.0F, 56.0F},
-                "PREVIEW / VALIDATE",
-                HMI_BUTTON_NORMAL,
-                online && status->validate_allowed,
+                validate_preview_label,
+                validation_passed
+                    ? HMI_BUTTON_PRIMARY
+                    : HMI_BUTTON_NORMAL,
+                validate_preview_enabled,
                 mouse
             )
         )
@@ -632,7 +660,9 @@ int hmi_app_run(void)
             snprintf(
                 local_message,
                 sizeof(local_message),
-                "Validation requested."
+                validation_passed
+                    ? "Preview requested."
+                    : "Validation requested."
             );
         }
 
