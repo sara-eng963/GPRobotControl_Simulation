@@ -10,23 +10,6 @@
  * SOEM timeout values are expressed in microseconds.
  */
 #define SOEM_RECOVERY_TIMEOUT_US 500000
-/*
- * ============================================================================
- * TEST-ONLY ETHERCAT STATE INJECTION
- * ============================================================================
- *
- * Used by the PC simulation tests to exercise recovery paths that the
- * simulator does not naturally generate.
- */
-
-static bool testStateOverrideActive =
-    false;
-
-static int testStateOverrideSlave =
-    0;
-
-static uint16_t testStateOverride =
-    EC_STATE_NONE;
 
 /*
  * ============================================================================
@@ -347,24 +330,10 @@ uint16_t soem_backend_slave_state(
     int slave
 )
 {
-    /*
-     * TEST ONLY:
-     * Allow deterministic fault-state injection.
-     */
-    if (
-        testStateOverrideActive
-        &&
-        slave ==
-            testStateOverrideSlave
-    )
-    {
-        return
-            testStateOverride;
-    }
-
-
     return
-        soem_context.slavelist[slave].state;
+        soem_context
+            .slavelist[slave]
+            .state;
 }
 
 uint16_t soem_backend_slave_al_status_code(
@@ -377,7 +346,6 @@ uint16_t soem_backend_slave_al_status_code(
             .ALstatuscode;
 }
 
-
 bool soem_backend_slave_is_lost(
     int slave
 )
@@ -387,7 +355,6 @@ bool soem_backend_slave_is_lost(
             .slavelist[slave]
             .islost != 0;
 }
-
 
 const char *soem_backend_al_status_name(
     uint16_t al_status_code
@@ -593,30 +560,6 @@ bool soem_backend_acknowledge_slave_error(
     int slave
 )
 {
-    /*
- * TEST ONLY:
- * Simulate the expected result of acknowledging
- * SAFE-OP + ERROR:
- *
- * SAFE-OP + ERROR
- *        ↓ ACK
- * SAFE-OP
- */
-if (
-    testStateOverrideActive
-    &&
-    slave ==
-        testStateOverrideSlave
-    &&
-    testStateOverride ==
-        (EC_STATE_SAFE_OP + EC_STATE_ERROR)
-)
-{
-    testStateOverride =
-        EC_STATE_SAFE_OP;
-
-    return true;
-}
     soem_context.slavelist[slave].state =
         EC_STATE_SAFE_OP +
         EC_STATE_ACK;
@@ -633,35 +576,6 @@ bool soem_backend_request_slave_operational(
     int slave
 )
 {
-    /*
- * TEST ONLY:
- * Simulate:
- *
- * SAFE-OP
- *    ↓ request OP
- * OPERATIONAL
- */
-if (
-    testStateOverrideActive
-    &&
-    slave ==
-        testStateOverrideSlave
-    &&
-    testStateOverride ==
-        EC_STATE_SAFE_OP
-)
-{
-    testStateOverrideActive =
-        false;
-
-    testStateOverrideSlave =
-        0;
-
-    testStateOverride =
-        EC_STATE_NONE;
-
-    return true;
-}
     soem_context.slavelist[slave].state =
         EC_STATE_OPERATIONAL;
 
@@ -720,66 +634,4 @@ bool soem_backend_recover_slave(
 
 
     return false;
-}
-
-bool soem_backend_test_request_safe_op(
-    int slave
-)
-{
-    if (slave <= 0)
-    {
-        return false;
-    }
-
-
-    soem_context.slavelist[slave].state =
-        EC_STATE_SAFE_OP;
-
-
-    if (
-        ecx_writestate(
-            &soem_context,
-            slave
-        ) <= 0
-    )
-    {
-        return false;
-    }
-
-
-    uint16_t state =
-        ecx_statecheck(
-            &soem_context,
-            slave,
-            EC_STATE_SAFE_OP,
-            SOEM_RECOVERY_TIMEOUT_US
-        );
-
-
-    return
-        state == EC_STATE_SAFE_OP;
-}
-
-bool soem_backend_test_force_safe_op_error(
-    int slave
-)
-{
-    if (slave <= 0)
-    {
-        return false;
-    }
-
-
-    testStateOverrideSlave =
-        slave;
-
-    testStateOverride =
-        EC_STATE_SAFE_OP +
-        EC_STATE_ERROR;
-
-    testStateOverrideActive =
-        true;
-
-
-    return true;
 }

@@ -50,6 +50,11 @@ bool a6ec_read_error_code(
     uint16_t *error_code
 );
 
+bool a6ec_read_mode_display(
+    int slave,
+    int8_t *mode
+);
+
 
 /*
  * Convenience accessors over the existing A6-EC simulator PDO mapping.

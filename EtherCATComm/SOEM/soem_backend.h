@@ -118,18 +118,6 @@ bool soem_backend_recover_slave(
     int slave
 );
 
-bool soem_backend_test_request_safe_op(
-    int slave
-);
-
-/*
- * TEST ONLY:
- * Simulate a slave reporting SAFE-OP + ERROR.
- */
-bool soem_backend_test_force_safe_op_error(
-    int slave
-);
-
 uint16_t soem_backend_slave_state(
     int slave
 );

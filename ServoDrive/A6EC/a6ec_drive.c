@@ -257,3 +257,34 @@ double a6ec_position_units_to_joint_rad(
         two_pi /
         A6EC_POSITION_UNITS_PER_REV;
 }
+
+bool a6ec_read_mode_display(
+    int slave,
+    int8_t *mode
+)
+{
+    if (mode == NULL)
+    {
+        return false;
+    }
+
+
+    size_t size =
+        sizeof(*mode);
+
+
+    int wkc =
+        ethercat_master_sdo_read(
+            slave,
+            A6EC_OD_MODES_OF_OPERATION_DISPLAY,
+            0x00,
+            &size,
+            mode
+        );
+
+
+    return
+        wkc > 0
+        &&
+        size == sizeof(*mode);
+}

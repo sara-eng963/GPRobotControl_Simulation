@@ -1214,15 +1214,15 @@ if (
              * started, the condition is satisfied.
              */
             if (allOperationEnabled)
-            {
-                boot_advance(
-                    boot,
-                    BOOT_PHASE_VERIFY_POSITION_FEEDBACK
-                );
+{
+    boot_advance(
+        boot,
+        BOOT_PHASE_VERIFY_CSP_MODE
+    );
 
-                return
-                    STATE_STEP_RUNNING;
-            }
+    return
+        STATE_STEP_RUNNING;
+}
 
 /*
  * Timeout protection for drives that remain in a valid startup state
@@ -1247,6 +1247,97 @@ if (
             return
                 STATE_STEP_RUNNING;
         }
+        /* ============================================================================
+ * VERIFY ACTIVE CSP MODE
+ * ============================================================================
+ */
+
+case BOOT_PHASE_VERIFY_CSP_MODE:
+{
+    for (
+        int slave = 1;
+        slave <= ethercatConfig->expectedSlaveCount;
+        slave++
+    )
+    {
+        int8_t modeDisplay =
+            0;
+
+
+        /*
+         * 0x6061 - Modes of Operation Display
+         *
+         * 0x6060 contains the requested mode.
+         * 0x6061 reports the mode actually active in the drive.
+         */
+        if (
+            !a6ec_read_mode_display(
+                slave,
+                &modeDisplay
+            )
+        )
+        {
+            printf(
+                "BOOT: Slave %d could not read "
+                "Modes of Operation Display (0x6061)\n",
+                slave
+            );
+
+
+            return boot_fail(
+                boot,
+                BOOT_ERROR_CSP_MODE,
+                slave
+            );
+        }
+
+
+        printf(
+            "BOOT: Slave %d active mode display = %d\n",
+            slave,
+            modeDisplay
+        );
+
+
+        /*
+         * CiA-402 CSP mode = 8.
+         */
+        if (
+            modeDisplay !=
+            A6EC_MODE_CSP
+        )
+        {
+            printf(
+                "BOOT: Slave %d is not actually in CSP\n"
+                "      Expected 0x6061 : %d\n"
+                "      Actual   0x6061 : %d\n",
+                slave,
+                A6EC_MODE_CSP,
+                modeDisplay
+            );
+
+
+            return boot_fail(
+                boot,
+                BOOT_ERROR_CSP_MODE,
+                slave
+            );
+        }
+    }
+
+
+    /*
+     * All drives report CSP as the active mode.
+     */
+    boot_advance(
+        boot,
+        BOOT_PHASE_VERIFY_POSITION_FEEDBACK
+    );
+
+
+    return
+        STATE_STEP_RUNNING;
+}
 
 
         /* ====================================================================
