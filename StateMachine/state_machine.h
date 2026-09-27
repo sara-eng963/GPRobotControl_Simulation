@@ -46,6 +46,18 @@ typedef struct
 
     ValidatedTrajectory *validated_trajectory;
 
+
+    /*
+     * APPROACH dependencies.
+     *
+     * Approach reuses the validated trajectory produced by Path Validation,
+     * RobotConfig, A6-EC, CiA-402 and EtherCAT modules.  Only its own policy
+     * configuration and the remaining external services are supplied here.
+     */
+    const ApproachConfig *approach_config;
+
+    const ApproachServices *approach_services;
+
 } StateMachineDependencies;
 
 
@@ -70,6 +82,21 @@ typedef struct
      */
     uint16_t path_validation_sample_budget;
 
+
+    /*
+     * Operation requested after a VALID Path Validation result.
+     *
+     * NONE keeps the FSM in PATH_VALIDATION with the completed result
+     * available to the supervisor/HMI.
+     */
+    ApproachOperation approach_operation;
+
+    ApproachControlInputs approach_control;
+
+    const JointVector *approach_clearance_poses;
+
+    uint8_t approach_clearance_pose_count;
+
 } StateMachineInputs;
 
 
@@ -92,6 +119,8 @@ typedef struct
 
     PathValidationState path_validation;
 
+    ApproachState approach;
+
 
     /*
      * Latest outputs that higher-level code / HMI may inspect.
@@ -99,6 +128,8 @@ typedef struct
     TeachingOutputs teaching_outputs;
 
     PathValidationOutputs path_validation_outputs;
+
+    ApproachOutputs approach_outputs;
 
 
     /*
