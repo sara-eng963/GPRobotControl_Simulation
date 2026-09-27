@@ -105,7 +105,7 @@ add_subdirectory(
 add_executable(
     mock_hmi
 
-    hmi.c
+    hmi_mock.c
 
     HMI-Mock/hmi_app.c
     HMI-Mock/hmi_protocol.c
@@ -150,6 +150,130 @@ target_link_options(
     PRIVATE
     -Wl,--wrap=SetTargetFPS
     -Wl,--wrap=SetConfigFlags
+)
+
+
+# ============================================================================
+# REAL ROBOT HMI PANEL + TEACHING-SIM WINDOW
+# ============================================================================
+
+add_executable(
+    robot_hmi
+
+    hmi.c
+
+    HMI/hmi_app.c
+    HMI/hmi_protocol.c
+    HMI/hmi_theme.c
+)
+
+target_compile_features(
+    robot_hmi
+    PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    robot_hmi
+    PRIVATE
+    HMI
+)
+
+target_link_libraries(
+    robot_hmi
+    PRIVATE
+    raylib
+    m
+)
+
+add_executable(
+    teaching_sim
+
+    teaching_sim.c
+
+    HMI/teaching_sim_app.c
+    HMI/hmi_protocol.c
+    HMI/hmi_theme.c
+)
+
+target_compile_features(
+    teaching_sim
+    PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    teaching_sim
+    PRIVATE
+    HMI
+)
+
+target_link_libraries(
+    teaching_sim
+    PRIVATE
+    raylib
+    m
+)
+
+# ============================================================================
+# HMI / GLOBAL STATE-MACHINE PC CONTROLLER
+# ============================================================================
+#
+# This is the interactive state-machine simulator used by robot_hmi and
+# teaching_sim. It runs the REAL state implementations against KickCAT.
+# The legacy freertos_pc_test + mock_hmi path remains available unchanged.
+#
+add_executable(
+    hmi_state_controller
+
+    Simulation/hmi_state_controller.c
+
+    StateMachine/state_machine.c
+    StateMachine/States/state_boot.c
+    StateMachine/States/state_homing.c
+    StateMachine/States/state_idle.c
+    StateMachine/States/state_teaching.c
+    StateMachine/States/state_path_validation.c
+    StateMachine/States/state_approach.c
+
+    EtherCATComm/ethercat_master.c
+    EtherCATComm/SOEM/soem_backend.c
+
+    ServoDrive/CiA402/cia402.c
+    ServoDrive/A6EC/a6ec_pdo.c
+    ServoDrive/A6EC/a6ec_drive.c
+)
+
+target_compile_features(
+    hmi_state_controller
+    PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    hmi_state_controller
+    PRIVATE
+
+    HMI
+
+    StateMachine
+    StateMachine/States
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    hmi_state_controller
+    PRIVATE
+
+    control_core
+    soem
+    pthread
+    m
 )
 
 # ============================================================================
