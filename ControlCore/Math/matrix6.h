@@ -19,16 +19,32 @@
  *
  * This corresponds to MATLAB:
  *
- *      dq = A \ b;
+ *      x = A \ b;
  *
+ * Singularity analysis does NOT belong in this module.
+ * Smallest-singular-value calculation is owned by:
  *
- * Returns:
+ *      ControlCore/Analysis/singularity.c
  *
- *      true  -> solve succeeded
- *      false -> matrix was numerically singular
  * ============================================================================
  */
 
+
+/*
+ * Solve:
+ *
+ *      A x = b
+ *
+ * using Gaussian elimination with partial pivoting.
+ *
+ * Returns:
+ *
+ *      true
+ *          system solved successfully.
+ *
+ *      false
+ *          invalid input or numerically singular matrix.
+ */
 bool matrix6_solve(
     const real_t A[ROBOT_DOF][ROBOT_DOF],
     const real_t b[ROBOT_DOF],
@@ -37,55 +53,19 @@ bool matrix6_solve(
 
 
 /* ============================================================================
- * SMALLEST SINGULAR VALUE
+ * COMPATIBILITY WRAPPER
  * ============================================================================
  *
- * Returns:
+ * Older ControlCore code may use solve6().
  *
- *      sigma_min(J)
- *
- * Equivalent to:
- *
- *      singularValues = svd(J);
- *      sigmaMin = min(singularValues);
- *
- * The implementation computes eigenvalues of:
- *
- *      J'J
- *
- * using a Jacobi iteration.
- *
- * Since:
- *
- *      eigenvalues(J'J) = sigma_i^2
- *
- * then:
- *
- *      sigma_min =
- *          sqrt(min_eigenvalue(J'J))
- * ============================================================================
- */
-
-real_t matrix6_smallest_singular_value(
-    const real_t J[ROBOT_DOF][ROBOT_DOF]
-);
-
-
-/* ============================================================================
- * COMPATIBILITY ALIASES
- * ============================================================================
- *
- * These allow other ControlCore modules to use shorter names if required.
+ * Keep this wrapper for compatibility while matrix6_solve() remains the
+ * canonical implementation.
  */
 
 int solve6(
     real_t A[ROBOT_DOF][ROBOT_DOF],
     const real_t b[ROBOT_DOF],
     real_t x[ROBOT_DOF]
-);
-
-real_t smallest_singular_value_6x6(
-    const real_t J[ROBOT_DOF][ROBOT_DOF]
 );
 
 

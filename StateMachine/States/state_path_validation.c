@@ -3,6 +3,8 @@
 #include "../../ControlCore/Kinematics/control_fk.h"
 #include "../../ControlCore/Math/math3d.h"
 #include "../../ServoDrive/A6EC/a6ec_drive.h"
+#include "../../ControlCore/Analysis/singularity.h"
+#include "../../ControlCore/Kinematics/control_jacobian.h"
 
 #include <float.h>
 #include <math.h>
@@ -1008,30 +1010,58 @@ static bool validate_and_store_sample(
         return false;
     }
 
+/* ------------------------------------------------------------------------
+ * SINGULARITY CHECK OF THE ACTUAL QUANTIZED COMMAND
+ * ------------------------------------------------------------------------ */
 
-    /* ------------------------------------------------------------------------
-     * SINGULARITY MARGIN FROM OUR EXISTING ADLS SOLVER
-     * ------------------------------------------------------------------------ */
+real_t J[ROBOT_DOF][ROBOT_DOF];
 
-    const real_t sigma_min =
-        (real_t)state->workspace->ik_scratch->sigmaMin;
+control_jacobian(
+    state->robot,
+    quantized_q.q,
+    J
+);
 
-    if (
-        !finite_real(sigma_min) ||
-        sigma_min < state->config.minimum_singularity_sigma
+
+SingularityResult singularity;
+
+if (
+    !singularity_analyze(
+        J,
+        state->config.minimum_singularity_sigma,
+        &singularity
     )
-    {
-        set_error(state, PV_ERR_SINGULARITY_MARGIN);
-        return false;
-    }
+)
+{
+    set_error(
+        state,
+        PV_ERR_SINGULARITY_MARGIN
+    );
 
-    if (sigma_min < state->report.minimum_sigma_seen)
-    {
-        state->report.minimum_sigma_seen =
-            sigma_min;
-    }
+    return false;
+}
 
 
+if (!singularity.safe)
+{
+    set_error(
+        state,
+        PV_ERR_SINGULARITY_MARGIN
+    );
+
+    return false;
+}
+
+
+if (
+    singularity.sigmaMin <
+    state->report.minimum_sigma_seen
+)
+{
+    state->report.minimum_sigma_seen =
+        singularity.sigmaMin;
+}
+ 
     /* ------------------------------------------------------------------------
      * QUANTIZE THROUGH THE EXISTING A6-EC CSP POSITION CONVERSION
      * ------------------------------------------------------------------------ */

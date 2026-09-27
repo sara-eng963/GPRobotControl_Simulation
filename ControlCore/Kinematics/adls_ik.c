@@ -4,6 +4,7 @@
 #include "control_jacobian.h"
 
 #include "../Math/matrix6.h"
+#include "../Analysis/singularity.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -927,9 +928,17 @@ bool adls_ik(
          */
 
         double sigmaMin =
-            matrix6_smallest_singular_value(
-                J
-            );
+    0.0;
+
+if (
+    !singularity_sigma_min(
+        J,
+        &sigmaMin
+    )
+)
+{
+    return false;
+}
 
 
         /* --------------------------------------------------------------------
