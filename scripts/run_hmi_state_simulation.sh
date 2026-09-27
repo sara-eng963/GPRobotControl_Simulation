@@ -79,7 +79,12 @@ sudo "${VETH_SCRIPT}" create ecat
 
 printf '[1/4] Starting KickCAT (6 A6-EC virtual drives)...\n'
 
-sudo "${KICKCAT_BIN}" ecatB     "${A6_CONFIG}" "${A6_CONFIG}" "${A6_CONFIG}"     "${A6_CONFIG}" "${A6_CONFIG}" "${A6_CONFIG}"     >"${LOG_DIR}/kickcat.log" 2>&1 &
+sudo "${KICKCAT_BIN}" \
+    --interface ecatB \
+    --slaves \
+    "${A6_CONFIG}" "${A6_CONFIG}" "${A6_CONFIG}" \
+    "${A6_CONFIG}" "${A6_CONFIG}" "${A6_CONFIG}" \
+    >"${LOG_DIR}/kickcat.log" 2>&1 &
 
 KICKCAT_PID=$!
 
