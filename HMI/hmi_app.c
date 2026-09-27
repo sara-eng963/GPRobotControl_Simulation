@@ -48,6 +48,27 @@ static const char *program_name(
     }
 }
 
+
+static const char *homing_error_name(
+    uint32_t error
+)
+{
+    switch (error)
+    {
+        case 0U: return "NONE";
+        case 1U: return "INVALID_CONFIG";
+        case 2U: return "HOME_NOT_DEFINED";
+        case 3U: return "HOME_LIMIT";
+        case 4U: return "POSITION_FEEDBACK";
+        case 5U: return "DRIVE_NOT_ENABLED";
+        case 6U: return "TRAJECTORY";
+        case 7U: return "TRAJECTORY_LIMIT";
+        case 8U: return "WKC";
+        case 9U: return "HOME_TIMEOUT";
+        default: return "UNKNOWN";
+    }
+}
+
 static void make_status_message(
     const HmiProtocol *protocol,
     bool online,
@@ -100,12 +121,27 @@ static void make_status_message(
             break;
 
         case 1U:
-            snprintf(
-                buffer,
-                capacity,
-                "Homing robot: phase %u",
-                status->homing_phase
-            );
+            if (status->homing_error != 0U)
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "HOMING FAILED: %s (error %u)",
+                    homing_error_name(
+                        status->homing_error
+                    ),
+                    status->homing_error
+                );
+            }
+            else
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "Homing robot: phase %u",
+                    status->homing_phase
+                );
+            }
             break;
 
         case 2U:
