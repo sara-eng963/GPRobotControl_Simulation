@@ -387,6 +387,20 @@ void hmi_protocol_poll_status(
                 packet[HMI_STATUS_WORD_APPROACH_PROGRESS]
             );
 
+        status->preview_active =
+            ntohl(packet[HMI_STATUS_WORD_PREVIEW_ACTIVE]) != 0U;
+
+        status->preview_complete =
+            ntohl(packet[HMI_STATUS_WORD_PREVIEW_COMPLETE]) != 0U;
+
+        status->preview_error =
+            ntohl(packet[HMI_STATUS_WORD_PREVIEW_ERROR]);
+
+        status->preview_progress =
+            network_word_to_float(
+                packet[HMI_STATUS_WORD_PREVIEW_PROGRESS]
+            );
+
         status->actual_tcp_m[0] =
             network_word_to_float(
                 packet[HMI_STATUS_WORD_TCP_X]

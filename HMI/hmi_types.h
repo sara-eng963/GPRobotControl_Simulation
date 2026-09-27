@@ -56,6 +56,18 @@ typedef struct
     uint32_t approach_error;
     float approach_progress;
 
+    /*
+     * Simulator-only Preview playback status.
+     *
+     * Preview is not yet a project FSM state. These fields let the operator
+     * HMI show the temporary simulator executor honestly without pretending
+     * that a real Preview state has already been implemented.
+     */
+    bool preview_active;
+    bool preview_complete;
+    uint32_t preview_error;
+    float preview_progress;
+
     float actual_tcp_m[3];
     float actual_joint_rad[HMI_NUM_JOINTS];
 

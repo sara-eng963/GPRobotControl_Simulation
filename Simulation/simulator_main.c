@@ -93,6 +93,32 @@ typedef struct
 } SimGuidance;
 
 
+typedef enum
+{
+    SIM_PREVIEW_ERR_NONE = 0,
+    SIM_PREVIEW_ERR_STORAGE,
+    SIM_PREVIEW_ERR_DRIVE_NOT_READY,
+    SIM_PREVIEW_ERR_WKC,
+    SIM_PREVIEW_ERR_ESTOP
+
+} SimPreviewError;
+
+
+typedef struct
+{
+    bool started;
+    bool active;
+    bool complete;
+    bool failed;
+
+    uint32_t sample_index;
+    uint32_t total_samples;
+
+    SimPreviewError error;
+
+} SimPreview;
+
+
 typedef struct
 {
     int command_socket;
@@ -157,6 +183,8 @@ static StateMachineInputs inputs;
 
 static SimGuidance guidance;
 static ADLSInfo guidance_ik_info;
+
+static SimPreview preview;
 
 
 static void on_signal(
@@ -1049,6 +1077,289 @@ static bool guidance_step(
 
 
 /* ============================================================================
+ * SIMULATOR-ONLY PREVIEW PLAYBACK
+ * ============================================================================
+ *
+ * Preview is not yet implemented as a project StateMachine state.
+ *
+ * This temporary PC-only executor starts AFTER the real Approach state reaches
+ * the exact first validated CSP sample. It then replays the committed 1 ms
+ * Path Validation artifact directly to the six A6-EC Target Position PDOs.
+ *
+ * No welding output is asserted here. This exists only so the operator HMI can
+ * exercise the intended Preview workflow until the real Preview state exists.
+ * ============================================================================
+ */
+
+static void mock_preview_reset(
+    SimPreview *sim
+)
+{
+    if (sim == NULL)
+    {
+        return;
+    }
+
+    memset(
+        sim,
+        0,
+        sizeof(*sim)
+    );
+}
+
+
+static void mock_preview_start(
+    SimPreview *sim,
+    const RamValidatedStorage *storage
+)
+{
+    if (sim == NULL)
+    {
+        return;
+    }
+
+    mock_preview_reset(
+        sim
+    );
+
+    sim->started =
+        true;
+
+    if (
+        storage == NULL ||
+        !storage->committed ||
+        storage->metadata.sample_count == 0U ||
+        storage->metadata.sample_count > storage->sample_count
+    )
+    {
+        sim->failed =
+            true;
+
+        sim->error =
+            SIM_PREVIEW_ERR_STORAGE;
+
+        return;
+    }
+
+    sim->active =
+        true;
+
+    sim->total_samples =
+        storage->metadata.sample_count;
+
+    printf(
+        "SIM PREVIEW: start %u validated CSP samples (welding OFF)\n",
+        sim->total_samples
+    );
+
+    fflush(
+        stdout
+    );
+}
+
+
+static bool mock_preview_write_sample(
+    const PvExecutionSample *sample,
+    int *wkc
+)
+{
+    if (
+        sample == NULL ||
+        !pdo_ready()
+    )
+    {
+        return false;
+    }
+
+    for (
+        int slave = 1;
+        slave <= ROBOT_DOF;
+        ++slave
+    )
+    {
+        A6ECPDOFeedback feedback;
+
+        a6ec_read_feedback(
+            slave,
+            &feedback
+        );
+
+        if (
+            cia402_get_state(
+                feedback.statusword
+            ) !=
+            CIA402_STATE_OPERATION_ENABLED
+        )
+        {
+            return false;
+        }
+
+        const A6ECPDOCommand command =
+        {
+            .controlword =
+                CIA402_CONTROLWORD_ENABLE_OPERATION,
+
+            .targetPosition =
+                sample->target_position_units[
+                    slave - 1
+                ]
+        };
+
+        a6ec_write_command(
+            slave,
+            &command
+        );
+    }
+
+    const int actual_wkc =
+        ethercat_master_exchange();
+
+    if (wkc != NULL)
+    {
+        *wkc =
+            actual_wkc;
+    }
+
+    const int expected_wkc =
+        ethercat_master_expected_wkc();
+
+    return
+        expected_wkc > 0 &&
+        actual_wkc >= expected_wkc;
+}
+
+
+static void mock_preview_step(
+    SimPreview *sim,
+    const RamValidatedStorage *storage,
+    SupervisorRuntime *runtime
+)
+{
+    if (
+        sim == NULL ||
+        storage == NULL ||
+        runtime == NULL ||
+        !sim->active
+    )
+    {
+        return;
+    }
+
+    if (runtime->estop_active)
+    {
+        sim->active =
+            false;
+
+        sim->failed =
+            true;
+
+        sim->error =
+            SIM_PREVIEW_ERR_ESTOP;
+
+        (void)hold_current_position(
+            &runtime->last_wkc
+        );
+
+        return;
+    }
+
+    if (runtime->paused)
+    {
+        (void)hold_current_position(
+            &runtime->last_wkc
+        );
+
+        return;
+    }
+
+    if (
+        sim->sample_index >= sim->total_samples ||
+        sim->sample_index >= storage->sample_count
+    )
+    {
+        sim->active =
+            false;
+
+        sim->complete =
+            true;
+
+        return;
+    }
+
+    if (
+        !mock_preview_write_sample(
+            &storage->samples[
+                sim->sample_index
+            ],
+            &runtime->last_wkc
+        )
+    )
+    {
+        sim->active =
+            false;
+
+        sim->failed =
+            true;
+
+        /*
+         * At this temporary simulator layer, loss of a ready drive and bad
+         * WKC share one send path. The HMI gets an explicit Preview failure;
+         * the eventual real Preview state can own finer-grained diagnostics.
+         */
+        sim->error =
+            SIM_PREVIEW_ERR_WKC;
+
+        return;
+    }
+
+    ++sim->sample_index;
+
+    if (
+        sim->sample_index >=
+        sim->total_samples
+    )
+    {
+        sim->active =
+            false;
+
+        sim->complete =
+            true;
+
+        printf(
+            "SIM PREVIEW: complete - welding remained OFF\n"
+        );
+
+        fflush(
+            stdout
+        );
+    }
+}
+
+
+static float mock_preview_progress(
+    const SimPreview *sim
+)
+{
+    if (
+        sim == NULL ||
+        sim->total_samples == 0U
+    )
+    {
+        return 0.0F;
+    }
+
+    if (sim->complete)
+    {
+        return 1.0F;
+    }
+
+    return
+        (float)sim->sample_index /
+        (float)sim->total_samples;
+}
+
+
+/* ============================================================================
  * HMI UDP
  * ============================================================================
  */
@@ -1819,6 +2130,32 @@ static void send_status(
             machine.approach_outputs.report.progress_0_to_1
         );
 
+    packet[HMI_STATUS_WORD_PREVIEW_ACTIVE] =
+        htonl(
+            preview.active
+            ? 1U
+            : 0U
+        );
+
+    packet[HMI_STATUS_WORD_PREVIEW_COMPLETE] =
+        htonl(
+            preview.complete
+            ? 1U
+            : 0U
+        );
+
+    packet[HMI_STATUS_WORD_PREVIEW_ERROR] =
+        htonl(
+            (uint32_t)preview.error
+        );
+
+    packet[HMI_STATUS_WORD_PREVIEW_PROGRESS] =
+        float_to_network_word(
+            mock_preview_progress(
+                &preview
+            )
+        );
+
     JointVector actual_q;
 
     memset(
@@ -2152,6 +2489,10 @@ static void SimulatorControlTask(
         sizeof(guidance)
     );
 
+    mock_preview_reset(
+        &preview
+    );
+
     RobotState last_state =
         machine.current_state;
 
@@ -2431,6 +2772,10 @@ static void SimulatorControlTask(
                     selected_program_event(
                         runtime.selected_program
                     );
+
+                mock_preview_reset(
+                    &preview
+                );
             }
 
             if (
@@ -2500,6 +2845,60 @@ static void SimulatorControlTask(
                 last_state =
                     machine.current_state;
             }
+        }
+
+        /*
+         * Temporary Preview executor:
+         *
+         * real Approach reaches the exact first validated sample
+         *      -> simulator mock replays the committed validated samples
+         *      -> welding remains OFF
+         *
+         * This does not add a fake ROBOT_STATE_PREVIEW to the project FSM.
+         */
+        if (
+            machine.current_state ==
+                ROBOT_STATE_APPROACH
+            &&
+            machine.approach.result ==
+                APPROACH_RESULT_COMPLETE
+            &&
+            machine.approach.request.operation ==
+                APPROACH_OPERATION_PREVIEW
+            &&
+            !preview.started
+        )
+        {
+            mock_preview_start(
+                &preview,
+                &validated_storage
+            );
+        }
+
+        if (
+            machine.current_state ==
+                ROBOT_STATE_APPROACH
+            &&
+            machine.approach.result ==
+                APPROACH_RESULT_COMPLETE
+            &&
+            preview.active
+        )
+        {
+            mock_preview_step(
+                &preview,
+                &validated_storage,
+                &runtime
+            );
+        }
+        else if (
+            preview.active &&
+            machine.current_state !=
+                ROBOT_STATE_APPROACH
+        )
+        {
+            preview.active =
+                false;
         }
 
         if (

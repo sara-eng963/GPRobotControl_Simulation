@@ -277,12 +277,38 @@ static void make_status_message(
             break;
 
         case 5U:
-            if (status->approach_result == 1U)
+            if (status->preview_active)
             {
                 snprintf(
                     buffer,
                     capacity,
-                    "Approach in progress... %.0f%%",
+                    "PREVIEWING PATH - NO WELDING - %.0f%%",
+                    100.0F * status->preview_progress
+                );
+            }
+            else if (status->preview_complete)
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "PREVIEW COMPLETE - validated path executed with welding OFF."
+                );
+            }
+            else if (status->preview_error != 0U)
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "PREVIEW MOCK FAILED. Error code %u",
+                    status->preview_error
+                );
+            }
+            else if (status->approach_result == 1U)
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "Approaching validated path start... %.0f%%",
                     100.0F * status->approach_progress
                 );
             }
@@ -291,7 +317,7 @@ static void make_status_message(
                 snprintf(
                     buffer,
                     capacity,
-                    "Approach complete. Preview/Welding state is the next integration."
+                    "Approach complete. Starting simulator Preview..."
                 );
             }
             else
@@ -541,22 +567,45 @@ int hmi_app_run(void)
 
         char detail[256];
 
-        snprintf(
-            detail,
-            sizeof(detail),
-            "State: %s   Program: %s   WKC: %u/%u   TCP: [%.3f %.3f %.3f] m",
-            online
-                ? robot_state_name(status->robot_state)
-                : "---",
-            online
-                ? program_name(status->selected_program)
-                : "---",
-            status->wkc,
-            status->expected_wkc,
-            status->actual_tcp_m[0],
-            status->actual_tcp_m[1],
-            status->actual_tcp_m[2]
-        );
+        if (
+            online &&
+            (
+                status->preview_active ||
+                status->preview_complete
+            )
+        )
+        {
+            snprintf(
+                detail,
+                sizeof(detail),
+                "FSM: %s   Mode: PREVIEW (SIM)   WKC: %u/%u   TCP: [%.3f %.3f %.3f] m",
+                robot_state_name(status->robot_state),
+                status->wkc,
+                status->expected_wkc,
+                status->actual_tcp_m[0],
+                status->actual_tcp_m[1],
+                status->actual_tcp_m[2]
+            );
+        }
+        else
+        {
+            snprintf(
+                detail,
+                sizeof(detail),
+                "State: %s   Program: %s   WKC: %u/%u   TCP: [%.3f %.3f %.3f] m",
+                online
+                    ? robot_state_name(status->robot_state)
+                    : "---",
+                online
+                    ? program_name(status->selected_program)
+                    : "---",
+                status->wkc,
+                status->expected_wkc,
+                status->actual_tcp_m[0],
+                status->actual_tcp_m[1],
+                status->actual_tcp_m[2]
+            );
+        }
 
         hmi_ui_text(
             detail,
@@ -726,11 +775,15 @@ int hmi_app_run(void)
             validation_passed;
 
         const char *validate_preview_label =
-            validation_running
-                ? "VALIDATING..."
-                : validation_passed
-                    ? "PREVIEW"
-                    : "VALIDATE PATH";
+            status->preview_active
+                ? "PREVIEWING..."
+                : status->preview_complete
+                    ? "PREVIEW COMPLETE"
+                    : validation_running
+                        ? "VALIDATING..."
+                        : validation_passed
+                            ? "PREVIEW"
+                            : "VALIDATE PATH";
 
         if (
             panel_button(
