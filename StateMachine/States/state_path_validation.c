@@ -1009,59 +1009,6 @@ static bool validate_and_store_sample(
         set_error(state, PV_ERR_SAMPLE_CAPACITY);
         return false;
     }
-
-/* ------------------------------------------------------------------------
- * SINGULARITY CHECK OF THE ACTUAL QUANTIZED COMMAND
- * ------------------------------------------------------------------------ */
-
-real_t J[ROBOT_DOF][ROBOT_DOF];
-
-control_jacobian(
-    state->robot,
-    quantized_q.q,
-    J
-);
-
-
-SingularityResult singularity;
-
-if (
-    !singularity_analyze(
-        J,
-        state->config.minimum_singularity_sigma,
-        &singularity
-    )
-)
-{
-    set_error(
-        state,
-        PV_ERR_SINGULARITY_MARGIN
-    );
-
-    return false;
-}
-
-
-if (!singularity.safe)
-{
-    set_error(
-        state,
-        PV_ERR_SINGULARITY_MARGIN
-    );
-
-    return false;
-}
-
-
-if (
-    singularity.sigmaMin <
-    state->report.minimum_sigma_seen
-)
-{
-    state->report.minimum_sigma_seen =
-        singularity.sigmaMin;
-}
- 
     /* ------------------------------------------------------------------------
      * QUANTIZE THROUGH THE EXISTING A6-EC CSP POSITION CONVERSION
      * ------------------------------------------------------------------------ */
@@ -1117,6 +1064,57 @@ if (
         quantized_q.q[j] =
             represented_q;
     }
+    /* ------------------------------------------------------------------------
+ * SINGULARITY CHECK OF THE ACTUAL QUANTIZED COMMAND
+ * ------------------------------------------------------------------------ */
+
+real_t J[ROBOT_DOF][ROBOT_DOF];
+
+control_jacobian(
+    state->robot,
+    quantized_q.q,
+    J
+);
+
+
+SingularityResult singularity;
+
+if (
+    !singularity_analyze(
+        J,
+        state->config.minimum_singularity_sigma,
+        &singularity
+    )
+)
+{
+    set_error(
+        state,
+        PV_ERR_SINGULARITY_MARGIN
+    );
+
+    return false;
+}
+
+
+if (!singularity.safe)
+{
+    set_error(
+        state,
+        PV_ERR_SINGULARITY_MARGIN
+    );
+
+    return false;
+}
+
+
+if (
+    singularity.sigmaMin <
+    state->report.minimum_sigma_seen
+)
+{
+    state->report.minimum_sigma_seen =
+        singularity.sigmaMin;
+}
 
 
     /* ------------------------------------------------------------------------

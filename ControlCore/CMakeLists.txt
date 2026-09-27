@@ -21,6 +21,7 @@ add_library(
     Kinematics/adls_ik.c
 
     Analysis/workspace.c
+    Analysis/singularity.c
 
     Trajectory/generate_line_waypoints.c
     Trajectory/circular_path.c
