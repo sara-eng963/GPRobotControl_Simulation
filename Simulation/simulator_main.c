@@ -2146,6 +2146,9 @@ static void SimulatorControlTask(
     RobotState last_state =
         machine.current_state;
 
+    HomingPhase last_homing_phase =
+        machine.homing.phase;
+
     uint32_t tick =
         0U;
 
@@ -2349,6 +2352,32 @@ static void SimulatorControlTask(
                 &dependencies,
                 &inputs
             );
+
+        if (
+            machine.current_state ==
+                ROBOT_STATE_HOMING
+            &&
+            machine.homing.phase !=
+                last_homing_phase
+        )
+        {
+            printf(
+                "HOMING: phase=%d error=%d axis=%d samples=%zu verify=%u stable=%u\n",
+                (int)machine.homing.phase,
+                (int)machine.homing.error,
+                machine.homing.failedAxis,
+                machine.homing.samplesSent,
+                machine.homing.verificationCycles,
+                machine.homing.stableCycles
+            );
+
+            fflush(
+                stdout
+            );
+
+            last_homing_phase =
+                machine.homing.phase;
+        }
 
         if (
             machine.current_state !=
