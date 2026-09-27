@@ -187,6 +187,88 @@ static float clamp_local(
     return value;
 }
 
+static Ray viewport_mouse_ray(
+    Vector2 mouse,
+    Rectangle viewport,
+    Camera3D camera
+)
+{
+    const Vector2 local =
+    {
+        mouse.x - viewport.x,
+        mouse.y - viewport.y
+    };
+
+    return
+        GetScreenToWorldRayEx(
+            local,
+            camera,
+            (int)viewport.width,
+            (int)viewport.height
+        );
+}
+
+
+static Vector2 viewport_world_to_screen(
+    Vector3 point,
+    Rectangle viewport,
+    Camera3D camera
+)
+{
+    Vector2 local =
+        GetWorldToScreenEx(
+            point,
+            camera,
+            (int)viewport.width,
+            (int)viewport.height
+        );
+
+    local.x += viewport.x;
+    local.y += viewport.y;
+
+    return local;
+}
+
+
+static Vector3 drag_plane_normal_for_view(
+    TeachView view,
+    Camera3D camera
+)
+{
+    if (view == TEACH_VIEW_TOP)
+    {
+        return
+            (Vector3){0.0F, 1.0F, 0.0F};
+    }
+
+    if (view == TEACH_VIEW_FRONT)
+    {
+        return
+            (Vector3){0.0F, 0.0F, 1.0F};
+    }
+
+    if (view == TEACH_VIEW_SIDE)
+    {
+        return
+            (Vector3){1.0F, 0.0F, 0.0F};
+    }
+
+    /*
+     * Perspective dragging uses a plane facing the camera and passing through
+     * the guide target. This gives natural two-axis mouse dragging while the
+     * orthographic presets remain available when an exact robot plane is
+     * preferred.
+     */
+    return
+        Vector3Normalize(
+            Vector3Subtract(
+                camera.target,
+                camera.position
+            )
+        );
+}
+
+
 static void send_target(
     HmiProtocol *protocol,
     float target[3]
@@ -371,6 +453,15 @@ int teaching_sim_app_run(void)
     bool target_initialized =
         false;
 
+    bool dragging_target =
+        false;
+
+    Vector3 drag_plane_normal =
+        (Vector3){0.0F, 1.0F, 0.0F};
+
+    float drag_plane_distance =
+        0.0F;
+
     while (!WindowShouldClose())
     {
         hmi_protocol_poll_status(
@@ -510,71 +601,109 @@ int teaching_sim_app_run(void)
             !status->paused;
 
         /*
-         * In orthographic views a click chooses ONE current hand-guided pose.
-         * There are deliberately no A/B/C tabs. The main HMI's RECORD button
-         * decides when the current real/simulated robot pose is stored.
+         * Drag the BLUE guide target to simulate hand guiding.
+         *
+         * TOP / FRONT / SIDE:
+         *     drag in that robot-coordinate plane while the third coordinate
+         *     stays fixed.
+         *
+         * PERSPECTIVE:
+         *     drag in a camera-facing plane through the current target.
+         *
+         * RECORD still happens only from the real HMI window; this window
+         * merely moves the simulated robot before the Teaching state captures
+         * actual A6 feedback.
          */
-        if (
-            teaching_active &&
-            view != TEACH_VIEW_PERSPECTIVE &&
-            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-            CheckCollisionPointRec(
+        const Vector3 target_render =
+            robot_to_render(
+                target[0],
+                target[1],
+                target[2]
+            );
+
+        const Vector2 target_screen =
+            viewport_world_to_screen(
+                target_render,
+                viewport,
+                camera
+            );
+
+        const float target_hit_radius_px =
+            34.0F;
+
+        const bool mouse_near_target =
+            Vector2Distance(
                 mouse,
-                viewport
+                target_screen
+            )
+            <=
+            target_hit_radius_px;
+
+        if (
+            IsMouseButtonReleased(
+                MOUSE_BUTTON_LEFT
             )
         )
         {
-            Ray ray =
-                GetScreenToWorldRay(
-                    mouse,
+            dragging_target =
+                false;
+        }
+
+        if (
+            teaching_active &&
+            !dragging_target &&
+            IsMouseButtonPressed(
+                MOUSE_BUTTON_LEFT
+            ) &&
+            CheckCollisionPointRec(
+                mouse,
+                viewport
+            ) &&
+            mouse_near_target
+        )
+        {
+            dragging_target =
+                true;
+
+            drag_plane_normal =
+                drag_plane_normal_for_view(
+                    view,
                     camera
                 );
 
-            Vector3 current =
-                robot_to_render(
-                    target[0],
-                    target[1],
-                    target[2]
+            drag_plane_distance =
+                Vector3DotProduct(
+                    drag_plane_normal,
+                    target_render
+                );
+        }
+
+        if (
+            teaching_active &&
+            dragging_target &&
+            IsMouseButtonDown(
+                MOUSE_BUTTON_LEFT
+            )
+        )
+        {
+            const Ray ray =
+                viewport_mouse_ray(
+                    mouse,
+                    viewport,
+                    camera
                 );
 
             Vector3 hit =
-                current;
+                target_render;
 
-            bool hit_ok =
-                false;
-
-            if (view == TEACH_VIEW_TOP)
-            {
-                hit_ok =
-                    ray_plane_intersection(
-                        ray,
-                        (Vector3){0.0F, 1.0F, 0.0F},
-                        current.y,
-                        &hit
-                    );
-            }
-            else if (view == TEACH_VIEW_FRONT)
-            {
-                hit_ok =
-                    ray_plane_intersection(
-                        ray,
-                        (Vector3){0.0F, 0.0F, 1.0F},
-                        current.z,
-                        &hit
-                    );
-            }
-            else if (view == TEACH_VIEW_SIDE)
-            {
-                hit_ok =
-                    ray_plane_intersection(
-                        ray,
-                        (Vector3){1.0F, 0.0F, 0.0F},
-                        current.x,
-                        &hit
-                    );
-            }
-
-            if (hit_ok)
+            if (
+                ray_plane_intersection(
+                    ray,
+                    drag_plane_normal,
+                    drag_plane_distance,
+                    &hit
+                )
+            )
             {
                 render_to_robot(
                     hit,
@@ -600,7 +729,7 @@ int teaching_sim_app_run(void)
         );
 
         hmi_ui_text(
-            "Move ONE current TCP pose here. RECORD remains on the real HMI window.",
+            "Drag the BLUE target to move one current TCP pose. RECORD stays on the real HMI.",
             28.0F,
             48.0F,
             12.5F,
@@ -863,7 +992,7 @@ int teaching_sim_app_run(void)
 
         hmi_ui_text(
             teaching_active
-                ? "TOP/FRONT/SIDE: click to guide"
+                ? "Drag BLUE target to guide robot"
                 : "Press START on main HMI",
             746.0F,
             532.0F,
@@ -891,7 +1020,7 @@ int teaching_sim_app_run(void)
         );
 
         hmi_ui_text(
-            "Blue wire = guide target",
+            "Blue wire = drag target",
             746.0F,
             602.0F,
             11.0F,
