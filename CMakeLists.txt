@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(freertos_pc_test C)
+project(GPRobotControl_Simulation C)
 
 set(CMAKE_C_STANDARD 11)
 
@@ -45,29 +45,53 @@ add_subdirectory(
 
 add_subdirectory(ControlCore)
 
-# ----------------------------
-# FreeRTOS / EtherCAT application
-# ----------------------------
+# ============================================================================
+# PC ROBOT SIMULATOR
+# ============================================================================
+#
+# Simulation/simulator_main.c is the PC entry point. It runs the actual global
+# StateMachine under the FreeRTOS POSIX port and connects it to KickCAT/SOEM,
+# the desktop HMI, simulated hand-guiding support and MATLAB telemetry.
+#
+# Root main.c is intentionally NOT part of the PC build; it is reserved for
+# the future real STM32/FreeRTOS robot application.
+# ============================================================================
 
 add_executable(
-    freertos_pc_test
+    robot_simulator
 
-    main.c
+    Simulation/simulator_main.c
 
+    StateMachine/state_machine.c
     StateMachine/States/state_boot.c
+    StateMachine/States/state_homing.c
+    StateMachine/States/state_idle.c
+    StateMachine/States/state_teaching.c
+    StateMachine/States/state_path_validation.c
+    StateMachine/States/state_approach.c
 
     EtherCATComm/ethercat_master.c
     EtherCATComm/SOEM/soem_backend.c
 
     ServoDrive/CiA402/cia402.c
-
     ServoDrive/A6EC/a6ec_pdo.c
     ServoDrive/A6EC/a6ec_drive.c
 )
 
-target_include_directories(
-    freertos_pc_test
+target_compile_features(
+    robot_simulator
     PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    robot_simulator
+    PRIVATE
+
+    HMI
+
+    StateMachine
+    StateMachine/States
 
     EtherCATComm
     EtherCATComm/SOEM
@@ -77,14 +101,18 @@ target_include_directories(
 )
 
 target_link_libraries(
-    freertos_pc_test
+    robot_simulator
     PRIVATE
+
     freertos_kernel
     freertos_config
+
+    control_core
     soem
     pthread
-    control_core
+    m
 )
+
 
 # ============================================================================
 # RAYLIB
@@ -212,67 +240,6 @@ target_link_libraries(
     teaching_sim
     PRIVATE
     raylib
-    m
-)
-
-# ============================================================================
-# HMI / GLOBAL STATE-MACHINE PC CONTROLLER
-# ============================================================================
-#
-# This is the interactive state-machine simulator used by robot_hmi and
-# teaching_sim. It runs the REAL state implementations against KickCAT.
-# The legacy freertos_pc_test + mock_hmi path remains available unchanged.
-#
-add_executable(
-    hmi_state_controller
-
-    Simulation/hmi_state_controller.c
-
-    StateMachine/state_machine.c
-    StateMachine/States/state_boot.c
-    StateMachine/States/state_homing.c
-    StateMachine/States/state_idle.c
-    StateMachine/States/state_teaching.c
-    StateMachine/States/state_path_validation.c
-    StateMachine/States/state_approach.c
-
-    EtherCATComm/ethercat_master.c
-    EtherCATComm/SOEM/soem_backend.c
-
-    ServoDrive/CiA402/cia402.c
-    ServoDrive/A6EC/a6ec_pdo.c
-    ServoDrive/A6EC/a6ec_drive.c
-)
-
-target_compile_features(
-    hmi_state_controller
-    PRIVATE
-    c_std_11
-)
-
-target_include_directories(
-    hmi_state_controller
-    PRIVATE
-
-    HMI
-
-    StateMachine
-    StateMachine/States
-
-    EtherCATComm
-    EtherCATComm/SOEM
-
-    ServoDrive/CiA402
-    ServoDrive/A6EC
-)
-
-target_link_libraries(
-    hmi_state_controller
-    PRIVATE
-
-    control_core
-    soem
-    pthread
     m
 )
 

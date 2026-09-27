@@ -228,8 +228,8 @@ build_project()
     cmake -S "${REPO_ROOT}" -B "${REPO_ROOT}/build"
     cmake --build "${REPO_ROOT}/build" -j "$(nproc)"
 
-    [[ -x "${REPO_ROOT}/build/freertos_pc_test" ]] || \
-        fail "freertos_pc_test was not built."
+    [[ -x "${REPO_ROOT}/build/robot_simulator" ]] || \
+        fail "robot_simulator was not built."
 
     [[ -x "${REPO_ROOT}/build/mock_hmi" ]] || \
         fail "mock_hmi was not built."

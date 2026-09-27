@@ -30,7 +30,7 @@ again.
 
 ## State-machine integration
 
-`Simulation/hmi_state_controller.c` runs the actual state modules:
+`Simulation/simulator_main.c` is the FreeRTOS POSIX PC entry point and runs the actual state modules:
 
 ```
 BOOT -> HOMING -> IDLE -> TEACHING -> PATH_VALIDATION -> APPROACH
@@ -67,14 +67,14 @@ production safety check.
 ## MATLAB
 
 MATLAB telemetry is preserved on UDP port **5005** using the same six
-`int32_t` A6 position-unit values sent by the existing `main.c`. The current
+`int32_t` A6 position-unit values used by the previous simulator. The current
 MATLAB visualizer can therefore remain unchanged.
 
 ## Build
 
 ```bash
 cmake -S . -B build
-cmake --build build --target hmi_state_controller robot_hmi teaching_sim
+cmake --build build --target robot_simulator robot_hmi teaching_sim
 ```
 
 ## Run

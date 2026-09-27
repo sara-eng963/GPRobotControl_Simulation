@@ -12,6 +12,9 @@
 #include "../ServoDrive/A6EC/a6ec_drive.h"
 #include "../ServoDrive/CiA402/cia402.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <math.h>
@@ -30,6 +33,9 @@
 #define SIM_CYCLE_TIME_NS            1000000U
 #define SIM_PV_GEOMETRY_CAPACITY     512U
 #define SIM_PV_STORAGE_CAPACITY      60000U
+
+#define SIM_CONTROL_TASK_STACK_WORDS 4096U
+#define SIM_CONTROL_TASK_PRIORITY    (tskIDLE_PRIORITY + 2U)
 
 #define MATLAB_PORT                  5005
 #define MATLAB_IP                    "172.18.160.1"
@@ -2030,17 +2036,11 @@ static void disable_drives(void)
  * MAIN
  * ============================================================================ */
 
-int main(void)
+static void SimulatorControlTask(
+    void *pvParameters
+)
 {
-    signal(
-        SIGINT,
-        on_signal
-    );
-
-    signal(
-        SIGTERM,
-        on_signal
-    );
+    (void)pvParameters;
 
     configure_robot();
 
@@ -2067,7 +2067,7 @@ int main(void)
             "Could not initialize global state machine.\n"
         );
 
-        return 1;
+        exit(EXIT_FAILURE);
     }
 
     SupervisorRuntime runtime;
@@ -2092,7 +2092,7 @@ int main(void)
 
     if (!setup_udp(&runtime))
     {
-        return 1;
+        exit(EXIT_FAILURE);
     }
 
     memset(
@@ -2126,8 +2126,19 @@ int main(void)
         (unsigned)MATLAB_PORT
     );
 
-    while (!stop_requested)
+    TickType_t last_wake_time =
+        xTaskGetTickCount();
+
+    const TickType_t cycle_period =
+        pdMS_TO_TICKS(1U);
+
+
+    for (;;)
     {
+        if (stop_requested)
+        {
+            break;
+        }
         poll_hmi_commands(
             &runtime
         );
@@ -2434,7 +2445,10 @@ int main(void)
             );
         }
 
-        sleep_1ms();
+        vTaskDelayUntil(
+            &last_wake_time,
+            cycle_period
+        );
     }
 
     disable_drives();
@@ -2455,5 +2469,90 @@ int main(void)
         );
     }
 
-    return 0;
+    vTaskDelete(
+        NULL
+    );
+}
+
+
+/* ============================================================================
+ * PC SIMULATOR ENTRY POINT
+ * ============================================================================
+ *
+ * The simulator deliberately uses the FreeRTOS POSIX port.  The future real
+ * robot main.c will use the MCU/STM32 FreeRTOS port, but both entry points are
+ * expected to drive the SAME StateMachine and state modules.
+ *
+ * Simulator-only services remain outside the state logic:
+ *
+ *      KickCAT/SOEM
+ *      desktop HMI UDP
+ *      simulated hand guidance
+ *      host RAM validated-trajectory storage
+ *      MATLAB telemetry
+ * ============================================================================
+ */
+
+int main(void)
+{
+    signal(
+        SIGINT,
+        on_signal
+    );
+
+    signal(
+        SIGTERM,
+        on_signal
+    );
+
+
+    printf(
+        "\n"
+        "============================================================\n"
+        " ROBOT PC SIMULATOR - FreeRTOS POSIX\n"
+        "============================================================\n"
+        "Entry point: Simulation/simulator_main.c\n"
+        "State logic: shared StateMachine/States modules\n"
+        "============================================================\n"
+    );
+
+    fflush(
+        stdout
+    );
+
+
+    const BaseType_t task_result =
+        xTaskCreate(
+            SimulatorControlTask,
+            "SimControl",
+            SIM_CONTROL_TASK_STACK_WORDS,
+            NULL,
+            SIM_CONTROL_TASK_PRIORITY,
+            NULL
+        );
+
+
+    if (task_result != pdPASS)
+    {
+        fprintf(
+            stderr,
+            "Failed to create simulator control task.\n"
+        );
+
+        return 1;
+    }
+
+
+    vTaskStartScheduler();
+
+
+    /*
+     * The scheduler should not return during normal simulator operation.
+     */
+    fprintf(
+        stderr,
+        "FreeRTOS scheduler stopped unexpectedly.\n"
+    );
+
+    return 1;
 }

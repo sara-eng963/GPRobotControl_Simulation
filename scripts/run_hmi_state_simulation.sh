@@ -10,7 +10,7 @@ KICKCAT_BIN="${KICKCAT_DIR}/build/simulation/network_simulator"
 VETH_SCRIPT="${KICKCAT_DIR}/simulation/create_virtual_ethernet.sh"
 A6_CONFIG="${KICKCAT_DIR}/simulation/slave_configs/A6-EC.json"
 
-CONTROLLER_BIN="${REPO_ROOT}/build/hmi_state_controller"
+CONTROLLER_BIN="${REPO_ROOT}/build/robot_simulator"
 PANEL_BIN="${REPO_ROOT}/build/robot_hmi"
 TEACH_BIN="${REPO_ROOT}/build/teaching_sim"
 
@@ -85,7 +85,7 @@ KICKCAT_PID=$!
 
 sleep 1
 
-printf '[2/4] Starting actual global-state simulator...\n'
+printf '[2/4] Starting FreeRTOS global-state simulator...\n'
 
 sudo "${CONTROLLER_BIN}"     >"${LOG_DIR}/controller.log" 2>&1 &
 

@@ -94,7 +94,7 @@ The script will:
 6. create the tested `A6-EC.json`,
 7. copy `A6-EC.xml` into KickCAT,
 8. initialize Raylib,
-9. build `freertos_pc_test`,
+9. build `robot_simulator`,
 10. build `mock_hmi`.
 
 Expected layout after setup:
@@ -109,7 +109,7 @@ Expected layout after setup:
 │       └── A6-EC.xml
 └── freertos-pc-test/
     ├── build/
-    │   ├── freertos_pc_test
+    │   ├── robot_simulator
     │   └── mock_hmi
     └── scripts/
         ├── setup_environment.sh
