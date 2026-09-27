@@ -13,7 +13,7 @@ The new simulation deliberately mirrors the intended physical workflow:
    - E-Stop,
    - Line / Circular Arc / Circle selection,
    - Record,
-   - Preview / Validate Path,
+   - one context-sensitive Validate / Preview button,
    - speed decrease / increase / default,
    - Start / Replay,
    - Pause,
@@ -27,6 +27,12 @@ There is intentionally **no A/B/C batch waypoint editor** in the new HMI.
 The operator moves the simulated robot to one pose, returns to the first HMI
 window, presses **RECORD**, then moves to the next pose and presses **RECORD**
 again.
+
+The Validate / Preview control is the same physical HMI button:
+- in Teaching it reads **VALIDATE PATH** and starts Path Validation,
+- while validation runs it reads **VALIDATING...** and is disabled,
+- after a valid result it reads **PREVIEW**,
+- the second click requests Preview and the FSM enters Approach.
 
 ## State-machine integration
 
@@ -79,7 +85,17 @@ cmake --build build --target robot_simulator robot_hmi teaching_sim
 
 ## Run
 
-With KickCAT installed in `~/KickCAT`:
+With KickCAT installed in `~/KickCAT`, the easiest command is:
+
+```bash
+bash ./scripts/run_full_simulation.sh
+```
+
+That command configures CMake, builds `robot_simulator`, `robot_hmi` and
+`teaching_sim`, then launches KickCAT, the FreeRTOS simulator and both HMI
+windows.
+
+If everything is already built, you can still launch directly with:
 
 ```bash
 ./scripts/run_hmi_state_simulation.sh
