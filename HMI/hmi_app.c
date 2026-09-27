@@ -109,11 +109,23 @@ static void make_status_message(
             break;
 
         case 2U:
-            snprintf(
-                buffer,
-                capacity,
-                "Ready. Select Line / Arc / Circle, then press START."
-            );
+            if (status->idle_error != 0U)
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "IDLE FAILED. Error code %u",
+                    status->idle_error
+                );
+            }
+            else
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "Ready. Select Line / Arc / Circle, then press START."
+                );
+            }
             break;
 
         case 3U:
@@ -815,12 +827,18 @@ int hmi_app_run(void)
             380.0F
         );
 
+        const bool start_enabled =
+            online &&
+            status->robot_state == 2U &&
+            status->idle_error == 0U &&
+            !status->estop_active;
+
         if (
             panel_button(
                 (Rectangle){580.0F, 406.0F, 278.0F, 54.0F},
-                "START / REPLAY",
+                "START",
                 HMI_BUTTON_PRIMARY,
-                online && !status->estop_active,
+                start_enabled,
                 mouse
             )
         )
