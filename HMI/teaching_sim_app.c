@@ -462,6 +462,17 @@ int teaching_sim_app_run(void)
     float drag_plane_distance =
         0.0F;
 
+    /*
+     * Mouse motion renders locally at full frame rate, while guidance commands
+     * are rate-limited so the simulator does not restart IK/trajectory work on
+     * every Raylib frame.
+     */
+    double last_guidance_send_time =
+        -1.0;
+
+    const double guidance_send_period_s =
+        0.05;
+
     while (!WindowShouldClose())
     {
         hmi_protocol_poll_status(
@@ -629,7 +640,7 @@ int teaching_sim_app_run(void)
             );
 
         const float target_hit_radius_px =
-            34.0F;
+            64.0F;
 
         const bool mouse_near_target =
             Vector2Distance(
@@ -645,6 +656,24 @@ int teaching_sim_app_run(void)
             )
         )
         {
+            if (
+                teaching_active &&
+                dragging_target
+            )
+            {
+                /*
+                 * Always deliver the final mouse position even if the last
+                 * frame landed between rate-limited updates.
+                 */
+                send_target(
+                    &protocol,
+                    target
+                );
+
+                last_guidance_send_time =
+                    GetTime();
+            }
+
             dragging_target =
                 false;
         }
@@ -712,10 +741,23 @@ int teaching_sim_app_run(void)
                     &target[2]
                 );
 
-                send_target(
-                    &protocol,
-                    target
-                );
+                const double now =
+                    GetTime();
+
+                if (
+                    last_guidance_send_time < 0.0 ||
+                    now - last_guidance_send_time >=
+                        guidance_send_period_s
+                )
+                {
+                    send_target(
+                        &protocol,
+                        target
+                    );
+
+                    last_guidance_send_time =
+                        now;
+                }
             }
         }
 
@@ -729,7 +771,7 @@ int teaching_sim_app_run(void)
         );
 
         hmi_ui_text(
-            "Drag the BLUE target to move one current TCP pose. RECORD stays on the real HMI.",
+            "Drag the BLUE target freely; the robot follows. RECORD stays on the real HMI.",
             28.0F,
             48.0F,
             12.5F,
