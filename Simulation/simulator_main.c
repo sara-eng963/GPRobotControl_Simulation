@@ -1324,19 +1324,45 @@ static void handle_hmi_command(
 
         case HMI_CMD_START_REPLAY:
             /*
-             * START begins a Teaching session from IDLE.
+             * START begins a Teaching session from a healthy IDLE state.
              *
-             * Preview after successful validation is intentionally NOT bound
-             * to START. The same VALIDATE/PREVIEW HMI button performs that
-             * second click so the operator workflow matches the real panel.
+             * Keep this as a latched supervisor request. IDLE consumes
+             * IDLE_COMMAND_TEACH through the existing global StateMachine;
+             * we do not bypass state_idle.c or force the state directly.
              */
             if (
                 machine.current_state ==
-                ROBOT_STATE_IDLE
+                    ROBOT_STATE_IDLE
+                &&
+                machine.idle.phase !=
+                    IDLE_PHASE_FAILED
             )
             {
                 runtime->start_teach_requested =
                     true;
+
+                printf(
+                    "HMI: START accepted -> request TEACHING\n"
+                );
+
+                fflush(
+                    stdout
+                );
+            }
+            else
+            {
+                printf(
+                    "HMI: START ignored in state=%s idle_phase=%d idle_error=%d\n",
+                    state_machine_state_name(
+                        machine.current_state
+                    ),
+                    (int)machine.idle.phase,
+                    (int)machine.idle.error
+                );
+
+                fflush(
+                    stdout
+                );
             }
             break;
 
@@ -2337,6 +2363,10 @@ static void SimulatorControlTask(
                 state_machine_state_name(
                     machine.current_state
                 )
+            );
+
+            fflush(
+                stdout
             );
 
             if (
