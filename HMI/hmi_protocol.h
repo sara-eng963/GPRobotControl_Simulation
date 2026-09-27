@@ -18,40 +18,19 @@ extern "C" {
 
 #define HMI_COMMAND_MAGIC          0x484D4933U /* HMI3 */
 #define HMI_STATUS_MAGIC           0x53544D33U /* STM3 */
-#define HMI_PROTOCOL_VERSION       2U
+#define HMI_PROTOCOL_VERSION       3U
 
 #define HMI_COMMAND_WORD_COUNT     8U
 #define HMI_STATUS_WORD_COUNT      57U
 
-typedef enum
-{
-    HMI_CMD_NONE = 0,
+/*
+ * PC-simulation transport commands.
+ * These are intentionally outside the stable HmiEvent API.
+ */
+#define HMI_PROTOCOL_SIM_GUIDANCE_POSE  0x80000001U
+#define HMI_PROTOCOL_SIM_ESTOP_TOGGLE   0x80000002U
 
-    HMI_CMD_SELECT_LINE,
-    HMI_CMD_SELECT_ARC,
-    HMI_CMD_SELECT_CIRCLE,
 
-    HMI_CMD_RECORD,
-    HMI_CMD_VALIDATE_PREVIEW,
-
-    HMI_CMD_SPEED_UP,
-    HMI_CMD_SPEED_DOWN,
-    HMI_CMD_SPEED_DEFAULT,
-
-    HMI_CMD_START_REPLAY,
-    HMI_CMD_PAUSE_TOGGLE,
-    HMI_CMD_RESET,
-    HMI_CMD_HOME,
-    HMI_CMD_ESTOP_TOGGLE,
-
-    /*
-     * Simulation-only: the second desktop window sends a desired TCP XYZ.
-     * The simulator converts it to a joint target and moves the virtual robot.
-     * The actual Teaching state still records A6 feedback + ControlCore FK.
-     */
-    HMI_CMD_SIM_GUIDANCE_POSE
-
-} HmiCommand;
 
 typedef enum
 {
@@ -146,7 +125,10 @@ typedef struct
 
     struct sockaddr_in controller_address;
 
-    HmiRobotStatus status;
+    HmiStatus status;
+
+    bool status_valid;
+    double last_receive_time;
 
     uint32_t next_sequence;
 } HmiProtocol;
@@ -169,9 +151,13 @@ bool hmi_protocol_controller_online(
     double timeout_seconds
 );
 
-bool hmi_protocol_send_command(
+bool hmi_protocol_send_event(
     HmiProtocol *protocol,
-    HmiCommand command
+    HmiEvent event
+);
+
+bool hmi_protocol_send_sim_estop_toggle(
+    HmiProtocol *protocol
 );
 
 bool hmi_protocol_send_guidance_pose(

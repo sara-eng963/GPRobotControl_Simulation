@@ -34,6 +34,40 @@ The Validate / Preview control is the same physical HMI button:
 - after a valid result it reads **PREVIEW**,
 - the second click requests Preview and the FSM enters Approach.
 
+
+## Stable HMI API boundary
+
+The Raylib panel is only the current stand-in for the future physical HMI.
+
+The permanent controller-facing boundary is:
+
+```
+HMI/hmi_api.h
+    HmiEvent / HmiProgramSelection
+
+HMI/hmi_state_bridge.h/.c
+    HmiEvent -> StateMachine inputs/state APIs
+
+HMI/hmi_types.h
+    HMI status contract
+
+HMI/hmi_protocol.h/.c
+    PC UDP transport only
+```
+
+`Simulation/simulator_main.c` and the future real `main.c` should both use
+`hmi_state_bridge_handle_event()`,
+`hmi_state_bridge_apply_inputs()`, and
+`hmi_state_bridge_on_state_transition()`.
+
+When the physical HMI arrives, only the transport that produces `HmiEvent`
+values changes. The event names and controller/state-machine mapping stay the
+same.
+
+The desktop software E-stop and mouse-guidance packets are simulation-only and
+are intentionally outside `HmiEvent`. A real E-stop belongs to the hardware
+safety chain.
+
 ## State-machine integration
 
 `Simulation/simulator_main.c` is the FreeRTOS POSIX PC entry point and runs the actual state modules:

@@ -1,25 +1,16 @@
 #ifndef HMI_TYPES_H
 #define HMI_TYPES_H
 
+#include "hmi_api.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
 #define HMI_NUM_JOINTS 6
 #define HMI_MAX_RECORDED_POINTS 3
 
-typedef enum
-{
-    HMI_PROGRAM_NONE = 0,
-    HMI_PROGRAM_LINE,
-    HMI_PROGRAM_ARC,
-    HMI_PROGRAM_CIRCLE
-} HmiProgramSelection;
-
 typedef struct
 {
-    bool valid;
-    double last_receive_time;
-
     uint32_t sequence;
     uint32_t robot_state;
     uint32_t selected_program;
@@ -79,6 +70,6 @@ typedef struct
 
     uint32_t last_command_sequence;
     uint32_t guidance_error;
-} HmiRobotStatus;
+} HmiStatus;
 
 #endif /* HMI_TYPES_H */

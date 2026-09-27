@@ -137,7 +137,7 @@ static void make_status_message(
         return;
     }
 
-    const HmiRobotStatus *status =
+    const HmiStatus *status =
         &protocol->status;
 
     if (status->estop_active)
@@ -427,7 +427,7 @@ int hmi_app_run(void)
                 1.0
             );
 
-        const HmiRobotStatus *status =
+        const HmiStatus *status =
             &protocol.status;
 
         Vector2 mouse =
@@ -660,9 +660,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_SELECT_LINE
+                HMI_EVENT_SELECT_LINE
             );
 
             snprintf(
@@ -684,9 +684,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_SELECT_ARC
+                HMI_EVENT_SELECT_ARC
             );
 
             snprintf(
@@ -708,9 +708,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_SELECT_CIRCLE
+                HMI_EVENT_SELECT_CIRCLE
             );
 
             snprintf(
@@ -743,9 +743,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_RECORD
+                HMI_EVENT_RECORD
             );
 
             snprintf(
@@ -797,9 +797,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_VALIDATE_PREVIEW
+                HMI_EVENT_VALIDATE_PREVIEW
             );
 
             snprintf(
@@ -827,9 +827,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_SPEED_DOWN
+                HMI_EVENT_SPEED_DECREASE
             );
         }
 
@@ -843,9 +843,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_SPEED_UP
+                HMI_EVENT_SPEED_INCREASE
             );
         }
 
@@ -859,9 +859,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_SPEED_DEFAULT
+                HMI_EVENT_SPEED_DEFAULT
             );
         }
 
@@ -948,9 +948,8 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
-                &protocol,
-                HMI_CMD_ESTOP_TOGGLE
+            (void)hmi_protocol_send_sim_estop_toggle(
+                &protocol
             );
         }
 
@@ -976,9 +975,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_START_REPLAY
+                HMI_EVENT_START
             );
         }
 
@@ -992,9 +991,11 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_PAUSE_TOGGLE
+                status->paused
+                    ? HMI_EVENT_RESUME
+                    : HMI_EVENT_PAUSE
             );
         }
 
@@ -1008,9 +1009,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_RESET
+                HMI_EVENT_RESET
             );
         }
 
@@ -1024,9 +1025,9 @@ int hmi_app_run(void)
             )
         )
         {
-            (void)hmi_protocol_send_command(
+            (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_CMD_HOME
+                HMI_EVENT_HOME
             );
         }
 

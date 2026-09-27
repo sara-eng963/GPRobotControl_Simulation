@@ -304,7 +304,7 @@ static void send_target(
 }
 
 static void draw_scene(
-    const HmiRobotStatus *status,
+    const HmiStatus *status,
     const float target[3],
     Camera3D camera
 )
@@ -485,7 +485,7 @@ int teaching_sim_app_run(void)
                 1.0
             );
 
-        const HmiRobotStatus *status =
+        const HmiStatus *status =
             &protocol.status;
 
         if (

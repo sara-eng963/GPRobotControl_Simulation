@@ -39,7 +39,7 @@ static float network_word_to_float(uint32_t value)
 
 static bool send_packet(
     HmiProtocol *protocol,
-    HmiCommand command,
+    uint32_t command_code,
     float arg0,
     float arg1,
     float arg2,
@@ -49,7 +49,7 @@ static bool send_packet(
     if (
         protocol == NULL ||
         protocol->command_socket < 0 ||
-        command == HMI_CMD_NONE
+        command_code == 0U
     )
     {
         return false;
@@ -66,7 +66,7 @@ static bool send_packet(
         htonl(HMI_PROTOCOL_VERSION);
 
     packet[HMI_COMMAND_WORD_COMMAND] =
-        htonl((uint32_t)command);
+        htonl(command_code);
 
     packet[HMI_COMMAND_WORD_SEQUENCE] =
         htonl(protocol->next_sequence);
@@ -294,7 +294,7 @@ void hmi_protocol_poll_status(
             continue;
         }
 
-        HmiRobotStatus *status =
+        HmiStatus *status =
             &protocol->status;
 
         status->sequence =
@@ -477,10 +477,10 @@ void hmi_protocol_poll_status(
                 ]
             );
 
-        status->valid =
+        protocol->status_valid =
             true;
 
-        status->last_receive_time =
+        protocol->last_receive_time =
             monotonic_seconds();
     }
 }
@@ -492,7 +492,7 @@ bool hmi_protocol_controller_online(
 {
     if (
         protocol == NULL ||
-        !protocol->status.valid ||
+        !protocol->status_valid ||
         timeout_seconds <= 0.0
     )
     {
@@ -501,20 +501,41 @@ bool hmi_protocol_controller_online(
 
     return
         monotonic_seconds() -
-        protocol->status.last_receive_time
+        protocol->last_receive_time
         <
         timeout_seconds;
 }
 
-bool hmi_protocol_send_command(
+bool hmi_protocol_send_event(
     HmiProtocol *protocol,
-    HmiCommand command
+    HmiEvent event
+)
+{
+    if (!hmi_event_is_valid(event))
+    {
+        return false;
+    }
+
+    return
+        send_packet(
+            protocol,
+            (uint32_t)event,
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F
+        );
+}
+
+
+bool hmi_protocol_send_sim_estop_toggle(
+    HmiProtocol *protocol
 )
 {
     return
         send_packet(
             protocol,
-            command,
+            HMI_PROTOCOL_SIM_ESTOP_TOGGLE,
             0.0F,
             0.0F,
             0.0F,
@@ -532,7 +553,7 @@ bool hmi_protocol_send_guidance_pose(
     return
         send_packet(
             protocol,
-            HMI_CMD_SIM_GUIDANCE_POSE,
+            HMI_PROTOCOL_SIM_GUIDANCE_POSE,
             x_m,
             y_m,
             z_m,

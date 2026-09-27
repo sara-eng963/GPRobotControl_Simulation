@@ -1,4 +1,5 @@
 #include "../HMI/hmi_protocol.h"
+#include "../HMI/hmi_state_bridge.h"
 
 #include "../StateMachine/state_machine.h"
 
@@ -131,18 +132,13 @@ typedef struct
     uint32_t status_sequence;
     uint32_t last_command_sequence;
 
-    HmiProgramSelection selected_program;
+    HmiStateBridge hmi_bridge;
 
+    /*
+     * Simulator-only software E-stop switch.
+     * The real machine E-stop is a hardware safety input, not an HmiEvent.
+     */
     bool estop_active;
-    bool paused;
-
-    bool start_teach_requested;
-    bool approach_requested;
-
-    bool approach_reset_requested;
-    bool approach_home_requested;
-
-    TeachingEvent pending_teaching_event;
 
     int last_wkc;
 
@@ -1263,7 +1259,11 @@ static void mock_preview_step(
         return;
     }
 
-    if (runtime->paused)
+    if (
+        hmi_state_bridge_is_paused(
+            &runtime->hmi_bridge
+        )
+    )
     {
         (void)hold_current_position(
             &runtime->last_wkc
@@ -1481,55 +1481,9 @@ static bool setup_udp(
 }
 
 
-static TeachingEvent selected_program_event(
-    HmiProgramSelection program
-)
-{
-    switch (program)
-    {
-        case HMI_PROGRAM_LINE:
-            return
-                TEACH_EVENT_SELECT_LINE;
-
-        case HMI_PROGRAM_ARC:
-            return
-                TEACH_EVENT_SELECT_ARC;
-
-        case HMI_PROGRAM_CIRCLE:
-            return
-                TEACH_EVENT_SELECT_CIRCLE;
-
-        default:
-            return
-                TEACH_EVENT_NONE;
-    }
-}
-
-
-static void request_program(
+static void handle_hmi_wire_command(
     SupervisorRuntime *runtime,
-    HmiProgramSelection program
-)
-{
-    runtime->selected_program =
-        program;
-
-    if (
-        machine.current_state ==
-        ROBOT_STATE_TEACHING
-    )
-    {
-        runtime->pending_teaching_event =
-            selected_program_event(
-                program
-            );
-    }
-}
-
-
-static void handle_hmi_command(
-    SupervisorRuntime *runtime,
-    HmiCommand command,
+    uint32_t command_code,
     uint32_t sequence,
     float arg0,
     float arg1,
@@ -1544,247 +1498,103 @@ static void handle_hmi_command(
     runtime->last_command_sequence =
         sequence;
 
-    switch (command)
+    if (
+        command_code ==
+        HMI_PROTOCOL_SIM_GUIDANCE_POSE
+    )
     {
-        case HMI_CMD_SELECT_LINE:
-            request_program(
-                runtime,
-                HMI_PROGRAM_LINE
+        if (
+            runtime->estop_active ||
+            hmi_state_bridge_is_paused(
+                &runtime->hmi_bridge
+            )
+        )
+        {
+            guidance.error =
+                GUIDANCE_ERR_INHIBITED;
+
+            return;
+        }
+
+        (void)guidance_plan_xyz(
+            &guidance,
+            arg0,
+            arg1,
+            arg2
+        );
+
+        return;
+    }
+
+    if (
+        command_code ==
+        HMI_PROTOCOL_SIM_ESTOP_TOGGLE
+    )
+    {
+        runtime->estop_active =
+            !runtime->estop_active;
+
+        if (runtime->estop_active)
+        {
+            guidance.active =
+                false;
+        }
+
+        return;
+    }
+
+    const HmiEvent event =
+        (HmiEvent)command_code;
+
+    if (!hmi_event_is_valid(event))
+    {
+        return;
+    }
+
+    const RobotState before =
+        machine.current_state;
+
+    const bool accepted =
+        hmi_state_bridge_handle_event(
+            &runtime->hmi_bridge,
+            event,
+            &machine
+        );
+
+    if (
+        accepted &&
+        event == HMI_EVENT_HOME &&
+        before == ROBOT_STATE_IDLE &&
+        machine.current_state == ROBOT_STATE_HOMING
+    )
+    {
+        runtime->robot_homed =
+            false;
+    }
+
+    if (event == HMI_EVENT_START)
+    {
+        if (accepted)
+        {
+            printf(
+                "HMI: START accepted -> request TEACHING\n"
             );
-            break;
-
-        case HMI_CMD_SELECT_ARC:
-            request_program(
-                runtime,
-                HMI_PROGRAM_ARC
+        }
+        else
+        {
+            printf(
+                "HMI: START ignored in state=%s idle_phase=%d idle_error=%d\n",
+                state_machine_state_name(
+                    machine.current_state
+                ),
+                (int)machine.idle.phase,
+                (int)machine.idle.error
             );
-            break;
+        }
 
-        case HMI_CMD_SELECT_CIRCLE:
-            request_program(
-                runtime,
-                HMI_PROGRAM_CIRCLE
-            );
-            break;
-
-        case HMI_CMD_RECORD:
-            if (
-                machine.current_state ==
-                ROBOT_STATE_TEACHING
-            )
-            {
-                runtime->pending_teaching_event =
-                    TEACH_EVENT_RECORD_POINT;
-            }
-            break;
-
-        case HMI_CMD_VALIDATE_PREVIEW:
-            /*
-             * One physical HMI button has two context-dependent actions:
-             *
-             *   TEACHING                  -> request Path Validation
-             *   PATH_VALIDATION + VALID  -> request Preview / Approach
-             *
-             * The second action is deliberately unavailable until the exact
-             * taught program has passed Path Validation.
-             */
-            if (
-                machine.current_state ==
-                ROBOT_STATE_TEACHING
-            )
-            {
-                runtime->pending_teaching_event =
-                    TEACH_EVENT_VALIDATE_PATH;
-            }
-            else if (
-                machine.current_state ==
-                    ROBOT_STATE_PATH_VALIDATION
-                &&
-                machine.path_validation_outputs.report.result ==
-                    PV_RESULT_VALID
-            )
-            {
-                runtime->approach_requested =
-                    true;
-            }
-            break;
-
-        case HMI_CMD_SPEED_UP:
-            if (
-                machine.current_state ==
-                ROBOT_STATE_TEACHING
-            )
-            {
-                runtime->pending_teaching_event =
-                    TEACH_EVENT_SPEED_INCREASE;
-            }
-            break;
-
-        case HMI_CMD_SPEED_DOWN:
-            if (
-                machine.current_state ==
-                ROBOT_STATE_TEACHING
-            )
-            {
-                runtime->pending_teaching_event =
-                    TEACH_EVENT_SPEED_DECREASE;
-            }
-            break;
-
-        case HMI_CMD_SPEED_DEFAULT:
-            if (
-                machine.current_state ==
-                ROBOT_STATE_TEACHING
-            )
-            {
-                runtime->pending_teaching_event =
-                    TEACH_EVENT_SPEED_DEFAULT;
-            }
-            break;
-
-        case HMI_CMD_START_REPLAY:
-            /*
-             * START begins a Teaching session from a healthy IDLE state.
-             *
-             * Keep this as a latched supervisor request. IDLE consumes
-             * IDLE_COMMAND_TEACH through the existing global StateMachine;
-             * we do not bypass state_idle.c or force the state directly.
-             */
-            if (
-                machine.current_state ==
-                    ROBOT_STATE_IDLE
-                &&
-                machine.idle.phase !=
-                    IDLE_PHASE_FAILED
-            )
-            {
-                runtime->start_teach_requested =
-                    true;
-
-                printf(
-                    "HMI: START accepted -> request TEACHING\n"
-                );
-
-                fflush(
-                    stdout
-                );
-            }
-            else
-            {
-                printf(
-                    "HMI: START ignored in state=%s idle_phase=%d idle_error=%d\n",
-                    state_machine_state_name(
-                        machine.current_state
-                    ),
-                    (int)machine.idle.phase,
-                    (int)machine.idle.error
-                );
-
-                fflush(
-                    stdout
-                );
-            }
-            break;
-
-        case HMI_CMD_PAUSE_TOGGLE:
-            runtime->paused =
-                !runtime->paused;
-
-            break;
-
-        case HMI_CMD_RESET:
-            if (
-                machine.current_state ==
-                ROBOT_STATE_TEACHING
-            )
-            {
-                runtime->pending_teaching_event =
-                    TEACH_EVENT_RESET;
-            }
-            else if (
-                machine.current_state ==
-                ROBOT_STATE_APPROACH
-            )
-            {
-                runtime->approach_reset_requested =
-                    true;
-            }
-            else if (
-                machine.current_state ==
-                ROBOT_STATE_PATH_VALIDATION
-            )
-            {
-                state_path_validation_cancel(
-                    &machine.path_validation
-                );
-            }
-            break;
-
-        case HMI_CMD_HOME:
-            if (
-                machine.current_state ==
-                ROBOT_STATE_APPROACH
-            )
-            {
-                runtime->approach_home_requested =
-                    true;
-            }
-            else if (
-                machine.current_state ==
-                ROBOT_STATE_IDLE
-            )
-            {
-                machine.previous_state =
-                    machine.current_state;
-
-                state_homing_enter(
-                    &machine.homing
-                );
-
-                machine.current_state =
-                    ROBOT_STATE_HOMING;
-
-                runtime->robot_homed =
-                    false;
-            }
-            break;
-
-        case HMI_CMD_ESTOP_TOGGLE:
-            runtime->estop_active =
-                !runtime->estop_active;
-
-            if (runtime->estop_active)
-            {
-                guidance.active =
-                    false;
-            }
-
-            break;
-
-        case HMI_CMD_SIM_GUIDANCE_POSE:
-            if (
-                runtime->estop_active ||
-                runtime->paused
-            )
-            {
-                guidance.error =
-                    GUIDANCE_ERR_INHIBITED;
-
-                break;
-            }
-
-            (void)guidance_plan_xyz(
-                &guidance,
-                arg0,
-                arg1,
-                arg2
-            );
-
-            break;
-
-        case HMI_CMD_NONE:
-        default:
-            break;
+        fflush(
+            stdout
+        );
     }
 }
 
@@ -1848,8 +1658,7 @@ static void poll_hmi_commands(
             continue;
         }
 
-        const HmiCommand command =
-            (HmiCommand)
+        const uint32_t command_code =
             ntohl(
                 packet[HMI_COMMAND_WORD_COMMAND]
             );
@@ -1859,9 +1668,9 @@ static void poll_hmi_commands(
                 packet[HMI_COMMAND_WORD_SEQUENCE]
             );
 
-        handle_hmi_command(
+        handle_hmi_wire_command(
             runtime,
-            command,
+            command_code,
             sequence,
             network_word_to_float(
                 packet[HMI_COMMAND_WORD_ARG0]
@@ -2010,13 +1819,24 @@ static void send_status(
         htonl((uint32_t)machine.current_state);
 
     packet[HMI_STATUS_WORD_SELECTED_PROGRAM] =
-        htonl((uint32_t)runtime->selected_program);
+        htonl(
+            (uint32_t)
+            hmi_state_bridge_selected_program(
+                &runtime->hmi_bridge
+            )
+        );
 
     packet[HMI_STATUS_WORD_ESTOP] =
         htonl(runtime->estop_active ? 1U : 0U);
 
     packet[HMI_STATUS_WORD_PAUSED] =
-        htonl(runtime->paused ? 1U : 0U);
+        htonl(
+            hmi_state_bridge_is_paused(
+                &runtime->hmi_bridge
+            )
+            ? 1U
+            : 0U
+        );
 
     packet[HMI_STATUS_WORD_GUIDANCE_ACTIVE] =
         htonl(guidance.active ? 1U : 0U);
@@ -2472,11 +2292,9 @@ static void SimulatorControlTask(
     runtime.telemetry_socket =
         -1;
 
-    runtime.selected_program =
-        HMI_PROGRAM_LINE;
-
-    runtime.pending_teaching_event =
-        TEACH_EVENT_NONE;
+    hmi_state_bridge_init(
+        &runtime.hmi_bridge
+    );
 
     if (!setup_udp(&runtime))
     {
@@ -2549,7 +2367,7 @@ static void SimulatorControlTask(
         {
             if (
                 runtime.estop_active ||
-                runtime.paused
+                hmi_state_bridge_is_paused(&runtime.hmi_bridge)
             )
             {
                 guidance.active =
@@ -2612,7 +2430,7 @@ static void SimulatorControlTask(
 
         inputs.teaching_runtime.motion_permitted =
             !runtime.estop_active &&
-            !runtime.paused;
+            !hmi_state_bridge_is_paused(&runtime.hmi_bridge);
 
         inputs.teaching_runtime.estop_active =
             runtime.estop_active;
@@ -2626,74 +2444,23 @@ static void SimulatorControlTask(
         inputs.teaching_runtime.robot_homed =
             runtime.robot_homed;
 
-        if (
-            machine.current_state ==
-                ROBOT_STATE_IDLE
-            &&
-            runtime.start_teach_requested
-        )
-        {
-            inputs.idle_command =
-                IDLE_COMMAND_TEACH;
-        }
-
-        if (
-            machine.current_state ==
-                ROBOT_STATE_TEACHING
-            &&
-            runtime.pending_teaching_event !=
-                TEACH_EVENT_NONE
-        )
-        {
-            inputs.teaching_event =
-                runtime.pending_teaching_event;
-
-            runtime.pending_teaching_event =
-                TEACH_EVENT_NONE;
-        }
-
-        if (
-            machine.current_state ==
-                ROBOT_STATE_PATH_VALIDATION
-            &&
-            runtime.approach_requested
-        )
-        {
-            inputs.approach_operation =
-                APPROACH_OPERATION_PREVIEW;
-        }
-        else
-        {
-            inputs.approach_operation =
-                APPROACH_OPERATION_NONE;
-        }
+        hmi_state_bridge_apply_inputs(
+            &runtime.hmi_bridge,
+            &machine,
+            &inputs
+        );
 
         inputs.approach_control.motion_permission =
             !runtime.estop_active &&
-            !runtime.paused;
-
-        inputs.approach_control.pause_requested =
-            runtime.paused;
+            !hmi_state_bridge_is_paused(&runtime.hmi_bridge);
 
         inputs.approach_control.protective_stop_active =
             false;
-
-        inputs.approach_control.reset_requested =
-            runtime.approach_reset_requested;
-
-        inputs.approach_control.home_requested =
-            runtime.approach_home_requested;
 
         inputs.approach_control.estop_active =
             runtime.estop_active;
 
         inputs.approach_control.external_fault_active =
-            false;
-
-        runtime.approach_reset_requested =
-            false;
-
-        runtime.approach_home_requested =
             false;
 
         const StateStepResult step_result =
@@ -2760,31 +2527,20 @@ static void SimulatorControlTask(
                     true;
             }
 
+            hmi_state_bridge_on_state_transition(
+                &runtime.hmi_bridge,
+                last_state,
+                &machine
+            );
+
             if (
                 machine.current_state ==
                 ROBOT_STATE_TEACHING
             )
             {
-                runtime.start_teach_requested =
-                    false;
-
-                runtime.pending_teaching_event =
-                    selected_program_event(
-                        runtime.selected_program
-                    );
-
                 mock_preview_reset(
                     &preview
                 );
-            }
-
-            if (
-                machine.current_state ==
-                ROBOT_STATE_APPROACH
-            )
-            {
-                runtime.approach_requested =
-                    false;
             }
 
             last_state =
