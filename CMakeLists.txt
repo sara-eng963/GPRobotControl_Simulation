@@ -107,12 +107,12 @@ add_executable(
 
     hmi.c
 
-    HMI/hmi_app.c
-    HMI/hmi_protocol.c
-    HMI/hmi_theme.c
-    HMI/hmi_runtime_guard.c
-    HMI/waypoint_editor_3d.c
-    HMI/workspace_monitor.c
+    HMI-Mock/hmi_app.c
+    HMI-Mock/hmi_protocol.c
+    HMI-Mock/hmi_theme.c
+    HMI-Mock/hmi_runtime_guard.c
+    HMI-Mock/waypoint_editor_3d.c
+    HMI-Mock/workspace_monitor.c
 )
 
 target_compile_features(
@@ -124,7 +124,7 @@ target_compile_features(
 target_include_directories(
     mock_hmi
     PRIVATE
-    HMI
+    HMI-Mock
 )
 
 target_link_libraries(
@@ -339,47 +339,55 @@ target_link_libraries(
 # ============================================================================
 # PATH VALIDATION STATE INTEGRATION TEST
 # ============================================================================
+#
+# test_path_validation.c has not been added to the repository yet.
+# Keep the target available automatically once that test file exists, without
+# preventing unrelated targets (such as state_machine_test) from configuring.
+#
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/StateMachine/Tests/test_path_validation.c")
 
-add_executable(
-    path_validation_test
+    add_executable(
+        path_validation_test
 
-    StateMachine/Tests/test_path_validation.c
+        StateMachine/Tests/test_path_validation.c
 
-    StateMachine/States/state_teaching.c
-    StateMachine/States/state_path_validation.c
+        StateMachine/States/state_teaching.c
+        StateMachine/States/state_path_validation.c
 
-    EtherCATComm/ethercat_master.c
-    EtherCATComm/SOEM/soem_backend.c
+        EtherCATComm/ethercat_master.c
+        EtherCATComm/SOEM/soem_backend.c
 
-    ServoDrive/CiA402/cia402.c
+        ServoDrive/CiA402/cia402.c
 
-    ServoDrive/A6EC/a6ec_pdo.c
-    ServoDrive/A6EC/a6ec_drive.c
-)
+        ServoDrive/A6EC/a6ec_pdo.c
+        ServoDrive/A6EC/a6ec_drive.c
+    )
 
-target_include_directories(
-    path_validation_test
-    PRIVATE
+    target_include_directories(
+        path_validation_test
+        PRIVATE
 
-    StateMachine
-    StateMachine/States
+        StateMachine
+        StateMachine/States
 
-    EtherCATComm
-    EtherCATComm/SOEM
+        EtherCATComm
+        EtherCATComm/SOEM
 
-    ServoDrive/CiA402
-    ServoDrive/A6EC
-)
+        ServoDrive/CiA402
+        ServoDrive/A6EC
+    )
 
-target_link_libraries(
-    path_validation_test
-    PRIVATE
+    target_link_libraries(
+        path_validation_test
+        PRIVATE
 
-    control_core
-    soem
-    pthread
-    m
-)
+        control_core
+        soem
+        pthread
+        m
+    )
+
+endif()
 
 # ============================================================================
 # GLOBAL STATE MACHINE UNIT TEST
