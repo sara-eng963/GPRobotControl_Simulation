@@ -1259,6 +1259,15 @@ static void handle_hmi_command(
             break;
 
         case HMI_CMD_VALIDATE_PREVIEW:
+            /*
+             * One physical HMI button has two context-dependent actions:
+             *
+             *   TEACHING                  -> request Path Validation
+             *   PATH_VALIDATION + VALID  -> request Preview / Approach
+             *
+             * The second action is deliberately unavailable until the exact
+             * taught program has passed Path Validation.
+             */
             if (
                 machine.current_state ==
                 ROBOT_STATE_TEACHING
@@ -1266,6 +1275,17 @@ static void handle_hmi_command(
             {
                 runtime->pending_teaching_event =
                     TEACH_EVENT_VALIDATE_PATH;
+            }
+            else if (
+                machine.current_state ==
+                    ROBOT_STATE_PATH_VALIDATION
+                &&
+                machine.path_validation_outputs.report.result ==
+                    PV_RESULT_VALID
+            )
+            {
+                runtime->approach_requested =
+                    true;
             }
             break;
 
@@ -1303,23 +1323,19 @@ static void handle_hmi_command(
             break;
 
         case HMI_CMD_START_REPLAY:
+            /*
+             * START begins a Teaching session from IDLE.
+             *
+             * Preview after successful validation is intentionally NOT bound
+             * to START. The same VALIDATE/PREVIEW HMI button performs that
+             * second click so the operator workflow matches the real panel.
+             */
             if (
                 machine.current_state ==
                 ROBOT_STATE_IDLE
             )
             {
                 runtime->start_teach_requested =
-                    true;
-            }
-            else if (
-                machine.current_state ==
-                    ROBOT_STATE_PATH_VALIDATION
-                &&
-                machine.path_validation_outputs.report.result ==
-                    PV_RESULT_VALID
-            )
-            {
-                runtime->approach_requested =
                     true;
             }
             break;
