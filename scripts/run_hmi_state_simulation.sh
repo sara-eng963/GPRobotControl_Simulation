@@ -77,11 +77,25 @@ fi
 
 sudo "${VETH_SCRIPT}" create ecat
 
+# The KickCAT helper creates the veth pair, but the EtherCAT ends must be
+# explicitly brought UP before SOEM can discover the simulated slaves.
+sudo ip link set ecatA up
+sudo ip link set ecatB up
+
+if ! ip link show ecatA >/dev/null 2>&1 || ! ip link show ecatB >/dev/null 2>&1
+then
+    printf 'ERROR: ecatA/ecatB were not created successfully.\n' >&2
+    exit 1
+fi
+
+printf '      ecatA UP -> SOEM master\n'
+printf '      ecatB UP -> KickCAT simulator\n'
+
 printf '[1/4] Starting KickCAT (6 A6-EC virtual drives)...\n'
 
 sudo "${KICKCAT_BIN}" \
-    --interface ecatB \
-    --slaves \
+    -i ecatB \
+    -s \
     "${A6_CONFIG}" "${A6_CONFIG}" "${A6_CONFIG}" \
     "${A6_CONFIG}" "${A6_CONFIG}" "${A6_CONFIG}" \
     >"${LOG_DIR}/kickcat.log" 2>&1 &
