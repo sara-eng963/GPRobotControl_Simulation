@@ -32,7 +32,16 @@
 #define SIM_NUM_AXES                 ROBOT_DOF
 #define SIM_CYCLE_TIME_NS            1000000U
 #define SIM_PV_GEOMETRY_CAPACITY     512U
-#define SIM_PV_STORAGE_CAPACITY      60000U
+/*
+ * Host-only validated trajectory capacity.
+ * 600000 samples = 10 minutes at the existing 1 ms sample period.
+ *
+ * This RAM-backed store belongs only to the PC simulator. It is NOT an STM32
+ * RAM requirement; the real controller will provide its own storage backend.
+ */
+#define SIM_PV_STORAGE_CAPACITY      600000U
+
+#define SIM_GUIDANCE_MIN_DURATION_S  0.08
 
 #define SIM_CONTROL_TASK_STACK_WORDS 4096U
 #define SIM_CONTROL_TASK_PRIORITY    (tskIDLE_PRIORITY + 2U)
@@ -884,7 +893,7 @@ static bool guidance_plan_xyz(
     }
 
     real_t duration =
-        0.25;
+        SIM_GUIDANCE_MIN_DURATION_S;
 
     for (
         int joint = 0;
