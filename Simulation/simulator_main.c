@@ -13,6 +13,8 @@
 #include "../ServoDrive/A6EC/a6ec_drive.h"
 #include "../ServoDrive/CiA402/cia402.h"
 
+#include "Storage/file_validated_storage.h"
+
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -65,20 +67,6 @@ typedef enum
     GUIDANCE_ERR_DRIVE
 
 } GuidanceError;
-
-
-typedef struct
-{
-    PvExecutionSample samples[SIM_PV_STORAGE_CAPACITY];
-
-    uint32_t sample_count;
-
-    bool writing;
-    bool committed;
-
-    ValidatedTrajectory metadata;
-
-} RamValidatedStorage;
 
 
 typedef struct
@@ -166,7 +154,8 @@ static real_t pv_l_original[SIM_PV_GEOMETRY_CAPACITY];
 static real_t pv_l_arc[SIM_PV_GEOMETRY_CAPACITY];
 static ADLSInfo pv_ik_scratch;
 
-static RamValidatedStorage validated_storage;
+static FileValidatedStorage file_validated_storage;
+
 static PathValidationStorage path_validation_storage;
 static ValidatedTrajectory validated_trajectory;
 
@@ -253,152 +242,22 @@ static float network_word_to_float(
  * ============================================================================
  */
 
-static bool ram_storage_begin(
-    void *context
-)
-{
-    RamValidatedStorage *storage =
-        (RamValidatedStorage *)context;
-
-    if (storage == NULL)
-    {
-        return false;
-    }
-
-    storage->sample_count =
-        0U;
-
-    storage->writing =
-        true;
-
-    storage->committed =
-        false;
-
-    memset(
-        &storage->metadata,
-        0,
-        sizeof(storage->metadata)
-    );
-
-    return true;
-}
-
-
-static bool ram_storage_write(
-    uint32_t sample_index,
-    const PvExecutionSample *sample,
-    void *context
-)
-{
-    RamValidatedStorage *storage =
-        (RamValidatedStorage *)context;
-
-    if (
-        storage == NULL ||
-        sample == NULL ||
-        !storage->writing ||
-        sample_index >= SIM_PV_STORAGE_CAPACITY
-    )
-    {
-        return false;
-    }
-
-    storage->samples[sample_index] =
-        *sample;
-
-    if (
-        sample_index + 1U >
-        storage->sample_count
-    )
-    {
-        storage->sample_count =
-            sample_index + 1U;
-    }
-
-    return true;
-}
-
-
-static bool ram_storage_commit(
-    const ValidatedTrajectory *metadata,
-    void *context
-)
-{
-    RamValidatedStorage *storage =
-        (RamValidatedStorage *)context;
-
-    if (
-        storage == NULL ||
-        metadata == NULL ||
-        !storage->writing ||
-        metadata->sample_count > storage->sample_count
-    )
-    {
-        return false;
-    }
-
-    storage->metadata =
-        *metadata;
-
-    storage->writing =
-        false;
-
-    storage->committed =
-        true;
-
-    return true;
-}
-
-
-static void ram_storage_abort(
-    void *context
-)
-{
-    RamValidatedStorage *storage =
-        (RamValidatedStorage *)context;
-
-    if (storage == NULL)
-    {
-        return;
-    }
-
-    storage->writing =
-        false;
-
-    storage->committed =
-        false;
-
-    storage->sample_count =
-        0U;
-}
-
-
 static bool approach_read_validated_sample(
     uint32_t sample_index,
     PvExecutionSample *sample,
     void *context
 )
 {
-    RamValidatedStorage *storage =
-        (RamValidatedStorage *)context;
+    FileValidatedStorage *storage =
+        (FileValidatedStorage *)context;
 
-    if (
-        storage == NULL ||
-        sample == NULL ||
-        !storage->committed ||
-        sample_index >= storage->metadata.sample_count ||
-        sample_index >= storage->sample_count
-    )
-    {
-        return false;
-    }
-
-    *sample =
-        storage->samples[sample_index];
-
-    return true;
+    return
+        file_validated_storage_read_sample(
+            sample_index,
+            sample,
+            storage
+        );
 }
-
 
 /* ============================================================================
  * CONFIGURATION
@@ -543,22 +402,32 @@ static void configure_state_dependencies(void)
             .ik_scratch = &pv_ik_scratch
         };
 
-    memset(
-        &validated_storage,
-        0,
-        sizeof(validated_storage)
+   if (
+    !file_validated_storage_init(
+        &file_validated_storage,
+        "external_flash.bin",
+        SIM_PV_STORAGE_CAPACITY
+    )
+)
+{
+    fprintf(
+        stderr,
+        "Failed to initialize simulated external storage.\n"
     );
 
-    path_validation_storage =
-        (PathValidationStorage)
-        {
-            .begin = ram_storage_begin,
-            .write_sample = ram_storage_write,
-            .commit = ram_storage_commit,
-            .abort = ram_storage_abort,
-            .capacity_samples = SIM_PV_STORAGE_CAPACITY,
-            .context = &validated_storage
-        };
+    exit(EXIT_FAILURE);
+}
+
+path_validation_storage =
+    (PathValidationStorage)
+    {
+        .begin = file_validated_storage_begin,
+        .write_sample = file_validated_storage_write_sample,
+        .commit = file_validated_storage_commit,
+        .abort = file_validated_storage_abort,
+        .capacity_samples = SIM_PV_STORAGE_CAPACITY,
+        .context = &file_validated_storage
+    };
 
     memset(
         &validated_trajectory,
@@ -612,7 +481,7 @@ static void configure_state_dependencies(void)
         approach_read_validated_sample;
 
     approach_services.storage_context =
-        &validated_storage;
+        &file_validated_storage;
 
     memset(
         &dependencies,
@@ -1106,7 +975,7 @@ static void mock_preview_reset(
 
 static void mock_preview_start(
     SimPreview *sim,
-    const RamValidatedStorage *storage
+    const FileValidatedStorage *storage
 )
 {
     if (sim == NULL)
@@ -1227,7 +1096,7 @@ static bool mock_preview_write_sample(
 
 static void mock_preview_step(
     SimPreview *sim,
-    const RamValidatedStorage *storage,
+    FileValidatedStorage *storage,
     SupervisorRuntime *runtime
 )
 {
@@ -1286,14 +1155,34 @@ static void mock_preview_step(
         return;
     }
 
-    if (
-        !mock_preview_write_sample(
-            &storage->samples[
-                sim->sample_index
-            ],
-            &runtime->last_wkc
-        )
+    PvExecutionSample sample;
+
+if (
+    !file_validated_storage_read_sample(
+        sim->sample_index,
+        &sample,
+        storage
     )
+)
+{
+    sim->active =
+        false;
+
+    sim->failed =
+        true;
+
+    sim->error =
+        SIM_PREVIEW_ERR_STORAGE;
+
+    return;
+}
+
+if (
+    !mock_preview_write_sample(
+        &sample,
+        &runtime->last_wkc
+    )
+)
     {
         sim->active =
             false;
@@ -2627,7 +2516,7 @@ static void SimulatorControlTask(
         {
             mock_preview_start(
                 &preview,
-                &validated_storage
+                &file_validated_storage
             );
         }
 
@@ -2643,7 +2532,7 @@ static void SimulatorControlTask(
         {
             mock_preview_step(
                 &preview,
-                &validated_storage,
+                &file_validated_storage,
                 &runtime
             );
         }
@@ -2693,6 +2582,10 @@ static void SimulatorControlTask(
     disable_drives();
 
     ethercat_master_close();
+
+    file_validated_storage_close(
+    &file_validated_storage
+);
 
     if (runtime.telemetry_socket >= 0)
     {

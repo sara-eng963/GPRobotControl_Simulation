@@ -61,9 +61,9 @@ add_executable(
     robot_simulator
 
     Simulation/simulator_main.c
+    Simulation/Storage/file_validated_storage.c
 
     HMI/hmi_state_bridge.c
-
     StateMachine/state_machine.c
     StateMachine/States/state_boot.c
     StateMachine/States/state_homing.c
