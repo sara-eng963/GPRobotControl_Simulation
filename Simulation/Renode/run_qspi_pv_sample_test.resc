@@ -1,0 +1,50 @@
+# Test 7.3 - Store real PvExecutionSample records in QSPI NOR and read them back.
+#
+# Run from repository root:
+#   ~/renode_portable/renode --console --disable-gui
+#
+# Then:
+#   include @Simulation/Renode/run_qspi_pv_sample_test.resc
+
+mach create "qspi-pv-sample-test"
+
+machine LoadPlatformDescription @Simulation/Renode/stm32h7_qspi_flash.repl
+
+sysbus LoadELF @Simulation/Renode/Firmware/qspi_pv_sample_test/build/qspi_pv_sample_test.elf
+
+emulation RunFor "0.02"
+pause
+
+echo "Test 7.3 result words:"
+
+echo "magic (expect 0x5056534D = PVSM):"
+sysbus ReadDoubleWord 0x24000000
+
+echo "status (expect 0x50415353 = PASS):"
+sysbus ReadDoubleWord 0x24000004
+
+echo "sample size (expect 24 bytes):"
+sysbus ReadDoubleWord 0x24000008
+
+echo "sample count (expect 4):"
+sysbus ReadDoubleWord 0x2400000C
+
+echo "total bytes (expect 96):"
+sysbus ReadDoubleWord 0x24000010
+
+echo "mismatch sample (expect 0xFFFFFFFF):"
+sysbus ReadDoubleWord 0x24000014
+
+echo "mismatch joint (expect 0xFFFFFFFF):"
+sysbus ReadDoubleWord 0x24000018
+
+echo "QSPI status:"
+sysbus ReadDoubleWord 0x2400001C
+
+echo "first sample readback J1..J6:"
+sysbus ReadDoubleWord 0x24000020
+sysbus ReadDoubleWord 0x24000024
+sysbus ReadDoubleWord 0x24000028
+sysbus ReadDoubleWord 0x2400002C
+sysbus ReadDoubleWord 0x24000030
+sysbus ReadDoubleWord 0x24000034
