@@ -964,8 +964,23 @@ static bool guidance_step(
  * Preview is not yet implemented as a project StateMachine state.
  *
  * This temporary PC-only executor starts AFTER the real Approach state reaches
- * the exact first validated CSP sample. It then replays the committed 1 ms
- * Path Validation artifact directly to the six A6-EC Target Position PDOs.
+ * the exact first validated CSP sample.
+ *
+ * IMPORTANT ARCHITECTURE NOTE:
+ * Path mathematics are NOT regenerated here. Path Validation has already used
+ * the project's ControlCore line/circular streaming pipelines to generate,
+ * quantize and validate the exact 1 ms CSP artifact. Preview must replay that
+ * committed artifact so the motion being previewed is exactly the motion that
+ * was validated. Re-running IK/S-curve/path generation during Preview could
+ * produce a different command sequence and would defeat validation.
+ *
+ * The simulator therefore exercises the execution side of the pipeline:
+ *
+ *   ControlCore path pipeline (during Path Validation)
+ *       -> validated native CSP artifact
+ *       -> external storage
+ *       -> fixed RAM streaming window
+ *       -> A6-EC Target Position PDOs
  *
  * No welding output is asserted here. This exists only so the operator HMI can
  * exercise the intended Preview workflow until the real Preview state exists.
@@ -1160,23 +1175,34 @@ static void mock_preview_start(
         sim->total_samples
     );
 
+    printf(
+        "SIM PREVIEW: source=committed Path Validation artifact; "
+        "execution buffer=%u samples refill=%u samples\n",
+        (unsigned)SIM_PREVIEW_BUFFER_SAMPLES,
+        (unsigned)SIM_PREVIEW_REFILL_SAMPLES
+    );
+
     fflush(
         stdout
     );
 }
 
 
-static bool mock_preview_write_sample(
+static SimPreviewError mock_preview_write_sample(
     const PvExecutionSample *sample,
     int *wkc
 )
 {
-    if (
-        sample == NULL ||
-        !pdo_ready()
-    )
+    if (sample == NULL)
     {
-        return false;
+        return
+            SIM_PREVIEW_ERR_STORAGE;
+    }
+
+    if (!pdo_ready())
+    {
+        return
+            SIM_PREVIEW_ERR_DRIVE_NOT_READY;
     }
 
     for (
@@ -1199,7 +1225,8 @@ static bool mock_preview_write_sample(
             CIA402_STATE_OPERATION_ENABLED
         )
         {
-            return false;
+            return
+                SIM_PREVIEW_ERR_DRIVE_NOT_READY;
         }
 
         const A6ECPDOCommand command =
@@ -1231,9 +1258,17 @@ static bool mock_preview_write_sample(
     const int expected_wkc =
         ethercat_master_expected_wkc();
 
+    if (
+        expected_wkc <= 0 ||
+        actual_wkc < expected_wkc
+    )
+    {
+        return
+            SIM_PREVIEW_ERR_WKC;
+    }
+
     return
-        expected_wkc > 0 &&
-        actual_wkc >= expected_wkc;
+        SIM_PREVIEW_ERR_NONE;
 }
 
 
@@ -1332,11 +1367,15 @@ static void mock_preview_step(
         return;
     }
 
-    if (
-        !mock_preview_write_sample(
+    const SimPreviewError write_error =
+        mock_preview_write_sample(
             &sample,
             &runtime->last_wkc
-        )
+        );
+
+    if (
+        write_error !=
+        SIM_PREVIEW_ERR_NONE
     )
     {
         sim->active =
@@ -1345,13 +1384,24 @@ static void mock_preview_step(
         sim->failed =
             true;
 
-        /*
-         * At this temporary simulator layer, loss of a ready drive and bad
-         * WKC share one send path. The HMI gets an explicit Preview failure;
-         * the eventual real Preview state can own finer-grained diagnostics.
-         */
         sim->error =
-            SIM_PREVIEW_ERR_WKC;
+            write_error;
+
+        printf(
+            "SIM PREVIEW: execution failed at sample %u "
+            "error=%d WKC=%d/%d buffer=%zu\n",
+            sim->sample_index,
+            (int)write_error,
+            runtime->last_wkc,
+            ethercat_master_expected_wkc(),
+            validated_stream_buffer_count(
+                &preview_buffer
+            )
+        );
+
+        fflush(
+            stdout
+        );
 
         return;
     }
