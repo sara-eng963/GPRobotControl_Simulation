@@ -508,3 +508,20 @@ target_link_libraries(
     control_core
     m
 )
+
+# ============================================================================
+# TEST 6A — FILE-BACKED VALIDATED TRAJECTORY STORAGE
+# ============================================================================
+
+add_executable(
+    file_validated_storage_test
+
+    Simulation/Tests/test_file_validated_storage.c
+    Simulation/Storage/file_validated_storage.c
+)
+
+target_compile_features(
+    file_validated_storage_test
+    PRIVATE
+    c_std_11
+)
