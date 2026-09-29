@@ -1,0 +1,19 @@
+using "platforms/cpus/stm32h7.repl"
+
+//
+// STM32H7 + simulated external Quad-SPI NOR flash.
+//
+// qspiBackingMemory models the bytes physically stored inside the NOR device.
+// 0x04000000 bytes = 64 MiB.
+//
+// The JEDEC manufacturer/type values are placeholders for the generic Renode
+// SPI-NOR model. They do not select the final hardware part for the robot.
+//
+
+qspiBackingMemory: Memory.MappedMemory @ sysbus 0x90000000
+    size: 0x04000000
+
+qspiNor: SPI.GenericSpiFlash @ qspi
+    underlyingMemory: qspiBackingMemory
+    manufacturerId: 0x20
+    memoryType: 0xBB
