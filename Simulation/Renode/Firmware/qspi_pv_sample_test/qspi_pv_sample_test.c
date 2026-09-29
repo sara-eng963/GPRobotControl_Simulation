@@ -189,7 +189,9 @@ static int page_program(
     return 1;
 }
 
-static int flash_read(
+#define QSPI_READ_CHUNK_BYTES 32U
+
+static int flash_read_chunk(
     uint32_t address,
     uint8_t *data,
     uint32_t length
@@ -197,7 +199,8 @@ static int flash_read(
 {
     if (
         data == 0 ||
-        length == 0U
+        length == 0U ||
+        length > QSPI_READ_CHUNK_BYTES
     )
     {
         return 0;
@@ -227,6 +230,53 @@ static int flash_read(
     }
 
     clear_tcf();
+    return 1;
+}
+
+static int flash_read(
+    uint32_t address,
+    uint8_t *data,
+    uint32_t length
+)
+{
+    if (
+        data == 0 ||
+        length == 0U
+    )
+    {
+        return 0;
+    }
+
+    uint32_t offset = 0U;
+
+    /*
+     * The Renode STM32H7 QUADSPI model has a 32-byte FIFO. A single 96-byte
+     * indirect read cannot complete before firmware starts draining the FIFO.
+     * Read in <=32-byte transactions so each transaction can complete and be
+     * consumed before the next one begins. This also mirrors the chunked
+     * access pattern needed by the later trajectory streaming backend.
+     */
+    while (offset < length)
+    {
+        uint32_t chunk = length - offset;
+
+        if (chunk > QSPI_READ_CHUNK_BYTES)
+        {
+            chunk = QSPI_READ_CHUNK_BYTES;
+        }
+
+        if (!flash_read_chunk(
+                address + offset,
+                data + offset,
+                chunk
+            ))
+        {
+            return 0;
+        }
+
+        offset += chunk;
+    }
+
     return 1;
 }
 
