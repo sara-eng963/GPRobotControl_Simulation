@@ -1,0 +1,37 @@
+# Test 7.1 - STM32H7 QUADSPI JEDEC ID read.
+#
+# Run Renode from the repository root:
+#
+#   renode --console --disable-gui
+#
+# Then:
+#
+#   include @Simulation/Renode/run_qspi_jedec_test.resc
+#
+# Result words:
+#   0x24000000 = 0x51535049  ("QSPI")
+#   0x24000004 = 0x50415353  ("PASS") on success
+#   0x24000008 = 0x0020BB20  (JEDEC bytes 20 BB 20)
+#   0x2400000C = final QUADSPI SR value
+
+mach create "qspi-jedec-test"
+
+machine LoadPlatformDescription @Simulation/Renode/stm32h7_qspi_flash.repl
+
+sysbus LoadELF @Simulation/Renode/Firmware/qspi_jedec_test/build/qspi_jedec_test.elf
+
+emulation RunFor "0.01"
+pause
+
+echo "Test 7.1 result words:"
+echo "magic  (expect 0x51535049):"
+sysbus ReadDoubleWord 0x24000000
+
+echo "status (expect 0x50415353 = PASS):"
+sysbus ReadDoubleWord 0x24000004
+
+echo "JEDEC  (expect 0x0020BB20 = 20 BB 20):"
+sysbus ReadDoubleWord 0x24000008
+
+echo "QSPI status register:"
+sysbus ReadDoubleWord 0x2400000C
