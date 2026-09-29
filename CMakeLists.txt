@@ -62,6 +62,9 @@ add_executable(
 
     Simulation/simulator_main.c
     Simulation/Storage/file_validated_storage.c
+     Simulation/Storage/validated_stream_buffer.c
+    
+
 
     HMI/hmi_state_bridge.c
     StateMachine/state_machine.c
@@ -520,8 +523,43 @@ add_executable(
     Simulation/Storage/file_validated_storage.c
 )
 
+# ============================================================================
+# TEST 6B.1 — VALIDATED TRAJECTORY STREAM BUFFER
+# ============================================================================
+
+add_executable(
+    validated_stream_buffer_test
+
+    Simulation/Tests/test_validated_stream_buffer.c
+    Simulation/Storage/validated_stream_buffer.c
+)
+
+target_compile_features(
+    validated_stream_buffer_test
+    PRIVATE
+    c_std_11
+)
+
 target_compile_features(
     file_validated_storage_test
+    PRIVATE
+    c_std_11
+)
+
+# ============================================================================
+# TEST 6B.2 — EXTERNAL STORAGE TO FIXED RAM BUFFER
+# ============================================================================
+
+add_executable(
+    external_streaming_test
+
+    Simulation/Tests/test_external_streaming.c
+    Simulation/Storage/file_validated_storage.c
+    Simulation/Storage/validated_stream_buffer.c
+)
+
+target_compile_features(
+    external_streaming_test
     PRIVATE
     c_std_11
 )

@@ -15,6 +15,8 @@
 
 #include "Storage/file_validated_storage.h"
 
+#include "Storage/validated_stream_buffer.h"
+
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -35,6 +37,9 @@
 #define SIM_NUM_AXES                 ROBOT_DOF
 #define SIM_CYCLE_TIME_NS            1000000U
 #define SIM_PV_GEOMETRY_CAPACITY     512U
+
+#define SIM_PREVIEW_BUFFER_SAMPLES 512U
+#define SIM_PREVIEW_REFILL_SAMPLES 256U
 /*
  * Host-only validated trajectory capacity.
  * 600000 samples = 10 minutes at the existing 1 ms sample period.
@@ -103,6 +108,9 @@ typedef struct
     uint32_t sample_index;
     uint32_t total_samples;
 
+        uint32_t next_storage_sample;
+    uint32_t refill_count;
+
     SimPreviewError error;
 
 } SimPreview;
@@ -155,6 +163,12 @@ static real_t pv_l_arc[SIM_PV_GEOMETRY_CAPACITY];
 static ADLSInfo pv_ik_scratch;
 
 static FileValidatedStorage file_validated_storage;
+
+static PvExecutionSample preview_buffer_storage[
+    SIM_PREVIEW_BUFFER_SAMPLES
+];
+
+static ValidatedStreamBuffer preview_buffer;
 
 static PathValidationStorage path_validation_storage;
 static ValidatedTrajectory validated_trajectory;
@@ -972,10 +986,96 @@ static void mock_preview_reset(
     );
 }
 
+static bool mock_preview_refill_buffer(
+    SimPreview *sim,
+    FileValidatedStorage *storage
+)
+{
+    if (
+        sim == NULL ||
+        storage == NULL
+    )
+    {
+        return false;
+    }
+
+    if (
+        sim->next_storage_sample >=
+        sim->total_samples
+    )
+    {
+        return true;
+    }
+
+    const size_t free_slots =
+        validated_stream_buffer_free(
+            &preview_buffer
+        );
+
+    if (
+        free_slots <
+        SIM_PREVIEW_REFILL_SAMPLES
+    )
+    {
+        return true;
+    }
+
+    uint32_t samples_to_load =
+        SIM_PREVIEW_REFILL_SAMPLES;
+
+    const uint32_t remaining =
+        sim->total_samples -
+        sim->next_storage_sample;
+
+    if (
+        samples_to_load >
+        remaining
+    )
+    {
+        samples_to_load =
+            remaining;
+    }
+
+    for (
+        uint32_t i = 0U;
+        i < samples_to_load;
+        ++i
+    )
+    {
+        PvExecutionSample sample;
+
+        if (
+            !file_validated_storage_read_sample(
+                sim->next_storage_sample,
+                &sample,
+                storage
+            )
+        )
+        {
+            return false;
+        }
+
+        if (
+            !validated_stream_buffer_push(
+                &preview_buffer,
+                &sample
+            )
+        )
+        {
+            return false;
+        }
+
+        ++sim->next_storage_sample;
+    }
+
+    ++sim->refill_count;
+
+    return true;
+}
 
 static void mock_preview_start(
     SimPreview *sim,
-    const FileValidatedStorage *storage
+    FileValidatedStorage *storage
 )
 {
     if (sim == NULL)
@@ -1006,11 +1106,43 @@ static void mock_preview_start(
         return;
     }
 
-    sim->active =
-        true;
-
     sim->total_samples =
         storage->metadata.sample_count;
+
+    if (
+    !validated_stream_buffer_init(
+        &preview_buffer,
+        preview_buffer_storage,
+        SIM_PREVIEW_BUFFER_SAMPLES
+    )
+)
+{
+    sim->failed = true;
+    sim->error = SIM_PREVIEW_ERR_STORAGE;
+    return;
+}
+
+
+/* Prefill 512 samples:
+ * 256 samples + another 256 samples.
+ */
+if (
+    !mock_preview_refill_buffer(
+        sim,
+        storage
+    ) ||
+    !mock_preview_refill_buffer(
+        sim,
+        storage
+    )
+)
+{
+    sim->failed = true;
+    sim->error = SIM_PREVIEW_ERR_STORAGE;
+    return;
+}
+
+sim->active = true;
 
     printf(
         "SIM PREVIEW: start %u validated CSP samples (welding OFF)\n",
@@ -1155,28 +1287,31 @@ static void mock_preview_step(
         return;
     }
 
-    PvExecutionSample sample;
+PvExecutionSample sample;
 
+/*
+ * Consume exactly one sample from the fixed RAM buffer.
+ */
 if (
-    !file_validated_storage_read_sample(
-        sim->sample_index,
-        &sample,
-        storage
+    !validated_stream_buffer_pop(
+        &preview_buffer,
+        &sample
     )
 )
 {
-    sim->active =
-        false;
+    sim->active = false;
+    sim->failed = true;
+    sim->error = SIM_PREVIEW_ERR_STORAGE;
 
-    sim->failed =
-        true;
+    printf(
+        "SIM PREVIEW: BUFFER UNDERRUN at sample %u\n",
+        sim->sample_index
+    );
 
-    sim->error =
-        SIM_PREVIEW_ERR_STORAGE;
+    fflush(stdout);
 
     return;
 }
-
 if (
     !mock_preview_write_sample(
         &sample,
@@ -1203,10 +1338,60 @@ if (
 
     ++sim->sample_index;
 
-    if (
-        sim->sample_index >=
-        sim->total_samples
+    /*
+ * Refill the RAM buffer whenever at least one
+ * 256-sample chunk fits.
+ */
+if (
+    !mock_preview_refill_buffer(
+        sim,
+        storage
     )
+)
+{
+    sim->active = false;
+    sim->failed = true;
+    sim->error = SIM_PREVIEW_ERR_STORAGE;
+
+    printf(
+        "SIM PREVIEW: external-storage refill failed\n"
+    );
+
+    fflush(stdout);
+
+    return;
+}
+
+if (
+    sim->sample_index >=
+    sim->total_samples
+)
+{
+    sim->active = false;
+    sim->complete = true;
+
+    printf(
+        "SIM PREVIEW: complete - welding remained OFF\n"
+    );
+
+    printf(
+        "SIM PREVIEW STREAM: samples=%u "
+        "refills=%u "
+        "high_water=%zu/%zu "
+        "underruns=%zu "
+        "remaining=%zu\n",
+        sim->sample_index,
+        sim->refill_count,
+        preview_buffer.high_water_mark,
+        preview_buffer.capacity,
+        preview_buffer.underrun_count,
+        validated_stream_buffer_count(
+            &preview_buffer
+        )
+    );
+
+    fflush(stdout);
+}
     {
         sim->active =
             false;
