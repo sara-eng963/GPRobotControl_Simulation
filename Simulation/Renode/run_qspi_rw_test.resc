@@ -1,0 +1,57 @@
+# Test 7.2 - STM32H7 QUADSPI NOR write / erase / read-back test.
+#
+# Run from the repository root:
+#
+#   ~/renode_portable/renode --console --disable-gui
+#
+# Then:
+#
+#   include @Simulation/Renode/run_qspi_rw_test.resc
+#
+# Result layout at 0x24000000:
+#   +0x00 magic
+#   +0x04 status
+#   +0x08 stage
+#   +0x0C flash status captured after Write Enable
+#   +0x10 mismatch index
+#   +0x14 final QSPI status register
+#   +0x18..+0x27 final 16-byte readback pattern
+
+mach create "qspi-rw-test"
+
+machine LoadPlatformDescription @Simulation/Renode/stm32h7_qspi_flash.repl
+
+sysbus LoadELF @Simulation/Renode/Firmware/qspi_rw_test/build/qspi_rw_test.elf
+
+emulation RunFor "0.02"
+pause
+
+echo "Test 7.2 result words:"
+
+echo "magic  (expect 0x51535257 = QSRW):"
+sysbus ReadDoubleWord 0x24000000
+
+echo "status (expect 0x50415353 = PASS):"
+sysbus ReadDoubleWord 0x24000004
+
+echo "stage  (expect 0x00000006 = all stages complete):"
+sysbus ReadDoubleWord 0x24000008
+
+echo "flash status after WREN (bit 1 should be set):"
+sysbus ReadDoubleWord 0x2400000C
+
+echo "mismatch index (expect 0xFFFFFFFF = none):"
+sysbus ReadDoubleWord 0x24000010
+
+echo "final QSPI status register:"
+sysbus ReadDoubleWord 0x24000014
+
+echo "final readback words (expect final pattern):"
+echo "  expect 0xEFBEADDE"
+sysbus ReadDoubleWord 0x24000018
+echo "  expect 0x78563412"
+sysbus ReadDoubleWord 0x2400001C
+echo "  expect 0xF0DEBC9A"
+sysbus ReadDoubleWord 0x24000020
+echo "  expect 0xF00FAA55"
+sysbus ReadDoubleWord 0x24000024
