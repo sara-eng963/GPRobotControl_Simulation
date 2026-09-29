@@ -38,14 +38,16 @@
 #define SIM_CYCLE_TIME_NS            1000000U
 #define SIM_PV_GEOMETRY_CAPACITY     512U
 
-#define SIM_PREVIEW_BUFFER_SAMPLES 512U
-#define SIM_PREVIEW_REFILL_SAMPLES 256U
+#define SIM_PREVIEW_BUFFER_SAMPLES  512U
+#define SIM_PREVIEW_REFILL_SAMPLES  256U
+
 /*
  * Host-only validated trajectory capacity.
  * 600000 samples = 10 minutes at the existing 1 ms sample period.
  *
- * This RAM-backed store belongs only to the PC simulator. It is NOT an STM32
- * RAM requirement; the real controller will provide its own storage backend.
+ * The complete validated trajectory is stored by the simulator's file-backed
+ * external-storage backend. Preview keeps only a fixed-size RAM streaming
+ * window, so trajectory duration does not determine Preview RAM usage.
  */
 #define SIM_PV_STORAGE_CAPACITY      600000U
 
@@ -108,7 +110,7 @@ typedef struct
     uint32_t sample_index;
     uint32_t total_samples;
 
-        uint32_t next_storage_sample;
+    uint32_t next_storage_sample;
     uint32_t refill_count;
 
     SimPreviewError error;
@@ -252,7 +254,7 @@ static float network_word_to_float(
 
 
 /* ============================================================================
- * VALIDATED TRAJECTORY RAM STORAGE
+ * VALIDATED TRAJECTORY STORAGE ACCESS
  * ============================================================================
  */
 
@@ -416,32 +418,32 @@ static void configure_state_dependencies(void)
             .ik_scratch = &pv_ik_scratch
         };
 
-   if (
-    !file_validated_storage_init(
-        &file_validated_storage,
-        "external_flash.bin",
-        SIM_PV_STORAGE_CAPACITY
+    if (
+        !file_validated_storage_init(
+            &file_validated_storage,
+            "external_flash.bin",
+            SIM_PV_STORAGE_CAPACITY
+        )
     )
-)
-{
-    fprintf(
-        stderr,
-        "Failed to initialize simulated external storage.\n"
-    );
-
-    exit(EXIT_FAILURE);
-}
-
-path_validation_storage =
-    (PathValidationStorage)
     {
-        .begin = file_validated_storage_begin,
-        .write_sample = file_validated_storage_write_sample,
-        .commit = file_validated_storage_commit,
-        .abort = file_validated_storage_abort,
-        .capacity_samples = SIM_PV_STORAGE_CAPACITY,
-        .context = &file_validated_storage
-    };
+        fprintf(
+            stderr,
+            "Failed to initialize simulated external storage.\n"
+        );
+
+        exit(EXIT_FAILURE);
+    }
+
+    path_validation_storage =
+        (PathValidationStorage)
+        {
+            .begin = file_validated_storage_begin,
+            .write_sample = file_validated_storage_write_sample,
+            .commit = file_validated_storage_commit,
+            .abort = file_validated_storage_abort,
+            .capacity_samples = SIM_PV_STORAGE_CAPACITY,
+            .context = &file_validated_storage
+        };
 
     memset(
         &validated_trajectory,
@@ -1110,39 +1112,48 @@ static void mock_preview_start(
         storage->metadata.sample_count;
 
     if (
-    !validated_stream_buffer_init(
-        &preview_buffer,
-        preview_buffer_storage,
-        SIM_PREVIEW_BUFFER_SAMPLES
+        !validated_stream_buffer_init(
+            &preview_buffer,
+            preview_buffer_storage,
+            SIM_PREVIEW_BUFFER_SAMPLES
+        )
     )
-)
-{
-    sim->failed = true;
-    sim->error = SIM_PREVIEW_ERR_STORAGE;
-    return;
-}
+    {
+        sim->failed =
+            true;
 
+        sim->error =
+            SIM_PREVIEW_ERR_STORAGE;
 
-/* Prefill 512 samples:
- * 256 samples + another 256 samples.
- */
-if (
-    !mock_preview_refill_buffer(
-        sim,
-        storage
-    ) ||
-    !mock_preview_refill_buffer(
-        sim,
-        storage
+        return;
+    }
+
+    /*
+     * Prime the 512-sample execution window with two 256-sample chunks.
+     * Short trajectories naturally stop once all available samples are loaded.
+     */
+    if (
+        !mock_preview_refill_buffer(
+            sim,
+            storage
+        ) ||
+        !mock_preview_refill_buffer(
+            sim,
+            storage
+        )
     )
-)
-{
-    sim->failed = true;
-    sim->error = SIM_PREVIEW_ERR_STORAGE;
-    return;
-}
+    {
+        sim->failed =
+            true;
 
-sim->active = true;
+        sim->error =
+            SIM_PREVIEW_ERR_STORAGE;
+
+        return;
+    }
+
+    sim->active =
+        true;
 
     printf(
         "SIM PREVIEW: start %u validated CSP samples (welding OFF)\n",
@@ -1287,37 +1298,46 @@ static void mock_preview_step(
         return;
     }
 
-PvExecutionSample sample;
+    PvExecutionSample sample;
 
-/*
- * Consume exactly one sample from the fixed RAM buffer.
- */
-if (
-    !validated_stream_buffer_pop(
-        &preview_buffer,
-        &sample
+    /*
+     * The 1 ms Preview cycle consumes only from the fixed RAM window.
+     * It never indexes the complete trajectory directly.
+     */
+    if (
+        !validated_stream_buffer_pop(
+            &preview_buffer,
+            &sample
+        )
     )
-)
-{
-    sim->active = false;
-    sim->failed = true;
-    sim->error = SIM_PREVIEW_ERR_STORAGE;
+    {
+        sim->active =
+            false;
 
-    printf(
-        "SIM PREVIEW: BUFFER UNDERRUN at sample %u\n",
-        sim->sample_index
-    );
+        sim->failed =
+            true;
 
-    fflush(stdout);
+        sim->error =
+            SIM_PREVIEW_ERR_STORAGE;
 
-    return;
-}
-if (
-    !mock_preview_write_sample(
-        &sample,
-        &runtime->last_wkc
+        printf(
+            "SIM PREVIEW: BUFFER UNDERRUN at sample %u\n",
+            sim->sample_index
+        );
+
+        fflush(
+            stdout
+        );
+
+        return;
+    }
+
+    if (
+        !mock_preview_write_sample(
+            &sample,
+            &runtime->last_wkc
+        )
     )
-)
     {
         sim->active =
             false;
@@ -1339,59 +1359,42 @@ if (
     ++sim->sample_index;
 
     /*
- * Refill the RAM buffer whenever at least one
- * 256-sample chunk fits.
- */
-if (
-    !mock_preview_refill_buffer(
-        sim,
-        storage
-    )
-)
-{
-    sim->active = false;
-    sim->failed = true;
-    sim->error = SIM_PREVIEW_ERR_STORAGE;
-
-    printf(
-        "SIM PREVIEW: external-storage refill failed\n"
-    );
-
-    fflush(stdout);
-
-    return;
-}
-
-if (
-    sim->sample_index >=
-    sim->total_samples
-)
-{
-    sim->active = false;
-    sim->complete = true;
-
-    printf(
-        "SIM PREVIEW: complete - welding remained OFF\n"
-    );
-
-    printf(
-        "SIM PREVIEW STREAM: samples=%u "
-        "refills=%u "
-        "high_water=%zu/%zu "
-        "underruns=%zu "
-        "remaining=%zu\n",
-        sim->sample_index,
-        sim->refill_count,
-        preview_buffer.high_water_mark,
-        preview_buffer.capacity,
-        preview_buffer.underrun_count,
-        validated_stream_buffer_count(
-            &preview_buffer
+     * Test 6B.3 deliberately performs a synchronous simulated-storage refill
+     * once a complete 256-sample chunk fits. A later timing/fault test will
+     * model storage latency and verify that the 1 ms execution loop cannot be
+     * starved by a slow external-memory backend.
+     */
+    if (
+        !mock_preview_refill_buffer(
+            sim,
+            storage
         )
-    );
+    )
+    {
+        sim->active =
+            false;
 
-    fflush(stdout);
-}
+        sim->failed =
+            true;
+
+        sim->error =
+            SIM_PREVIEW_ERR_STORAGE;
+
+        printf(
+            "SIM PREVIEW: external-storage refill failed\n"
+        );
+
+        fflush(
+            stdout
+        );
+
+        return;
+    }
+
+    if (
+        sim->sample_index >=
+        sim->total_samples
+    )
     {
         sim->active =
             false;
@@ -1401,6 +1404,26 @@ if (
 
         printf(
             "SIM PREVIEW: complete - welding remained OFF\n"
+        );
+
+        printf(
+            "SIM PREVIEW STREAM: samples=%u "
+            "refills=%u "
+            "high_water=%zu/%zu "
+            "pushed=%zu "
+            "popped=%zu "
+            "underruns=%zu "
+            "remaining=%zu\n",
+            sim->sample_index,
+            sim->refill_count,
+            preview_buffer.high_water_mark,
+            preview_buffer.capacity,
+            preview_buffer.total_pushed,
+            preview_buffer.total_popped,
+            preview_buffer.underrun_count,
+            validated_stream_buffer_count(
+                &preview_buffer
+            )
         );
 
         fflush(
@@ -2769,8 +2792,8 @@ static void SimulatorControlTask(
     ethercat_master_close();
 
     file_validated_storage_close(
-    &file_validated_storage
-);
+        &file_validated_storage
+    );
 
     if (runtime.telemetry_socket >= 0)
     {
@@ -2805,7 +2828,7 @@ static void SimulatorControlTask(
  *      KickCAT/SOEM
  *      desktop HMI UDP
  *      simulated hand guidance
- *      host RAM validated-trajectory storage
+ *      file-backed simulated external trajectory storage
  *      MATLAB telemetry
  * ============================================================================
  */
