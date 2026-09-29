@@ -32,7 +32,8 @@ OBJECTS := \
     $(BUILD_DIR)/startup.o \
     $(BUILD_DIR)/qspi_streaming_test.o \
     $(BUILD_DIR)/qspi_nor_validated_storage.o \
-    $(BUILD_DIR)/validated_stream_buffer.o
+    $(BUILD_DIR)/validated_stream_buffer.o \
+    $(BUILD_DIR)/freestanding_mem.o
 
 .PHONY: all clean
 
@@ -52,6 +53,9 @@ $(BUILD_DIR)/qspi_nor_validated_storage.o: ../../Storage/qspi_nor_validated_stor
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/validated_stream_buffer.o: ../../../Storage/validated_stream_buffer.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/freestanding_mem.o: freestanding_mem.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(TARGET).elf: $(OBJECTS) stm32h7_renode.ld
