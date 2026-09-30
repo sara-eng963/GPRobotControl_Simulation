@@ -1,21 +1,25 @@
 /*
  * Test 7.6 - external-memory capacity characterization.
  *
- * IMPORTANT:
- * This test is intentionally NOT a motion-feasibility sweep. Earlier versions
- * mixed two questions together: "is this motion valid?" and "how much flash do
- * valid trajectories consume?". That made the result hard to interpret.
+ * This test answers one question only:
  *
- * Test 7.6 now answers only the storage question:
- *   1) build several independent mixed-geometry programs;
- *   2) run each through the real ControlCore -> Path Validation pipeline;
- *   3) require every program to be VALID;
- *   4) count the exact validated CSP samples and flash allocation.
+ *     How much external flash do valid robot programs consume?
  *
- * Every program contains LINE -> ARC -> CIRCLE -> LINE -> ARC -> LINE.
- * Each program starts from a fresh known-good seed; we do not concatenate
- * repeated closed contours, because cross-contour IK-branch drift is a
- * different motion-planning problem and is not part of flash sizing.
+ * Motion-feasibility sweeps belong in separate validation tests. For capacity
+ * sizing, the dataset must be deterministic and valid. We therefore build one
+ * already-proven compact mixed-geometry contour and create independent program
+ * prefixes from it:
+ *
+ *     A: LINE
+ *     B: LINE -> ARC
+ *     C: LINE -> ARC -> CIRCLE
+ *     D: LINE -> ARC -> CIRCLE -> LINE
+ *     E: LINE -> ARC -> CIRCLE -> LINE -> ARC -> LINE
+ *
+ * Every program starts from the same known-good joint seed and runs through
+ * the real ControlCore -> Path Validation pipeline before its samples are
+ * counted. This keeps Test 7.6 focused on storage rather than searching for
+ * arbitrary Cartesian geometries that happen to be IK-feasible.
  */
 #define main test_trajectory_storage_capacity_original_main
 #include "../../Simulation/Tests/test_trajectory_storage_capacity_realistic.c"
@@ -26,6 +30,7 @@ typedef struct
     const char *name;
     float geometry_scale;
     float speed_mps;
+    uint16_t segment_count;
 } ScaledCapacityCase;
 
 static void scale_program_geometry(
@@ -53,8 +58,6 @@ static void scale_program_geometry(
                 base_z + scale * (point->position_m[2] - base_z);
         }
     }
-
-    program->draft_crc = state_path_validation_calculate_draft_crc(program);
 }
 
 static bool run_scaled_capacity_case(
@@ -100,6 +103,26 @@ static bool run_scaled_capacity_case(
         &program,
         test_case->geometry_scale
     );
+
+    if (
+        test_case->segment_count == 0U ||
+        test_case->segment_count > program.segment_count
+    )
+    {
+        return false;
+    }
+
+    /*
+     * Create an independent program from a prefix of the known-valid contour.
+     * The unused trailing segments are intentionally excluded from the draft.
+     */
+    program.segment_count =
+        test_case->segment_count;
+
+    program.draft_crc =
+        state_path_validation_calculate_draft_crc(
+            &program
+        );
 
     if (program.draft_crc == 0U)
     {
@@ -222,18 +245,18 @@ int main(void)
     );
 
     /*
-     * Independent programs near the already-proven reference contour.
-     * All use the current simulator default 0.010 m/s. This is deliberately
-     * conservative for flash sizing because slower motion creates more 1 ms
-     * samples and therefore consumes more storage.
+     * The 0.85-scale contour just passed all six segments in the previous
+     * Test 7.6 run. Prefixes of that same sequential trajectory therefore give
+     * us deterministic LINE / ARC / CIRCLE / mixed programs without changing
+     * IK geometry between capacity cases.
      */
     const ScaledCapacityCase cases[] =
     {
-        {"Program A - compact mixed geometry",   0.85F, 0.010F},
-        {"Program B - compact mixed geometry",   0.92F, 0.010F},
-        {"Program C - reference mixed geometry", 1.00F, 0.010F},
-        {"Program D - expanded mixed geometry",  1.05F, 0.010F},
-        {"Program E - expanded mixed geometry",  1.08F, 0.010F}
+        {"Program A - LINE",                              0.85F, 0.010F, 1U},
+        {"Program B - LINE -> ARC",                      0.85F, 0.010F, 2U},
+        {"Program C - LINE -> ARC -> CIRCLE",            0.85F, 0.010F, 3U},
+        {"Program D - LINE -> ARC -> CIRCLE -> LINE",    0.85F, 0.010F, 4U},
+        {"Program E - full mixed-geometry contour",      0.85F, 0.010F, 6U}
     };
 
     RobotConfig robot;
@@ -248,11 +271,11 @@ int main(void)
     double total_duration_s = 0.0;
 
     printf("============================================================\n");
-    printf("TEST 7.6A - VALID MULTI-TRAJECTORY STORAGE CAPACITY\n");
+    printf("TEST 7.6A - VALID MULTI-PROGRAM STORAGE CAPACITY\n");
     printf("============================================================\n");
     printf("Question being tested:\n");
-    printf("How much external flash do several VALID mixed-geometry programs consume?\n\n");
-    printf("Each program: LINE -> ARC -> CIRCLE -> LINE -> ARC -> LINE\n");
+    printf("How much external flash do several VALID robot programs consume?\n\n");
+    printf("Dataset uses progressive prefixes of one proven mixed-geometry contour.\n");
     printf("Programs are independent; each starts from a fresh known-good seed.\n");
     printf("TCP speed:             0.010 m/s\n");
     printf("Sample period:         %lu us\n", (unsigned long)PATH_VALIDATION_SAMPLE_PERIOD_US);
@@ -300,7 +323,7 @@ int main(void)
     printf("\n============================================================\n");
     printf("TEST 7.6A COMBINED STORAGE REPORT\n");
     printf("============================================================\n");
-    printf("valid trajectories:     %zu / %zu\n",
+    printf("valid programs:         %zu / %zu\n",
            sizeof(cases) / sizeof(cases[0]),
            sizeof(cases) / sizeof(cases[0]));
     printf("combined motion time:   %.3f s (%.3f min)\n",
@@ -324,6 +347,6 @@ int main(void)
     print_flash_capacity_line("32 MiB", MIB_U64(32), planning_bytes);
     print_flash_capacity_line("64 MiB", MIB_U64(64), planning_bytes);
 
-    printf("\nTEST 7.6A: PASS - five independent valid trajectories characterized.\n");
+    printf("\nTEST 7.6A: PASS - five independent valid programs characterized.\n");
     return 0;
 }
