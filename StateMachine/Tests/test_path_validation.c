@@ -3,8 +3,9 @@
  *
  * Test 7.6 lives with the other simulator/external-memory tests, while the
  * root CMakeLists.txt already exposes a conditional `path_validation_test`
- * target at this path. Include the Test 7.6 translation unit here so the
- * existing target can build the real Path Validation + ControlCore pipeline
- * without duplicating the test implementation.
+ * target at this path. Include the ControlCore declarations used directly by
+ * the capacity test before including its translation unit.
  */
+#include "../../ControlCore/Kinematics/control_fk.h"
+#include "../../ControlCore/Math/math3d.h"
 #include "../../Simulation/Tests/test_trajectory_storage_capacity.c"
