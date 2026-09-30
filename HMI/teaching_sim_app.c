@@ -8,11 +8,19 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #define TEACH_WINDOW_WIDTH   980
 #define TEACH_WINDOW_HEIGHT  720
+
+#define GIZMO_SHAFT_START_M  0.060F
+#define GIZMO_SHAFT_END_M    0.180F
+#define GIZMO_TIP_END_M      0.240F
+#define GIZMO_HIT_RADIUS_PX  16.0F
+#define TARGET_HIT_RADIUS_PX 48.0F
+
 
 typedef enum
 {
@@ -23,19 +31,24 @@ typedef enum
 
 } TeachView;
 
+
+typedef enum
+{
+    TEACH_DRAG_NONE = 0,
+    TEACH_DRAG_FREE,
+    TEACH_DRAG_X,
+    TEACH_DRAG_Y,
+    TEACH_DRAG_Z
+
+} TeachDragMode;
+
+
 static Vector3 robot_to_render(
     float x,
     float y,
     float z
 )
 {
-    /*
-     * Same convention used by the old HMI-Mock editor:
-     *
-     * robot X -> render +X
-     * robot Y -> render -Z
-     * robot Z -> render +Y
-     */
     return
         (Vector3)
         {
@@ -44,6 +57,7 @@ static Vector3 robot_to_render(
             -y
         };
 }
+
 
 static void render_to_robot(
     Vector3 p,
@@ -56,6 +70,73 @@ static void render_to_robot(
     if (y != NULL) *y = -p.z;
     if (z != NULL) *z = p.y;
 }
+
+
+static Vector3 drag_axis_render(
+    TeachDragMode mode
+)
+{
+    switch (mode)
+    {
+        case TEACH_DRAG_X:
+            return (Vector3){1.0F, 0.0F, 0.0F};
+
+        case TEACH_DRAG_Y:
+            return (Vector3){0.0F, 0.0F, -1.0F};
+
+        case TEACH_DRAG_Z:
+            return (Vector3){0.0F, 1.0F, 0.0F};
+
+        default:
+            return (Vector3){0.0F, 0.0F, 0.0F};
+    }
+}
+
+
+static int drag_axis_robot_index(
+    TeachDragMode mode
+)
+{
+    switch (mode)
+    {
+        case TEACH_DRAG_X: return 0;
+        case TEACH_DRAG_Y: return 1;
+        case TEACH_DRAG_Z: return 2;
+        default: return -1;
+    }
+}
+
+
+static Color drag_axis_color(
+    TeachDragMode mode
+)
+{
+    switch (mode)
+    {
+        case TEACH_DRAG_X: return RED;
+        case TEACH_DRAG_Y: return GREEN;
+        case TEACH_DRAG_Z: return BLUE;
+        default: return HMI_C_MUTED;
+    }
+}
+
+
+static Color brighten_color(
+    Color color
+)
+{
+    const int amount = 70;
+
+    return
+        (Color)
+        {
+            (unsigned char)((color.r + amount > 255) ? 255 : color.r + amount),
+            (unsigned char)((color.g + amount > 255) ? 255 : color.g + amount),
+            (unsigned char)((color.b + amount > 255) ? 255 : color.b + amount),
+            color.a
+        };
+}
+
 
 static Camera3D camera_for_view(
     TeachView view
@@ -89,7 +170,6 @@ static Camera3D camera_for_view(
 
             camera.projection =
                 CAMERA_ORTHOGRAPHIC;
-
             break;
 
         case TEACH_VIEW_FRONT:
@@ -101,7 +181,6 @@ static Camera3D camera_for_view(
 
             camera.projection =
                 CAMERA_ORTHOGRAPHIC;
-
             break;
 
         case TEACH_VIEW_SIDE:
@@ -113,19 +192,18 @@ static Camera3D camera_for_view(
 
             camera.projection =
                 CAMERA_ORTHOGRAPHIC;
-
             break;
 
         case TEACH_VIEW_PERSPECTIVE:
         default:
             camera.position =
                 (Vector3){1.55F, 1.15F, 1.55F};
-
             break;
     }
 
     return camera;
 }
+
 
 static bool ray_plane_intersection(
     Ray ray,
@@ -152,8 +230,7 @@ static bool ray_plane_intersection(
                 normal,
                 ray.position
             )
-        )
-        /
+        ) /
         denominator;
 
     if (t < 0.0F)
@@ -176,6 +253,7 @@ static bool ray_plane_intersection(
     return true;
 }
 
+
 static float clamp_local(
     float value,
     float minimum,
@@ -186,6 +264,7 @@ static float clamp_local(
     if (value > maximum) return maximum;
     return value;
 }
+
 
 static Ray viewport_mouse_ray(
     Vector2 mouse,
@@ -237,28 +316,19 @@ static Vector3 drag_plane_normal_for_view(
 {
     if (view == TEACH_VIEW_TOP)
     {
-        return
-            (Vector3){0.0F, 1.0F, 0.0F};
+        return (Vector3){0.0F, 1.0F, 0.0F};
     }
 
     if (view == TEACH_VIEW_FRONT)
     {
-        return
-            (Vector3){0.0F, 0.0F, 1.0F};
+        return (Vector3){0.0F, 0.0F, 1.0F};
     }
 
     if (view == TEACH_VIEW_SIDE)
     {
-        return
-            (Vector3){1.0F, 0.0F, 0.0F};
+        return (Vector3){1.0F, 0.0F, 0.0F};
     }
 
-    /*
-     * Perspective dragging uses a plane facing the camera and passing through
-     * the guide target. This gives natural two-axis mouse dragging while the
-     * orthographic presets remain available when an exact robot plane is
-     * preferred.
-     */
     return
         Vector3Normalize(
             Vector3Subtract(
@@ -269,31 +339,229 @@ static Vector3 drag_plane_normal_for_view(
 }
 
 
+static float point_segment_distance(
+    Vector2 point,
+    Vector2 start,
+    Vector2 end
+)
+{
+    const float dx =
+        end.x - start.x;
+
+    const float dy =
+        end.y - start.y;
+
+    const float length_squared =
+        dx * dx + dy * dy;
+
+    if (length_squared < 1.0e-6F)
+    {
+        const float px =
+            point.x - start.x;
+
+        const float py =
+            point.y - start.y;
+
+        return sqrtf(px * px + py * py);
+    }
+
+    float t =
+        (
+            (point.x - start.x) * dx +
+            (point.y - start.y) * dy
+        ) /
+        length_squared;
+
+    t = clamp_local(t, 0.0F, 1.0F);
+
+    const float closest_x =
+        start.x + t * dx;
+
+    const float closest_y =
+        start.y + t * dy;
+
+    const float px =
+        point.x - closest_x;
+
+    const float py =
+        point.y - closest_y;
+
+    return sqrtf(px * px + py * py);
+}
+
+
+static TeachDragMode pick_gizmo_axis(
+    Vector2 mouse,
+    Rectangle viewport,
+    Camera3D camera,
+    Vector3 origin
+)
+{
+    const TeachDragMode axes[] =
+    {
+        TEACH_DRAG_X,
+        TEACH_DRAG_Y,
+        TEACH_DRAG_Z
+    };
+
+    TeachDragMode best_axis =
+        TEACH_DRAG_NONE;
+
+    float best_distance =
+        GIZMO_HIT_RADIUS_PX;
+
+    for (size_t i = 0U;
+         i < sizeof(axes) / sizeof(axes[0]);
+         ++i)
+    {
+        const Vector3 direction =
+            drag_axis_render(
+                axes[i]
+            );
+
+        const Vector3 shaft_start =
+            Vector3Add(
+                origin,
+                Vector3Scale(
+                    direction,
+                    GIZMO_SHAFT_START_M
+                )
+            );
+
+        const Vector3 tip_end =
+            Vector3Add(
+                origin,
+                Vector3Scale(
+                    direction,
+                    GIZMO_TIP_END_M
+                )
+            );
+
+        const Vector2 start_screen =
+            viewport_world_to_screen(
+                shaft_start,
+                viewport,
+                camera
+            );
+
+        const Vector2 end_screen =
+            viewport_world_to_screen(
+                tip_end,
+                viewport,
+                camera
+            );
+
+        const float screen_length =
+            Vector2Distance(
+                start_screen,
+                end_screen
+            );
+
+        if (screen_length < 18.0F)
+        {
+            continue;
+        }
+
+        const float distance =
+            point_segment_distance(
+                mouse,
+                start_screen,
+                end_screen
+            );
+
+        if (distance < best_distance)
+        {
+            best_distance = distance;
+            best_axis = axes[i];
+        }
+    }
+
+    return best_axis;
+}
+
+
+static bool begin_axis_drag(
+    TeachDragMode mode,
+    Rectangle viewport,
+    Camera3D camera,
+    Vector3 origin,
+    Vector2 *screen_direction,
+    float *robot_units_per_pixel
+)
+{
+    const Vector3 direction =
+        drag_axis_render(
+            mode
+        );
+
+    const Vector3 end =
+        Vector3Add(
+            origin,
+            Vector3Scale(
+                direction,
+                GIZMO_TIP_END_M
+            )
+        );
+
+    const Vector2 start_screen =
+        viewport_world_to_screen(
+            origin,
+            viewport,
+            camera
+        );
+
+    const Vector2 end_screen =
+        viewport_world_to_screen(
+            end,
+            viewport,
+            camera
+        );
+
+    const float dx =
+        end_screen.x - start_screen.x;
+
+    const float dy =
+        end_screen.y - start_screen.y;
+
+    const float screen_length =
+        sqrtf(dx * dx + dy * dy);
+
+    if (
+        screen_length < 18.0F ||
+        screen_direction == NULL ||
+        robot_units_per_pixel == NULL
+    )
+    {
+        return false;
+    }
+
+    screen_direction->x =
+        dx / screen_length;
+
+    screen_direction->y =
+        dy / screen_length;
+
+    *robot_units_per_pixel =
+        GIZMO_TIP_END_M /
+        screen_length;
+
+    return true;
+}
+
+
 static void send_target(
     HmiProtocol *protocol,
     float target[3]
 )
 {
     target[0] =
-        clamp_local(
-            target[0],
-            -0.90F,
-            0.90F
-        );
+        clamp_local(target[0], -0.90F, 0.90F);
 
     target[1] =
-        clamp_local(
-            target[1],
-            -0.90F,
-            0.90F
-        );
+        clamp_local(target[1], -0.90F, 0.90F);
 
     target[2] =
-        clamp_local(
-            target[2],
-            -0.20F,
-            1.20F
-        );
+        clamp_local(target[2], -0.20F, 1.20F);
 
     (void)hmi_protocol_send_guidance_pose(
         protocol,
@@ -303,10 +571,86 @@ static void send_target(
     );
 }
 
+
+static void draw_gizmo_arrow(
+    Vector3 origin,
+    TeachDragMode mode,
+    bool highlighted
+)
+{
+    const Vector3 direction =
+        drag_axis_render(
+            mode
+        );
+
+    Color color =
+        drag_axis_color(
+            mode
+        );
+
+    if (highlighted)
+    {
+        color =
+            brighten_color(
+                color
+            );
+    }
+
+    const float shaft_radius =
+        highlighted ? 0.009F : 0.006F;
+
+    const Vector3 shaft_start =
+        Vector3Add(
+            origin,
+            Vector3Scale(
+                direction,
+                GIZMO_SHAFT_START_M
+            )
+        );
+
+    const Vector3 shaft_end =
+        Vector3Add(
+            origin,
+            Vector3Scale(
+                direction,
+                GIZMO_SHAFT_END_M
+            )
+        );
+
+    const Vector3 tip_end =
+        Vector3Add(
+            origin,
+            Vector3Scale(
+                direction,
+                GIZMO_TIP_END_M
+            )
+        );
+
+    DrawCylinderEx(
+        shaft_start,
+        shaft_end,
+        shaft_radius,
+        shaft_radius,
+        12,
+        color
+    );
+
+    DrawCylinderEx(
+        shaft_end,
+        tip_end,
+        highlighted ? 0.026F : 0.022F,
+        0.0F,
+        12,
+        color
+    );
+}
+
+
 static void draw_scene(
     const HmiStatus *status,
     const float target[3],
-    Camera3D camera
+    TeachDragMode hovered_axis,
+    TeachDragMode active_drag
 )
 {
     DrawGrid(
@@ -323,13 +667,13 @@ static void draw_scene(
     DrawLine3D(
         (Vector3){0.0F, 0.0F, 0.0F},
         (Vector3){0.0F, 0.65F, 0.0F},
-        GREEN
+        BLUE
     );
 
     DrawLine3D(
         (Vector3){0.0F, 0.0F, 0.0F},
         (Vector3){0.0F, 0.0F, -0.65F},
-        BLUE
+        GREEN
     );
 
     const Vector3 actual =
@@ -366,12 +710,31 @@ static void draw_scene(
         HMI_C_MUTED
     );
 
-    for (
-        uint32_t i = 0U;
-        i < status->recorded_count &&
-        i < HMI_MAX_RECORDED_POINTS;
-        ++i
-    )
+    draw_gizmo_arrow(
+        desired,
+        TEACH_DRAG_X,
+        hovered_axis == TEACH_DRAG_X ||
+        active_drag == TEACH_DRAG_X
+    );
+
+    draw_gizmo_arrow(
+        desired,
+        TEACH_DRAG_Y,
+        hovered_axis == TEACH_DRAG_Y ||
+        active_drag == TEACH_DRAG_Y
+    );
+
+    draw_gizmo_arrow(
+        desired,
+        TEACH_DRAG_Z,
+        hovered_axis == TEACH_DRAG_Z ||
+        active_drag == TEACH_DRAG_Z
+    );
+
+    for (uint32_t i = 0U;
+         i < status->recorded_count &&
+         i < HMI_MAX_RECORDED_POINTS;
+         ++i)
     {
         const Vector3 recorded =
             robot_to_render(
@@ -402,9 +765,74 @@ static void draw_scene(
             );
         }
     }
-
-    (void)camera;
 }
+
+
+static void draw_gizmo_labels(
+    Vector3 target_render,
+    Rectangle viewport,
+    Camera3D camera,
+    TeachDragMode hovered_axis,
+    TeachDragMode active_drag
+)
+{
+    const TeachDragMode axes[] =
+    {
+        TEACH_DRAG_X,
+        TEACH_DRAG_Y,
+        TEACH_DRAG_Z
+    };
+
+    const char *labels[] =
+    {
+        "X",
+        "Y",
+        "Z"
+    };
+
+    for (size_t i = 0U;
+         i < sizeof(axes) / sizeof(axes[0]);
+         ++i)
+    {
+        const Vector3 endpoint =
+            Vector3Add(
+                target_render,
+                Vector3Scale(
+                    drag_axis_render(axes[i]),
+                    GIZMO_TIP_END_M + 0.025F
+                )
+            );
+
+        const Vector2 screen =
+            viewport_world_to_screen(
+                endpoint,
+                viewport,
+                camera
+            );
+
+        Color color =
+            drag_axis_color(
+                axes[i]
+            );
+
+        if (
+            hovered_axis == axes[i] ||
+            active_drag == axes[i]
+        )
+        {
+            color = brighten_color(color);
+        }
+
+        DrawText(
+            labels[i],
+            (int)screen.x - 5,
+            (int)screen.y - 9,
+            18,
+            color
+        );
+    }
+}
+
 
 int teaching_sim_app_run(void)
 {
@@ -453,8 +881,8 @@ int teaching_sim_app_run(void)
     bool target_initialized =
         false;
 
-    bool dragging_target =
-        false;
+    TeachDragMode active_drag =
+        TEACH_DRAG_NONE;
 
     Vector3 drag_plane_normal =
         (Vector3){0.0F, 1.0F, 0.0F};
@@ -462,11 +890,18 @@ int teaching_sim_app_run(void)
     float drag_plane_distance =
         0.0F;
 
-    /*
-     * Mouse motion renders locally at full frame rate, while guidance commands
-     * are rate-limited so the simulator does not restart IK/trajectory work on
-     * every Raylib frame.
-     */
+    Vector2 drag_start_mouse =
+        {0.0F, 0.0F};
+
+    Vector2 drag_axis_screen_direction =
+        {0.0F, 0.0F};
+
+    float drag_robot_units_per_pixel =
+        0.0F;
+
+    float drag_start_target[3] =
+        {0.0F, 0.0F, 0.0F};
+
     double last_guidance_send_time =
         -1.0;
 
@@ -503,7 +938,7 @@ int teaching_sim_app_run(void)
                 true;
         }
 
-        Vector2 mouse =
+        const Vector2 mouse =
             GetMousePosition();
 
         BeginDrawing();
@@ -512,7 +947,7 @@ int teaching_sim_app_run(void)
             HMI_C_BG
         );
 
-        Rectangle viewport =
+        const Rectangle viewport =
         {
             28.0F,
             118.0F,
@@ -520,16 +955,16 @@ int teaching_sim_app_run(void)
             540.0F
         };
 
-        Rectangle perspectiveButton =
+        const Rectangle perspectiveButton =
             {28.0F, 62.0F, 128.0F, 38.0F};
 
-        Rectangle topButton =
+        const Rectangle topButton =
             {166.0F, 62.0F, 92.0F, 38.0F};
 
-        Rectangle frontButton =
+        const Rectangle frontButton =
             {268.0F, 62.0F, 92.0F, 38.0F};
 
-        Rectangle sideButton =
+        const Rectangle sideButton =
             {370.0F, 62.0F, 92.0F, 38.0F};
 
         if (
@@ -545,8 +980,7 @@ int teaching_sim_app_run(void)
             )
         )
         {
-            view =
-                TEACH_VIEW_PERSPECTIVE;
+            view = TEACH_VIEW_PERSPECTIVE;
         }
 
         if (
@@ -562,8 +996,7 @@ int teaching_sim_app_run(void)
             )
         )
         {
-            view =
-                TEACH_VIEW_TOP;
+            view = TEACH_VIEW_TOP;
         }
 
         if (
@@ -579,8 +1012,7 @@ int teaching_sim_app_run(void)
             )
         )
         {
-            view =
-                TEACH_VIEW_FRONT;
+            view = TEACH_VIEW_FRONT;
         }
 
         if (
@@ -596,11 +1028,10 @@ int teaching_sim_app_run(void)
             )
         )
         {
-            view =
-                TEACH_VIEW_SIDE;
+            view = TEACH_VIEW_SIDE;
         }
 
-        Camera3D camera =
+        const Camera3D camera =
             camera_for_view(
                 view
             );
@@ -611,20 +1042,6 @@ int teaching_sim_app_run(void)
             !status->estop_active &&
             !status->paused;
 
-        /*
-         * Drag the BLUE guide target to simulate hand guiding.
-         *
-         * TOP / FRONT / SIDE:
-         *     drag in that robot-coordinate plane while the third coordinate
-         *     stays fixed.
-         *
-         * PERSPECTIVE:
-         *     drag in a camera-facing plane through the current target.
-         *
-         * RECORD still happens only from the real HMI window; this window
-         * merely moves the simulated robot before the Teaching state captures
-         * actual A6 feedback.
-         */
         const Vector3 target_render =
             robot_to_render(
                 target[0],
@@ -639,16 +1056,29 @@ int teaching_sim_app_run(void)
                 camera
             );
 
-        const float target_hit_radius_px =
-            64.0F;
+        TeachDragMode hovered_axis =
+            TEACH_DRAG_NONE;
+
+        if (
+            teaching_active &&
+            active_drag == TEACH_DRAG_NONE &&
+            CheckCollisionPointRec(mouse, viewport)
+        )
+        {
+            hovered_axis =
+                pick_gizmo_axis(
+                    mouse,
+                    viewport,
+                    camera,
+                    target_render
+                );
+        }
 
         const bool mouse_near_target =
             Vector2Distance(
                 mouse,
                 target_screen
-            )
-            <=
-            target_hit_radius_px;
+            ) <= TARGET_HIT_RADIUS_PX;
 
         if (
             IsMouseButtonReleased(
@@ -658,13 +1088,9 @@ int teaching_sim_app_run(void)
         {
             if (
                 teaching_active &&
-                dragging_target
+                active_drag != TEACH_DRAG_NONE
             )
             {
-                /*
-                 * Always deliver the final mouse position even if the last
-                 * frame landed between rate-limited updates.
-                 */
                 send_target(
                     &protocol,
                     target
@@ -674,73 +1100,139 @@ int teaching_sim_app_run(void)
                     GetTime();
             }
 
-            dragging_target =
-                false;
+            active_drag =
+                TEACH_DRAG_NONE;
         }
 
         if (
             teaching_active &&
-            !dragging_target &&
+            active_drag == TEACH_DRAG_NONE &&
             IsMouseButtonPressed(
                 MOUSE_BUTTON_LEFT
             ) &&
             CheckCollisionPointRec(
                 mouse,
                 viewport
-            ) &&
-            mouse_near_target
+            )
         )
         {
-            dragging_target =
-                true;
+            if (hovered_axis != TEACH_DRAG_NONE)
+            {
+                Vector2 screen_direction;
+                float robot_units_per_pixel;
 
-            drag_plane_normal =
-                drag_plane_normal_for_view(
-                    view,
-                    camera
-                );
+                if (
+                    begin_axis_drag(
+                        hovered_axis,
+                        viewport,
+                        camera,
+                        target_render,
+                        &screen_direction,
+                        &robot_units_per_pixel
+                    )
+                )
+                {
+                    active_drag = hovered_axis;
+                    drag_start_mouse = mouse;
+                    drag_axis_screen_direction = screen_direction;
+                    drag_robot_units_per_pixel = robot_units_per_pixel;
 
-            drag_plane_distance =
-                Vector3DotProduct(
-                    drag_plane_normal,
-                    target_render
-                );
+                    memcpy(
+                        drag_start_target,
+                        target,
+                        sizeof(drag_start_target)
+                    );
+                }
+            }
+            else if (mouse_near_target)
+            {
+                active_drag =
+                    TEACH_DRAG_FREE;
+
+                drag_plane_normal =
+                    drag_plane_normal_for_view(
+                        view,
+                        camera
+                    );
+
+                drag_plane_distance =
+                    Vector3DotProduct(
+                        drag_plane_normal,
+                        target_render
+                    );
+            }
         }
 
         if (
             teaching_active &&
-            dragging_target &&
+            active_drag != TEACH_DRAG_NONE &&
             IsMouseButtonDown(
                 MOUSE_BUTTON_LEFT
             )
         )
         {
-            const Ray ray =
-                viewport_mouse_ray(
-                    mouse,
-                    viewport,
-                    camera
+            bool target_changed =
+                false;
+
+            const int axis_index =
+                drag_axis_robot_index(
+                    active_drag
                 );
 
-            Vector3 hit =
-                target_render;
-
-            if (
-                ray_plane_intersection(
-                    ray,
-                    drag_plane_normal,
-                    drag_plane_distance,
-                    &hit
-                )
-            )
+            if (axis_index >= 0)
             {
-                render_to_robot(
-                    hit,
-                    &target[0],
-                    &target[1],
-                    &target[2]
-                );
+                const float mouse_delta_x =
+                    mouse.x - drag_start_mouse.x;
 
+                const float mouse_delta_y =
+                    mouse.y - drag_start_mouse.y;
+
+                const float projected_pixels =
+                    mouse_delta_x * drag_axis_screen_direction.x +
+                    mouse_delta_y * drag_axis_screen_direction.y;
+
+                target[axis_index] =
+                    drag_start_target[axis_index] +
+                    projected_pixels * drag_robot_units_per_pixel;
+
+                target_changed =
+                    true;
+            }
+            else if (active_drag == TEACH_DRAG_FREE)
+            {
+                const Ray ray =
+                    viewport_mouse_ray(
+                        mouse,
+                        viewport,
+                        camera
+                    );
+
+                Vector3 hit =
+                    target_render;
+
+                if (
+                    ray_plane_intersection(
+                        ray,
+                        drag_plane_normal,
+                        drag_plane_distance,
+                        &hit
+                    )
+                )
+                {
+                    render_to_robot(
+                        hit,
+                        &target[0],
+                        &target[1],
+                        &target[2]
+                    );
+
+                    target_changed =
+                        true;
+                }
+            }
+
+            if (target_changed)
+            {
                 const double now =
                     GetTime();
 
@@ -771,7 +1263,7 @@ int teaching_sim_app_run(void)
         );
 
         hmi_ui_text(
-            "Drag the BLUE target freely; the robot follows. RECORD stays on the real HMI.",
+            "Drag X / Y / Z arrows for constrained motion; drag the sphere for free motion.",
             28.0F,
             48.0F,
             12.5F,
@@ -800,14 +1292,27 @@ int teaching_sim_app_run(void)
         draw_scene(
             status,
             target,
-            camera
+            hovered_axis,
+            active_drag
         );
 
         EndMode3D();
 
+        draw_gizmo_labels(
+            robot_to_render(
+                target[0],
+                target[1],
+                target[2]
+            ),
+            viewport,
+            camera,
+            hovered_axis,
+            active_drag
+        );
+
         EndScissorMode();
 
-        Rectangle monitor =
+        const Rectangle monitor =
         {
             728.0F,
             118.0F,
@@ -1034,7 +1539,7 @@ int teaching_sim_app_run(void)
 
         hmi_ui_text(
             teaching_active
-                ? "Drag BLUE target to guide robot"
+                ? "Drag an axis arrow or sphere"
                 : "Press START on main HMI",
             746.0F,
             532.0F,
@@ -1044,7 +1549,7 @@ int teaching_sim_app_run(void)
         );
 
         hmi_ui_text(
-            "Yellow = recorded point",
+            "Red X / Green Y / Blue Z",
             746.0F,
             558.0F,
             11.0F,
@@ -1053,7 +1558,7 @@ int teaching_sim_app_run(void)
         );
 
         hmi_ui_text(
-            "Green = actual TCP",
+            "Yellow = recorded point",
             746.0F,
             580.0F,
             11.0F,
@@ -1062,7 +1567,7 @@ int teaching_sim_app_run(void)
         );
 
         hmi_ui_text(
-            "Blue wire = drag target",
+            "Green sphere = actual TCP",
             746.0F,
             602.0F,
             11.0F,
