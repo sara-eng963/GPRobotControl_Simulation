@@ -5,32 +5,14 @@
 #include <stdio.h>
 #include <string.h>
 
-/*
- * SOEM EtherCAT state values.
- *
- * They remain implementation details of the SOEM-backed communication layer;
- * main.c no longer needs to include soem/soem.h just to inspect EtherCAT state.
- */
+/* SOEM state constants remain private to the transport implementation. */
 #include "soem/soem.h"
 
 
-/* ============================================================================
- *  MODULE STATE
- * ============================================================================
- */
-
 static EtherCATMasterConfig master_config;
-
 static EtherCATBusInfo bus_info;
+static bool configured = false;
 
-static bool configured =
-    false;
-
-
-/* ============================================================================
- *  INITIALIZATION
- * ============================================================================
- */
 
 bool ethercat_master_init(
     const EtherCATMasterConfig *config
@@ -40,27 +22,15 @@ bool ethercat_master_init(
         config == NULL ||
         config->interfaceName == NULL ||
         config->expectedSlaveCount <= 0 ||
-        config->cycleTimeNs == 0
+        config->cycleTimeNs == 0U
     )
     {
         return false;
     }
 
-
-    master_config =
-        *config;
-
-
-    memset(
-        &bus_info,
-        0,
-        sizeof(bus_info)
-    );
-
-
-    configured =
-        true;
-
+    master_config = *config;
+    memset(&bus_info, 0, sizeof(bus_info));
+    configured = true;
 
     return true;
 }
@@ -73,41 +43,18 @@ bool ethercat_master_open(void)
         return false;
     }
 
+    printf("Opening SOEM on %s...\n", master_config.interfaceName);
 
-    printf(
-        "Opening SOEM on %s...\n",
-        master_config.interfaceName
-    );
-
-
-    if (
-        !soem_backend_open(
-            master_config.interfaceName
-        )
-    )
+    if (!soem_backend_open(master_config.interfaceName))
     {
-        printf(
-            "ERROR: Could not open %s\n",
-            master_config.interfaceName
-        );
-
+        printf("ERROR: Could not open %s\n", master_config.interfaceName);
         return false;
     }
 
-
-    printf(
-        "SOEM initialized successfully\n"
-    );
-
-
+    printf("SOEM initialized successfully\n");
     return true;
 }
 
-
-/* ============================================================================
- *  DISCOVERY
- * ============================================================================
- */
 
 int ethercat_master_scan(void)
 {
@@ -116,75 +63,40 @@ int ethercat_master_scan(void)
         return 0;
     }
 
+    printf("\nScanning EtherCAT bus...\n");
 
-    printf(
-        "\nScanning EtherCAT bus...\n"
-    );
+    bus_info.slaveCount = soem_backend_scan();
 
-
-    bus_info.slaveCount =
-        soem_backend_scan();
-
-
-    if (
-        bus_info.slaveCount <= 0
-    )
+    if (bus_info.slaveCount <= 0)
     {
-        printf(
-            "ERROR: No EtherCAT slaves found\n"
-        );
-
+        printf("ERROR: No EtherCAT slaves found\n");
         return bus_info.slaveCount;
     }
 
+    printf("%d EtherCAT slave(s) found\n", bus_info.slaveCount);
 
-    printf(
-        "%d EtherCAT slave(s) found\n",
-        bus_info.slaveCount
-    );
-
-
-    for (int slave = 1;
-     slave <= bus_info.slaveCount;
-     slave++)
-{
-    printf(
-        "Slave %d: %s\n",
-        slave,
-        soem_backend_slave_name(
-            slave
-        )
-    );
-
-
-    EtherCATSlaveIdentity identity;
-
-
-    if (
-        ethercat_master_slave_identity(
-            slave,
-            &identity
-        )
-    )
+    for (int slave = 1; slave <= bus_info.slaveCount; ++slave)
     {
-        printf(
-            "  Vendor ID    : 0x%08lX\n"
-            "  Product Code : 0x%08lX\n"
-            "  Revision     : 0x%08lX\n"
-            "  Serial Number: 0x%08lX\n",
-            (unsigned long)identity.vendorId,
-            (unsigned long)identity.productCode,
-            (unsigned long)identity.revision,
-            (unsigned long)identity.serialNumber
-        );
+        printf("Slave %d: %s\n", slave, soem_backend_slave_name(slave));
+
+        EtherCATSlaveIdentity identity;
+
+        if (ethercat_master_slave_identity(slave, &identity))
+        {
+            printf(
+                "  Vendor ID    : 0x%08lX\n"
+                "  Product Code : 0x%08lX\n"
+                "  Revision     : 0x%08lX\n"
+                "  Serial Number: 0x%08lX\n",
+                (unsigned long)identity.vendorId,
+                (unsigned long)identity.productCode,
+                (unsigned long)identity.revision,
+                (unsigned long)identity.serialNumber
+            );
+        }
     }
-}
 
-
-    if (
-        bus_info.slaveCount !=
-        master_config.expectedSlaveCount
-    )
+    if (bus_info.slaveCount != master_config.expectedSlaveCount)
     {
         printf(
             "\nERROR: Expected %d slaves but found %d\n",
@@ -193,28 +105,22 @@ int ethercat_master_scan(void)
         );
     }
 
-
-    return
-        bus_info.slaveCount;
+    return bus_info.slaveCount;
 }
 
 
 const EtherCATBusInfo *ethercat_master_info(void)
 {
-    return
-        &bus_info;
+    return &bus_info;
 }
 
 
-const char *ethercat_master_slave_name(
-    int slave
-)
+const char *ethercat_master_slave_name(int slave)
 {
-    return
-        soem_backend_slave_name(
-            slave
-        );
+    return soem_backend_slave_name(slave);
 }
+
+
 bool ethercat_master_slave_identity(
     int slave,
     EtherCATSlaveIdentity *identity
@@ -229,64 +135,34 @@ bool ethercat_master_slave_identity(
         return false;
     }
 
-
-    return
-        soem_backend_slave_identity(
-            slave,
-            &identity->vendorId,
-            &identity->productCode,
-            &identity->revision,
-            &identity->serialNumber
-        );
+    return soem_backend_slave_identity(
+        slave,
+        &identity->vendorId,
+        &identity->productCode,
+        &identity->revision,
+        &identity->serialNumber
+    );
 }
 
 
-/* ============================================================================
- *  PDO MAPPING
- * ============================================================================
- */
-
 int ethercat_master_map_pdos(void)
 {
-    printf(
-        "\nMapping PDOs...\n"
-    );
+    printf("\nMapping PDOs...\n");
 
+    bus_info.mappedBytes = soem_backend_map_pdos();
+    bus_info.outputBytes = soem_backend_output_bytes();
+    bus_info.inputBytes = soem_backend_input_bytes();
 
-    bus_info.mappedBytes =
-        soem_backend_map_pdos();
-
-
-    bus_info.outputBytes =
-        soem_backend_output_bytes();
-
-
-    bus_info.inputBytes =
-        soem_backend_input_bytes();
-
-
-    printf(
-        "Mapped bytes: %d\n",
-        bus_info.mappedBytes
-    );
-
-
+    printf("Mapped bytes: %d\n", bus_info.mappedBytes);
     printf(
         "Outputs: %d bytes | Inputs: %d bytes\n",
         bus_info.outputBytes,
         bus_info.inputBytes
     );
 
-
-    return
-        bus_info.mappedBytes;
+    return bus_info.mappedBytes;
 }
 
-
-/* ============================================================================
- *  SDO ACCESS
- * ============================================================================
- */
 
 int ethercat_master_sdo_write(
     int slave,
@@ -296,14 +172,13 @@ int ethercat_master_sdo_write(
     const void *data
 )
 {
-    return
-        soem_backend_sdo_write(
-            slave,
-            index,
-            subindex,
-            size,
-            data
-        );
+    return soem_backend_sdo_write(
+        slave,
+        index,
+        subindex,
+        size,
+        data
+    );
 }
 
 
@@ -315,68 +190,47 @@ int ethercat_master_sdo_read(
     void *data
 )
 {
-    return
-        soem_backend_sdo_read(
-            slave,
-            index,
-            subindex,
-            size,
-            data
-        );
+    return soem_backend_sdo_read(
+        slave,
+        index,
+        subindex,
+        size,
+        data
+    );
 }
 
 
 bool ethercat_master_has_error(void)
 {
-    return
-        soem_backend_has_error();
+    return soem_backend_has_error();
 }
 
 
 const char *ethercat_master_pop_error_string(void)
 {
-    return
-        soem_backend_pop_error_string();
+    return soem_backend_pop_error_string();
 }
 
 
-/* ============================================================================
- *  DISTRIBUTED CLOCKS
- * ============================================================================
- */
-
 bool ethercat_master_configure_distributed_clocks(void)
 {
-    printf(
-        "\nConfiguring Distributed Clocks...\n"
-    );
+    printf("\nConfiguring Distributed Clocks...\n");
 
-
-    bus_info.dcFound =
-        soem_backend_configure_dc();
-
+    bus_info.dcFound = soem_backend_configure_dc();
 
     printf(
         "DC-capable bus: %s\n",
         bus_info.dcFound ? "YES" : "NO"
     );
 
-
-    for (int slave = 1;
-         slave <= bus_info.slaveCount;
-         slave++)
+    for (int slave = 1; slave <= bus_info.slaveCount; ++slave)
     {
-        if (
-            soem_backend_slave_has_dc(
-                slave
-            )
-        )
+        if (soem_backend_slave_has_dc(slave))
         {
             printf(
                 "Slave %d: DC supported -> requesting 1 ms SYNC0\n",
                 slave
             );
-
 
             soem_backend_sync0(
                 slave,
@@ -387,30 +241,17 @@ bool ethercat_master_configure_distributed_clocks(void)
         }
         else
         {
-            printf(
-                "Slave %d: no DC support\n",
-                slave
-            );
+            printf("Slave %d: no DC support\n", slave);
         }
     }
 
-
-    return
-        bus_info.dcFound;
+    return bus_info.dcFound;
 }
 
 
-/* ============================================================================
- *  SAFE-OP / OPERATIONAL
- * ============================================================================
- */
-
 bool ethercat_master_wait_for_safe_op(void)
 {
-    printf(
-        "\nWaiting for SAFE-OP...\n"
-    );
-
+    printf("\nWaiting for SAFE-OP...\n");
 
     soem_backend_statecheck(
         0,
@@ -418,45 +259,27 @@ bool ethercat_master_wait_for_safe_op(void)
         EC_TIMEOUTSTATE * 4
     );
 
-
     soem_backend_read_states();
 
+    bool all_safe_op = true;
 
-    bool all_safe_op =
-        true;
-
-
-    for (int slave = 1;
-         slave <= bus_info.slaveCount;
-         slave++)
+    for (int slave = 1; slave <= bus_info.slaveCount; ++slave)
     {
-        uint16_t state =
-            soem_backend_slave_state(
-                slave
-            );
-
+        const uint16_t state = soem_backend_slave_state(slave);
 
         printf(
             "Slave %d: %s\n",
             slave,
-            soem_backend_state_name(
-                state
-            )
+            soem_backend_state_name(state)
         );
 
-
-        if (
-            state != EC_STATE_SAFE_OP
-        )
+        if (state != EC_STATE_SAFE_OP)
         {
-            all_safe_op =
-                false;
+            all_safe_op = false;
         }
     }
 
-
-    return
-        all_safe_op;
+    return all_safe_op;
 }
 
 
@@ -464,34 +287,29 @@ int ethercat_master_exchange(void)
 {
     soem_backend_send_processdata();
 
-    return
+    bus_info.lastWkc =
         soem_backend_receive_processdata();
+
+    ++bus_info.exchangeCount;
+
+    return bus_info.lastWkc;
 }
 
 
 bool ethercat_master_request_operational(void)
 {
-    printf(
-        "\nRequesting OPERATIONAL...\n"
-    );
+    printf("\nRequesting OPERATIONAL...\n");
 
-
-    soem_backend_set_group_state(
-        EC_STATE_OPERATIONAL
-    );
-
-
+    soem_backend_set_group_state(EC_STATE_OPERATIONAL);
     soem_backend_write_group_state();
 
-
-    for (int attempt = 0;
-         attempt < 50;
-         attempt++)
+    for (int attempt = 0; attempt < 50; ++attempt)
     {
-        soem_backend_send_processdata();
-
-        soem_backend_receive_processdata();
-
+        /*
+         * Use the public exchange path here as well so startup traffic is
+         * visible through the same WKC diagnostics as normal cyclic traffic.
+         */
+        (void)ethercat_master_exchange();
 
         soem_backend_statecheck(
             0,
@@ -499,113 +317,76 @@ bool ethercat_master_request_operational(void)
             EC_TIMEOUTSTATE / 10
         );
 
-
-        if (
-            soem_backend_slave_state(0) ==
-            EC_STATE_OPERATIONAL
-        )
+        if (soem_backend_slave_state(0) == EC_STATE_OPERATIONAL)
         {
             break;
         }
     }
 
-
     soem_backend_read_states();
 
+    bool all_operational = true;
 
-    bool all_operational =
-        true;
-
-
-    for (int slave = 1;
-         slave <= bus_info.slaveCount;
-         slave++)
+    for (int slave = 1; slave <= bus_info.slaveCount; ++slave)
     {
-        uint16_t state =
-            soem_backend_slave_state(
-                slave
-            );
-
+        const uint16_t state = soem_backend_slave_state(slave);
 
         printf(
             "Slave %d final state: %s (0x%02X)\n",
             slave,
-            soem_backend_state_name(
-                state
-            ),
+            soem_backend_state_name(state),
             state
         );
 
-
-        if (
-            state !=
-            EC_STATE_OPERATIONAL
-        )
+        if (state != EC_STATE_OPERATIONAL)
         {
-            all_operational =
-                false;
+            all_operational = false;
         }
     }
 
+    bus_info.expectedWkc = soem_backend_expected_wkc();
 
-    bus_info.expectedWkc =
-        soem_backend_expected_wkc();
+    printf("\nExpected WKC = %d\n", bus_info.expectedWkc);
 
-
-    printf(
-        "\nExpected WKC = %d\n",
-        bus_info.expectedWkc
-    );
-
-
-    return
-        all_operational;
+    return all_operational;
 }
 
-
-/* ============================================================================
- *  CYCLIC ACCESS
- * ============================================================================
- */
 
 int ethercat_master_expected_wkc(void)
 {
-    return
-        bus_info.expectedWkc;
+    return bus_info.expectedWkc;
 }
 
 
-uint8_t *ethercat_master_slave_outputs(
-    int slave
-)
+int ethercat_master_last_wkc(void)
 {
-    return
-        soem_backend_slave_outputs(
-            slave
-        );
+    return bus_info.lastWkc;
 }
 
 
-uint8_t *ethercat_master_slave_inputs(
-    int slave
-)
+uint64_t ethercat_master_exchange_count(void)
 {
-    return
-        soem_backend_slave_inputs(
-            slave
-        );
+    return bus_info.exchangeCount;
 }
 
 
-uint16_t ethercat_master_slave_state(
-    int slave
-)
+uint8_t *ethercat_master_slave_outputs(int slave)
 {
-    return
-        soem_backend_slave_state(
-            slave
-        );
+    return soem_backend_slave_outputs(slave);
 }
+
+
+uint8_t *ethercat_master_slave_inputs(int slave)
+{
+    return soem_backend_slave_inputs(slave);
+}
+
+
+uint16_t ethercat_master_slave_state(int slave)
+{
+    return soem_backend_slave_state(slave);
+}
+
 
 bool ethercat_master_slave_status(
     int slave,
@@ -621,28 +402,10 @@ bool ethercat_master_slave_status(
         return false;
     }
 
-
-    status->slave =
-        slave;
-
-
-    status->state =
-        soem_backend_slave_state(
-            slave
-        );
-
-
-    status->alStatusCode =
-        soem_backend_slave_al_status_code(
-            slave
-        );
-
-
-    status->lost =
-        soem_backend_slave_is_lost(
-            slave
-        );
-
+    status->slave = slave;
+    status->state = soem_backend_slave_state(slave);
+    status->alStatusCode = soem_backend_slave_al_status_code(slave);
+    status->lost = soem_backend_slave_is_lost(slave);
 
     return true;
 }
@@ -654,43 +417,137 @@ void ethercat_master_refresh_slave_states(void)
 }
 
 
-const char *ethercat_master_al_status_name(
-    uint16_t alStatusCode
-)
+const char *ethercat_master_al_status_name(uint16_t alStatusCode)
 {
-    return
-        soem_backend_al_status_name(
-            alStatusCode
-        );
-}
-
-const char *ethercat_master_state_name(
-    uint16_t state
-)
-{
-    return
-        soem_backend_state_name(
-            state
-        );
+    return soem_backend_al_status_name(alStatusCode);
 }
 
 
-/* ============================================================================
- *  CLEAN ETHERCAT SHUTDOWN
- * ============================================================================
- */
+const char *ethercat_master_state_name(uint16_t state)
+{
+    return soem_backend_state_name(state);
+}
+
+
+bool ethercat_master_all_slaves_operational(
+    int slaveCount,
+    int *failedSlave
+)
+{
+    ethercat_master_refresh_slave_states();
+
+    if (failedSlave != NULL)
+    {
+        *failedSlave = 0;
+    }
+
+    for (int slave = 1; slave <= slaveCount; ++slave)
+    {
+        EtherCATSlaveStatus status;
+
+        if (
+            !ethercat_master_slave_status(slave, &status) ||
+            status.state != EC_STATE_OPERATIONAL
+        )
+        {
+            if (failedSlave != NULL)
+            {
+                *failedSlave = slave;
+            }
+
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+void ethercat_master_print_slave_diagnostics(void)
+{
+    ethercat_master_refresh_slave_states();
+
+    printf(
+        "\nEtherCAT cycle: WKC=%d/%d exchanges=%llu\n",
+        bus_info.lastWkc,
+        bus_info.expectedWkc,
+        (unsigned long long)bus_info.exchangeCount
+    );
+
+    printf("EtherCAT slave diagnostics:\n");
+
+    for (int slave = 1; slave <= bus_info.slaveCount; ++slave)
+    {
+        EtherCATSlaveStatus status;
+
+        if (!ethercat_master_slave_status(slave, &status))
+        {
+            continue;
+        }
+
+        printf(
+            "Slave %d: State=%s (0x%02X)"
+            " | AL=0x%04X (%s)"
+            " | Lost=%s\n",
+            slave,
+            ethercat_master_state_name(status.state),
+            status.state,
+            status.alStatusCode,
+            ethercat_master_al_status_name(status.alStatusCode),
+            status.lost ? "YES" : "NO"
+        );
+    }
+}
+
+
+EtherCATRecoveryAction ethercat_master_recovery_step(int slave)
+{
+    EtherCATSlaveStatus status;
+
+    ethercat_master_refresh_slave_states();
+
+    if (!ethercat_master_slave_status(slave, &status))
+    {
+        return ETHERCAT_RECOVERY_ACTION_FAILED;
+    }
+
+    if (status.state == EC_STATE_OPERATIONAL)
+    {
+        return ETHERCAT_RECOVERY_ACTION_NONE;
+    }
+
+    if (status.state == (EC_STATE_SAFE_OP + EC_STATE_ERROR))
+    {
+        return soem_backend_acknowledge_slave_error(slave)
+            ? ETHERCAT_RECOVERY_ACTION_ACK_ERROR
+            : ETHERCAT_RECOVERY_ACTION_FAILED;
+    }
+
+    if (status.state == EC_STATE_SAFE_OP)
+    {
+        return soem_backend_request_slave_operational(slave)
+            ? ETHERCAT_RECOVERY_ACTION_REQUEST_OPERATIONAL
+            : ETHERCAT_RECOVERY_ACTION_FAILED;
+    }
+
+    if (status.state == EC_STATE_NONE)
+    {
+        return soem_backend_recover_slave(slave)
+            ? ETHERCAT_RECOVERY_ACTION_RECOVER_LOST
+            : ETHERCAT_RECOVERY_ACTION_FAILED;
+    }
+
+    return soem_backend_reconfigure_slave(slave)
+        ? ETHERCAT_RECOVERY_ACTION_RECONFIGURE
+        : ETHERCAT_RECOVERY_ACTION_FAILED;
+}
+
 
 void ethercat_master_close(void)
 {
-    for (int slave = 1;
-         slave <= bus_info.slaveCount;
-         slave++)
+    for (int slave = 1; slave <= bus_info.slaveCount; ++slave)
     {
-        if (
-            soem_backend_slave_has_dc(
-                slave
-            )
-        )
+        if (soem_backend_slave_has_dc(slave))
         {
             soem_backend_sync0(
                 slave,
@@ -701,287 +558,29 @@ void ethercat_master_close(void)
         }
     }
 
-
     soem_backend_close();
 }
 
 
-/* ============================================================================
- *  PDO BYTE-ORDER HELPERS
- * ============================================================================
- */
-
-void ethercat_pdo_write_u16(
-    uint8_t *p,
-    uint16_t value
-)
+void ethercat_pdo_write_u16(uint8_t *p, uint16_t value)
 {
-    soem_backend_write_u16(
-        p,
-        value
-    );
+    soem_backend_write_u16(p, value);
 }
 
 
-void ethercat_pdo_write_i32(
-    uint8_t *p,
-    int32_t value
-)
+void ethercat_pdo_write_i32(uint8_t *p, int32_t value)
 {
-    soem_backend_write_i32(
-        p,
-        value
-    );
+    soem_backend_write_i32(p, value);
 }
 
 
-uint16_t ethercat_pdo_read_u16(
-    const uint8_t *p
-)
+uint16_t ethercat_pdo_read_u16(const uint8_t *p)
 {
-    return
-        soem_backend_read_u16(
-            p
-        );
+    return soem_backend_read_u16(p);
 }
 
 
-int32_t ethercat_pdo_read_i32(
-    const uint8_t *p
-)
+int32_t ethercat_pdo_read_i32(const uint8_t *p)
 {
-    return
-        soem_backend_read_i32(
-            p
-        );
-}
-
-void ethercat_master_print_slave_diagnostics(void)
-{
-    /*
-     * EtherCAT state fields are cached inside SOEM.
-     * Refresh them from the bus before reporting diagnostics.
-     */
-    ethercat_master_refresh_slave_states();
-
-
-    printf(
-        "\nEtherCAT slave diagnostics:\n"
-    );
-
-
-    for (
-        int slave = 1;
-        slave <= bus_info.slaveCount;
-        slave++
-    )
-    {
-        EtherCATSlaveStatus status;
-
-
-        if (
-            !ethercat_master_slave_status(
-                slave,
-                &status
-            )
-        )
-        {
-            continue;
-        }
-
-
-        printf(
-            "Slave %d: State=%s (0x%02X)"
-            " | AL=0x%04X (%s)"
-            " | Lost=%s\n",
-            slave,
-            ethercat_master_state_name(
-                status.state
-            ),
-            status.state,
-            status.alStatusCode,
-            ethercat_master_al_status_name(
-                status.alStatusCode
-            ),
-            status.lost ? "YES" : "NO"
-        );
-    }
-}
-
-EtherCATRecoveryAction ethercat_master_recovery_step(
-    int slave
-)
-{
-    EtherCATSlaveStatus status;
-
-
-    ethercat_master_refresh_slave_states();
-
-
-    if (
-        !ethercat_master_slave_status(
-            slave,
-            &status
-        )
-    )
-    {
-        return
-            ETHERCAT_RECOVERY_ACTION_FAILED;
-    }
-
-
-    /* Already healthy. */
-    if (
-        status.state ==
-        EC_STATE_OPERATIONAL
-    )
-    {
-        return
-            ETHERCAT_RECOVERY_ACTION_NONE;
-    }
-
-
-    /* SAFE-OP + ERROR -> acknowledge error. */
-    if (
-        status.state ==
-        (EC_STATE_SAFE_OP + EC_STATE_ERROR)
-    )
-    {
-        if (
-            soem_backend_acknowledge_slave_error(
-                slave
-            )
-        )
-        {
-            return
-                ETHERCAT_RECOVERY_ACTION_ACK_ERROR;
-        }
-
-
-        return
-            ETHERCAT_RECOVERY_ACTION_FAILED;
-    }
-
-
-    /* SAFE-OP -> request OP again. */
-    if (
-        status.state ==
-        EC_STATE_SAFE_OP
-    )
-    {
-        if (
-            soem_backend_request_slave_operational(
-                slave
-            )
-        )
-        {
-            return
-                ETHERCAT_RECOVERY_ACTION_REQUEST_OPERATIONAL;
-        }
-
-
-        return
-            ETHERCAT_RECOVERY_ACTION_FAILED;
-    }
-
-
-    /* No response -> try recovering lost slave. */
-    if (
-        status.state ==
-        EC_STATE_NONE
-    )
-    {
-        if (
-            soem_backend_recover_slave(
-                slave
-            )
-        )
-        {
-            return
-                ETHERCAT_RECOVERY_ACTION_RECOVER_LOST;
-        }
-
-
-        return
-            ETHERCAT_RECOVERY_ACTION_FAILED;
-    }
-
-
-    /*
-     * Other responding states such as
-     * PRE-OP or INIT -> reconfigure.
-     */
-    if (
-        soem_backend_reconfigure_slave(
-            slave
-        )
-    )
-    {
-        return
-            ETHERCAT_RECOVERY_ACTION_RECONFIGURE;
-    }
-
-
-    return
-        ETHERCAT_RECOVERY_ACTION_FAILED;
-}
-
-bool ethercat_master_all_slaves_operational(
-    int slaveCount,
-    int *failedSlave
-)
-{
-    ethercat_master_refresh_slave_states();
-
-
-    if (failedSlave != NULL)
-    {
-        *failedSlave =
-            0;
-    }
-
-
-    for (
-        int slave = 1;
-        slave <= slaveCount;
-        slave++
-    )
-    {
-        EtherCATSlaveStatus status;
-
-
-        if (
-            !ethercat_master_slave_status(
-                slave,
-                &status
-            )
-        )
-        {
-            if (failedSlave != NULL)
-            {
-                *failedSlave =
-                    slave;
-            }
-
-            return false;
-        }
-
-
-        if (
-            status.state !=
-            EC_STATE_OPERATIONAL
-        )
-        {
-            if (failedSlave != NULL)
-            {
-                *failedSlave =
-                    slave;
-            }
-
-            return false;
-        }
-    }
-
-
-    return true;
+    return soem_backend_read_i32(p);
 }
