@@ -78,6 +78,9 @@ add_executable(
     ServoDrive/CiA402/cia402.c
     ServoDrive/A6EC/a6ec_pdo.c
     ServoDrive/A6EC/a6ec_drive.c
+
+    StateMachine/state_machine.c
+    
 )
 
 target_compile_features(
@@ -507,4 +510,44 @@ target_link_libraries(
 
     control_core
     m
+)
+
+# ============================================================================
+# SUPERVISOR RTOS TASK COMPILE CHECK
+# ============================================================================
+
+add_library(
+    supervisor_task_compile_check
+    OBJECT
+
+    StateMachine/supervisor_task.c
+)
+
+target_compile_features(
+    supervisor_task_compile_check
+    PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    supervisor_task_compile_check
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    EtherCATComm
+    EtherCATComm/SOEM
+
+    ServoDrive/CiA402
+    ServoDrive/A6EC
+)
+
+target_link_libraries(
+    supervisor_task_compile_check
+    PRIVATE
+
+    freertos_kernel
+    freertos_config
+    control_core
 )

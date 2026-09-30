@@ -1,173 +1,137 @@
 #ifndef STATE_MACHINE_H
 #define STATE_MACHINE_H
 
-
 #include "state_machine_types.h"
 
-#include "States/state_boot.h"
-#include "States/state_homing.h"
-#include "States/state_idle.h"
-#include "States/state_teaching.h"
-#include "States/state_path_validation.h"
-#include "States/state_approach.h"
-
-#include "../ControlCore/Config/robot_config.h"
-#include "../EtherCATComm/ethercat_types.h"
-
+#include <stdbool.h>
 #include <stdint.h>
 
 
-/* ============================================================================
- * GLOBAL STATE-MACHINE DEPENDENCIES
- * ============================================================================
+/*
+ * Result of presenting one event to the Supervisor.
  *
- * These objects are owned elsewhere.
- *
- * The FSM coordinates them; it does not duplicate their data.
+ * REJECTED means the event is not permitted in the current state.
+ * TRANSITIONED means the active global state changed.
+ * HANDLED means the event was accepted without changing state.
  */
-
-typedef struct
+typedef enum
 {
-    const EtherCATMasterConfig *ethercat_config;
+    SUPERVISOR_RESULT_REJECTED = 0,
+    SUPERVISOR_RESULT_HANDLED,
+    SUPERVISOR_RESULT_TRANSITIONED
 
-    const RobotConfig *robot;
-
-    const HomingConfig *homing_config;
-
-    const TeachingConfig *teaching_config;
-
-    const PathValidationConfig *path_validation_config;
-
-    const PathValidationServices *path_validation_services;
-
-    PathValidationWorkspace *path_validation_workspace;
-
-    const PathValidationStorage *path_validation_storage;
-
-    ValidatedTrajectory *validated_trajectory;
+} SupervisorResult;
 
 
-    /*
-     * APPROACH dependencies.
-     *
-     * Approach reuses the validated trajectory produced by Path Validation,
-     * RobotConfig, A6-EC, CiA-402 and EtherCAT modules.  Only its own policy
-     * configuration and the remaining external services are supplied here.
-     */
-    const ApproachConfig *approach_config;
-
-    const ApproachServices *approach_services;
-
-} StateMachineDependencies;
-
-
-/* ============================================================================
- * RUNTIME INPUTS
- * ============================================================================
+/*
+ * Pure global state-machine context.
  *
- * Commands/events that may change every supervisory cycle.
+ * This structure contains no FreeRTOS handles and no hardware objects.
+ * It can therefore be tested as ordinary C code.
  */
-
 typedef struct
 {
-    IdleCommand idle_command;
-
-    TeachingEvent teaching_event;
-
-    TeachingRuntimeInputs teaching_runtime;
+    RobotStateId activeState;
+    RobotStateId previousState;
 
     /*
-     * Maximum number of trajectory samples Path Validation may process
-     * during one call.
+     * State to restore when PAUSE/RESUME is used.
      */
-    uint16_t path_validation_sample_budget;
+    RobotStateId resumeState;
 
+    RobotExecutionMode executionMode;
+
+    RobotFaultSeverity faultSeverity;
+
+    uint32_t activeFaultCode;
 
     /*
-     * Operation requested after a VALID Path Validation result.
-     *
-     * NONE keeps the FSM in PATH_VALIDATION with the completed result
-     * available to the supervisor/HMI.
+     * Program lifecycle flags.
      */
-    ApproachOperation approach_operation;
-
-    ApproachControlInputs approach_control;
-
-    const JointVector *approach_clearance_poses;
-
-    uint8_t approach_clearance_pose_count;
-
-} StateMachineInputs;
-
-
-/* ============================================================================
- * GLOBAL STATE MACHINE
- * ============================================================================ */
-
-typedef struct
-{
-    RobotState current_state;
-    RobotState previous_state;
-
-    BootState boot;
-
-    HomingState homing;
-
-    IdleState idle;
-
-    TeachingState teaching;
-
-    PathValidationState path_validation;
-
-    ApproachState approach;
-
+    bool recordedProgramAvailable;
+    bool validatedTrajectoryAvailable;
+    bool previewAccepted;
 
     /*
-     * Latest outputs that higher-level code / HMI may inspect.
+     * Safety conditions last observed by the Supervisor.
      */
-    TeachingOutputs teaching_outputs;
-
-    PathValidationOutputs path_validation_outputs;
-
-    ApproachOutputs approach_outputs;
-
+    RobotSafetySnapshot safety;
 
     /*
-     * Program ID used when entering a new Teaching session.
+     * Diagnostic information.
      */
-    uint32_t teaching_program_id;
-
+    SupervisorEventType lastEvent;
+    uint32_t transitionCount;
+    uint32_t rejectedEventCount;
 
     bool initialized;
 
 } StateMachine;
 
 
-/* ============================================================================
- * PUBLIC API
- * ============================================================================ */
 
-bool state_machine_init(
-    StateMachine *machine,
-    uint32_t teaching_program_id
+/*
+ * Initialize the Supervisor in BOOT.
+ */
+void state_machine_init(
+    StateMachine *machine
 );
 
 
-StateStepResult state_machine_step(
+/*
+ * Process one event and, when permitted, perform one global transition.
+ *
+ * This function does not block, access hardware, call FreeRTOS, or execute
+ * a robot state. It only evaluates supervisory transition logic.
+ */
+SupervisorResult state_machine_handle_event(
     StateMachine *machine,
-    const StateMachineDependencies *dependencies,
-    const StateMachineInputs *inputs
+    const SupervisorEvent *event
 );
 
 
-RobotState state_machine_current_state(
+/*
+ * Update the Supervisor's latest software safety snapshot.
+ *
+ * Safety events are still delivered separately so transitions are explicit
+ * and testable.
+ */
+void state_machine_update_safety(
+    StateMachine *machine,
+    const RobotSafetySnapshot *safety
+);
+
+
+/*
+ * Clear the recorded-program and validation lifecycle flags.
+ *
+ * This is the logical effect of RESET. Physical motion behavior is handled
+ * by the relevant motion state and safety layer.
+ */
+void state_machine_clear_program(
+    StateMachine *machine
+);
+
+
+/*
+ * Debug and test helpers.
+ */
+const char *state_machine_state_name(
+    RobotStateId state
+);
+
+
+const char *state_machine_event_name(
+    SupervisorEventType event
+);
+
+
+bool state_machine_can_move(
     const StateMachine *machine
 );
 
-
-const char *state_machine_state_name(
-    RobotState state
+void state_machine_clear_program(
+    StateMachine *machine
 );
-
 
 #endif /* STATE_MACHINE_H */
