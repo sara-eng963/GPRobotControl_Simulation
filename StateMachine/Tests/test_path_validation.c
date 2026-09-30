@@ -1,13 +1,218 @@
 /*
- * Path Validation integration/capacity characterization entry point.
+ * Test 7.6 - external-memory capacity characterization.
  *
- * Test 7.6 intentionally keeps Path Validation active. A commanded case may
- * therefore be rejected for a real motion constraint (for example joint
- * velocity) without aborting the entire storage-characterization run.
+ * IMPORTANT:
+ * This test is intentionally NOT a motion-feasibility sweep. Earlier versions
+ * mixed two questions together: "is this motion valid?" and "how much flash do
+ * valid trajectories consume?". That made the result hard to interpret.
+ *
+ * Test 7.6 now answers only the storage question:
+ *   1) build several independent mixed-geometry programs;
+ *   2) run each through the real ControlCore -> Path Validation pipeline;
+ *   3) require every program to be VALID;
+ *   4) count the exact validated CSP samples and flash allocation.
+ *
+ * Every program contains LINE -> ARC -> CIRCLE -> LINE -> ARC -> LINE.
+ * Each program starts from a fresh known-good seed; we do not concatenate
+ * repeated closed contours, because cross-contour IK-branch drift is a
+ * different motion-planning problem and is not part of flash sizing.
  */
 #define main test_trajectory_storage_capacity_original_main
 #include "../../Simulation/Tests/test_trajectory_storage_capacity_realistic.c"
 #undef main
+
+typedef struct
+{
+    const char *name;
+    float geometry_scale;
+    float speed_mps;
+} ScaledCapacityCase;
+
+static void scale_program_geometry(
+    TaughtProgram *program,
+    float scale
+)
+{
+    const float base_x = program->segments[0].points[0].position_m[0];
+    const float base_y = program->segments[0].points[0].position_m[1];
+    const float base_z = program->segments[0].points[0].position_m[2];
+
+    for (uint16_t s = 0U; s < program->segment_count; ++s)
+    {
+        TaughtSegment *segment = &program->segments[s];
+
+        for (uint8_t p = 0U; p < segment->point_count; ++p)
+        {
+            TaughtPoint *point = &segment->points[p];
+
+            point->position_m[0] =
+                base_x + scale * (point->position_m[0] - base_x);
+            point->position_m[1] =
+                base_y + scale * (point->position_m[1] - base_y);
+            point->position_m[2] =
+                base_z + scale * (point->position_m[2] - base_z);
+        }
+    }
+
+    program->draft_crc = state_path_validation_calculate_draft_crc(program);
+}
+
+static bool run_scaled_capacity_case(
+    const ScaledCapacityCase *test_case,
+    uint32_t program_id,
+    const RobotConfig *robot,
+    const PathValidationConfig *config,
+    PathValidationWorkspace *workspace,
+    uint64_t *allocated_bytes_out,
+    uint64_t *raw_bytes_out,
+    uint64_t *samples_out,
+    double *duration_out
+)
+{
+    TaughtProgram program;
+    ValidatedTrajectory artifact;
+    PathValidationState state;
+    PathValidationOutputs outputs;
+    CountingValidatedStorage counting_storage;
+
+    if (
+        test_case == NULL ||
+        robot == NULL ||
+        config == NULL ||
+        workspace == NULL ||
+        allocated_bytes_out == NULL ||
+        raw_bytes_out == NULL ||
+        samples_out == NULL ||
+        duration_out == NULL ||
+        !build_program(
+            &program,
+            robot,
+            program_id,
+            1U,
+            test_case->speed_mps
+        )
+    )
+    {
+        return false;
+    }
+
+    scale_program_geometry(
+        &program,
+        test_case->geometry_scale
+    );
+
+    if (program.draft_crc == 0U)
+    {
+        return false;
+    }
+
+    memset(&artifact, 0, sizeof(artifact));
+    memset(&state, 0, sizeof(state));
+    memset(&outputs, 0, sizeof(outputs));
+    memset(&counting_storage, 0, sizeof(counting_storage));
+
+    const PathValidationStorage storage =
+    {
+        .begin = counting_begin,
+        .write_sample = counting_write_sample,
+        .commit = counting_commit,
+        .abort = counting_abort,
+        .capacity_samples = TEST_STORAGE_CAPACITY,
+        .context = &counting_storage
+    };
+
+    state_path_validation_enter(
+        &state,
+        robot,
+        config,
+        NULL,
+        workspace,
+        &storage,
+        &artifact,
+        &program,
+        program.draft_revision,
+        program.draft_crc
+    );
+
+    while (state.result == PV_RESULT_RUNNING)
+    {
+        if (
+            state_path_validation_step(&state, 512U, &outputs) ==
+            STATE_STEP_FAILED
+        )
+        {
+            fprintf(stderr, "State step failed: %s\n", test_case->name);
+            return false;
+        }
+    }
+
+    if (
+        outputs.report.result != PV_RESULT_VALID ||
+        !outputs.trajectory_ready ||
+        !counting_storage.committed
+    )
+    {
+        fprintf(
+            stderr,
+            "VALIDATION FAILURE in storage dataset: %s | error=%s segment=%u sample=%u joint=%u\n",
+            test_case->name,
+            state_path_validation_error_name(outputs.report.error),
+            (unsigned)outputs.report.failed_segment,
+            (unsigned)outputs.report.failed_sample,
+            (unsigned)outputs.report.failed_joint
+        );
+        return false;
+    }
+
+    const uint64_t raw_sample_bytes =
+        (uint64_t)artifact.sample_count * EXECUTION_SAMPLE_BYTES;
+
+    const uint64_t allocated_sample_bytes =
+        round_up_u64(raw_sample_bytes, FLASH_SECTOR_BYTES);
+
+    const uint64_t allocated_total_bytes =
+        FLASH_SECTOR_BYTES + allocated_sample_bytes;
+
+    printf("\n============================================================\n");
+    printf("TEST 7.6 VALID TRAJECTORY: %s\n", test_case->name);
+    printf("============================================================\n");
+    printf("geometry scale:         %.2f x reference contour\n", (double)test_case->geometry_scale);
+    printf("segments:               %u\n", (unsigned)artifact.segment_count);
+    printf("commanded TCP speed:    %.3f m/s\n", (double)test_case->speed_mps);
+    printf("path length:            %.3f m\n", artifact.path_length_m);
+    printf("duration:               %.3f s\n", artifact.duration_s);
+    printf("samples:                %u\n", (unsigned)artifact.sample_count);
+    printf("raw sample bytes:       %" PRIu64 " B (%.3f MiB)\n",
+           raw_sample_bytes,
+           (double)raw_sample_bytes / BYTES_PER_MIB);
+    printf("allocated trajectory:   %" PRIu64 " B (%.3f MiB)\n",
+           allocated_total_bytes,
+           (double)allocated_total_bytes / BYTES_PER_MIB);
+
+    printf("Segment breakdown:\n");
+    for (uint16_t segment = 0U; segment < artifact.segment_count; ++segment)
+    {
+        const PvSegmentIndex *index = &artifact.segments[segment];
+        const uint64_t segment_bytes =
+            (uint64_t)index->sample_count * EXECUTION_SAMPLE_BYTES;
+
+        printf(
+            "  %2u %-6s samples=%7u bytes=%9" PRIu64 " approx=%.3f s\n",
+            (unsigned)(segment + 1U),
+            segment_name(index->segment_type),
+            (unsigned)index->sample_count,
+            segment_bytes,
+            (double)index->sample_count * PATH_VALIDATION_SAMPLE_PERIOD_S
+        );
+    }
+
+    *allocated_bytes_out = allocated_total_bytes;
+    *raw_bytes_out = raw_sample_bytes;
+    *samples_out = artifact.sample_count;
+    *duration_out = artifact.duration_s;
+
+    return true;
+}
 
 int main(void)
 {
@@ -16,14 +221,19 @@ int main(void)
         "Test 7.6 assumes PvExecutionSample remains 24 bytes."
     );
 
-    const CapacityCase cases[] =
+    /*
+     * Independent programs near the already-proven reference contour.
+     * All use the current simulator default 0.010 m/s. This is deliberately
+     * conservative for flash sizing because slower motion creates more 1 ms
+     * samples and therefore consumes more storage.
+     */
+    const ScaledCapacityCase cases[] =
     {
-        {"1 contour - welding speed",              1U, 0.100F},
-        {"1 contour - medium speed",               1U, 0.050F},
-        {"1 contour - current simulator default",  1U, 0.010F},
-        {"3 contours - welding speed",             3U, 0.100F},
-        {"3 contours - medium speed",              3U, 0.050F},
-        {"3 contours - current simulator default", 3U, 0.010F}
+        {"Program A - compact mixed geometry",   0.85F, 0.010F},
+        {"Program B - compact mixed geometry",   0.92F, 0.010F},
+        {"Program C - reference mixed geometry", 1.00F, 0.010F},
+        {"Program D - expanded mixed geometry",  1.05F, 0.010F},
+        {"Program E - expanded mixed geometry",  1.08F, 0.010F}
     };
 
     RobotConfig robot;
@@ -36,16 +246,15 @@ int main(void)
     uint64_t total_raw_bytes = 0U;
     uint64_t total_samples = 0U;
     double total_duration_s = 0.0;
-    size_t accepted_cases = 0U;
-    size_t rejected_cases = 0U;
 
     printf("============================================================\n");
-    printf("TEST 7.6 - REALISTIC MULTI-GEOMETRY STORAGE CAPACITY\n");
+    printf("TEST 7.6A - VALID MULTI-TRAJECTORY STORAGE CAPACITY\n");
     printf("============================================================\n");
-    printf("Each contour: LINE -> ARC -> CIRCLE -> LINE -> ARC -> LINE\n");
-    printf("Contour is closed, so repeats are continuous.\n");
-    printf("Path Validation remains enabled: infeasible motion cases are rejected,\n");
-    printf("reported, and excluded from flash-capacity totals.\n");
+    printf("Question being tested:\n");
+    printf("How much external flash do several VALID mixed-geometry programs consume?\n\n");
+    printf("Each program: LINE -> ARC -> CIRCLE -> LINE -> ARC -> LINE\n");
+    printf("Programs are independent; each starts from a fresh known-good seed.\n");
+    printf("TCP speed:             0.010 m/s\n");
     printf("Sample period:         %lu us\n", (unsigned long)PATH_VALIDATION_SAMPLE_PERIOD_US);
     printf("PvExecutionSample:     %zu bytes\n", sizeof(PvExecutionSample));
     printf("Storage rate @ 1 ms:   %.0f B/s = %.3f MiB/min raw\n",
@@ -61,7 +270,7 @@ int main(void)
         double duration_s = 0.0;
 
         if (
-            !run_capacity_case(
+            !run_scaled_capacity_case(
                 &cases[i],
                 (uint32_t)(760U + i),
                 &robot,
@@ -74,45 +283,38 @@ int main(void)
             )
         )
         {
-            ++rejected_cases;
-            printf("CASE RESULT: REJECTED / NOT COUNTED: %s\n", cases[i].name);
-            continue;
+            printf("\nTEST 7.6A: FAIL - storage dataset contains an invalid trajectory.\n");
+            printf("This is a trajectory-generation/validation issue, not a flash-size result.\n");
+            return 1;
         }
 
-        ++accepted_cases;
         total_allocated_bytes += allocated_bytes;
         total_raw_bytes += raw_bytes;
         total_samples += samples;
         total_duration_s += duration_s;
     }
 
-    if (accepted_cases == 0U)
-    {
-        printf("\nTEST 7.6: FAIL - no valid trajectory was available for storage sizing.\n");
-        return 1;
-    }
-
     const uint64_t reserve_bytes = total_allocated_bytes / 4U;
     const uint64_t planning_bytes = total_allocated_bytes + reserve_bytes;
 
     printf("\n============================================================\n");
-    printf("TEST 7.6 COMBINED STORAGE REPORT - VALID TRAJECTORIES ONLY\n");
+    printf("TEST 7.6A COMBINED STORAGE REPORT\n");
     printf("============================================================\n");
-    printf("cases attempted:       %zu\n", sizeof(cases) / sizeof(cases[0]));
-    printf("valid trajectories:    %zu\n", accepted_cases);
-    printf("rejected trajectories: %zu\n", rejected_cases);
-    printf("combined motion time:  %.3f s (%.3f min)\n",
+    printf("valid trajectories:     %zu / %zu\n",
+           sizeof(cases) / sizeof(cases[0]),
+           sizeof(cases) / sizeof(cases[0]));
+    printf("combined motion time:   %.3f s (%.3f min)\n",
            total_duration_s,
            total_duration_s / 60.0);
-    printf("total samples:         %" PRIu64 "\n", total_samples);
-    printf("total raw bytes:       %" PRIu64 " (%.3f MiB)\n",
+    printf("total samples:          %" PRIu64 "\n", total_samples);
+    printf("total raw bytes:        %" PRIu64 " (%.3f MiB)\n",
            total_raw_bytes,
            (double)total_raw_bytes / BYTES_PER_MIB);
-    printf("actual allocation:     %" PRIu64 " (%.3f MiB)\n",
+    printf("actual allocation:      %" PRIu64 " (%.3f MiB)\n",
            total_allocated_bytes,
            (double)total_allocated_bytes / BYTES_PER_MIB);
-    printf("planning reserve:      +25%% = %" PRIu64 " B\n", reserve_bytes);
-    printf("capacity to plan for:  %" PRIu64 " B (%.3f MiB)\n",
+    printf("planning reserve:       +25%% = %" PRIu64 " B\n", reserve_bytes);
+    printf("capacity to plan for:   %" PRIu64 " B (%.3f MiB)\n",
            planning_bytes,
            (double)planning_bytes / BYTES_PER_MIB);
 
@@ -122,6 +324,6 @@ int main(void)
     print_flash_capacity_line("32 MiB", MIB_U64(32), planning_bytes);
     print_flash_capacity_line("64 MiB", MIB_U64(64), planning_bytes);
 
-    printf("\nTEST 7.6: PASS - storage characterized using valid Path Validation outputs.\n");
+    printf("\nTEST 7.6A: PASS - five independent valid trajectories characterized.\n");
     return 0;
 }
