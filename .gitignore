@@ -14,6 +14,7 @@ compile_commands.json
 
 # Generated test output
 single_segment_line_c.csv
+trajectory_memory_log.csv
 
 # Vendor / teammate-shared EtherCAT ESI file
 # Keep this out of Git; setup_environment.sh copies it into KickCAT.
