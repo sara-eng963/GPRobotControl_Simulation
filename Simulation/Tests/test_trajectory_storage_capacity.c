@@ -10,10 +10,10 @@
 
 #define TEST_GEOMETRY_CAPACITY       1024U
 #define TEST_STORAGE_CAPACITY        2000000U
-#define FLASH_SECTOR_BYTES           4096ULL
+#define FLASH_SECTOR_BYTES           UINT64_C(4096)
 #define EXECUTION_SAMPLE_BYTES       ((uint64_t)sizeof(PvExecutionSample))
 
-#define MIB(x_) ((uint64_t)(x_) * 1024ULL * 1024ULL)
+#define MIB(x_) ((uint64_t)(x_) * UINT64_C(1024) * UINT64_C(1024))
 
 typedef struct
 {
@@ -81,8 +81,7 @@ static bool counting_write_sample(
         storage == NULL ||
         sample == NULL ||
         !storage->writing ||
-        sample_index != storage->sample_count ||
-        sample_index >= TEST_STORAGE_CAPACITY
+        sample_index != storage->sample_count
     )
     {
         return false;
@@ -135,268 +134,214 @@ static void counting_abort(void *context)
 }
 
 
-static TaughtPoint make_point(
+static Mat4 array_to_mat4(const double input[4][4])
+{
+    Mat4 result;
+
+    for (uint8_t row = 0U; row < 4U; ++row)
+    {
+        for (uint8_t column = 0U; column < 4U; ++column)
+        {
+            result.m[row][column] = input[row][column];
+        }
+    }
+
+    return result;
+}
+
+
+static void fill_taught_point(
+    TaughtPoint *point,
     Vec3 position,
     Quat orientation,
-    JointVector teaching_joints,
+    const JointVector *joints,
     uint32_t timestamp_ms
 )
 {
-    TaughtPoint point;
-    memset(&point, 0, sizeof(point));
+    memset(point, 0, sizeof(*point));
 
-    point.position_m[0] = (float)position.v[0];
-    point.position_m[1] = (float)position.v[1];
-    point.position_m[2] = (float)position.v[2];
+    point->position_m[0] = (float)position.v[0];
+    point->position_m[1] = (float)position.v[1];
+    point->position_m[2] = (float)position.v[2];
 
-    point.orientation_quat[0] = (float)orientation.w;
-    point.orientation_quat[1] = (float)orientation.x;
-    point.orientation_quat[2] = (float)orientation.y;
-    point.orientation_quat[3] = (float)orientation.z;
+    point->orientation_quat[0] = (float)orientation.w;
+    point->orientation_quat[1] = (float)orientation.x;
+    point->orientation_quat[2] = (float)orientation.y;
+    point->orientation_quat[3] = (float)orientation.z;
 
     for (uint8_t joint = 0U; joint < PATH_VALIDATION_DOF; ++joint)
     {
-        point.joint_position_rad[joint] =
-            (float)teaching_joints.q[joint];
+        point->joint_position_rad[joint] =
+            (float)joints->q[joint];
     }
 
-    point.record_timestamp_ms = timestamp_ms;
-    point.calibration_version = 1U;
-    point.frame_id = 1U;
-    point.tool_id = 1U;
-    point.point_valid = true;
-
-    return point;
+    point->record_timestamp_ms = timestamp_ms;
+    point->calibration_version = 1U;
+    point->frame_id = 0U;
+    point->tool_id = 0U;
+    point->point_valid = true;
 }
 
 
-static bool append_line(
-    TaughtProgram *program,
-    TaughtPoint start,
-    TaughtPoint end,
+static void set_segment_common(
+    TaughtSegment *segment,
+    uint16_t segment_id,
+    TeachingSegmentType type,
+    uint8_t point_count,
     float speed_mps
 )
 {
-    if (
-        program == NULL ||
-        program->segment_count >= TEACHING_MAX_SEGMENTS
-    )
-    {
-        return false;
-    }
-
-    TaughtSegment *segment =
-        &program->segments[program->segment_count];
-
     memset(segment, 0, sizeof(*segment));
 
-    segment->segment_id = program->segment_count + 1U;
-    segment->type = TEACH_SEGMENT_LINE;
-    segment->point_count = 2U;
-    segment->points[0] = start;
-    segment->points[1] = end;
-    segment->speed_mps = speed_mps;
-    segment->circle_direction = TEACH_CIRCLE_DIRECTION_UNSPECIFIED;
-    segment->orientation_mode = TEACH_ORIENTATION_CONSTANT;
-    segment->segment_valid = true;
-
-    program->segment_count++;
-    return true;
-}
-
-
-static bool append_arc(
-    TaughtProgram *program,
-    TaughtPoint start,
-    TaughtPoint via,
-    TaughtPoint end,
-    float speed_mps
-)
-{
-    if (
-        program == NULL ||
-        program->segment_count >= TEACHING_MAX_SEGMENTS
-    )
-    {
-        return false;
-    }
-
-    TaughtSegment *segment =
-        &program->segments[program->segment_count];
-
-    memset(segment, 0, sizeof(*segment));
-
-    segment->segment_id = program->segment_count + 1U;
-    segment->type = TEACH_SEGMENT_ARC;
-    segment->point_count = 3U;
-    segment->points[0] = start;
-    segment->points[1] = via;
-    segment->points[2] = end;
-    segment->speed_mps = speed_mps;
-    segment->circle_direction = TEACH_CIRCLE_DIRECTION_UNSPECIFIED;
-    segment->orientation_mode = TEACH_ORIENTATION_CONSTANT;
-    segment->segment_valid = true;
-
-    program->segment_count++;
-    return true;
-}
-
-
-static bool append_circle(
-    TaughtProgram *program,
-    TaughtPoint start,
-    TaughtPoint via,
-    TaughtPoint third,
-    float speed_mps
-)
-{
-    if (
-        program == NULL ||
-        program->segment_count >= TEACHING_MAX_SEGMENTS
-    )
-    {
-        return false;
-    }
-
-    TaughtSegment *segment =
-        &program->segments[program->segment_count];
-
-    memset(segment, 0, sizeof(*segment));
-
-    segment->segment_id = program->segment_count + 1U;
-    segment->type = TEACH_SEGMENT_CIRCLE;
-    segment->point_count = 3U;
-    segment->points[0] = start;
-    segment->points[1] = via;
-    segment->points[2] = third;
+    segment->segment_id = segment_id;
+    segment->type = type;
+    segment->point_count = point_count;
     segment->speed_mps = speed_mps;
     segment->circle_direction = TEACH_CIRCLE_CCW;
     segment->orientation_mode = TEACH_ORIENTATION_CONSTANT;
     segment->segment_valid = true;
-
-    program->segment_count++;
-    return true;
 }
 
 
 static bool append_mixed_contour(
     TaughtProgram *program,
-    Vec3 origin,
-    Quat orientation,
-    JointVector teaching_joints,
+    const RobotConfig *robot,
+    uint16_t *next_segment_id,
+    uint32_t *timestamp_ms,
     float speed_mps,
-    uint32_t *timestamp_ms
+    real_t x_offset
 )
 {
     if (
         program == NULL ||
-        timestamp_ms == NULL
+        robot == NULL ||
+        next_segment_id == NULL ||
+        timestamp_ms == NULL ||
+        program->segment_count + 6U > TEACHING_MAX_SEGMENTS
     )
     {
         return false;
     }
 
-#define MAKE_OFFSET_POINT(dx_, dy_, dz_) \
-    make_point( \
-        (Vec3){{ \
-            origin.v[0] + (dx_), \
-            origin.v[1] + (dy_), \
-            origin.v[2] + (dz_) \
-        }}, \
-        orientation, \
-        teaching_joints, \
-        (*timestamp_ms)++ \
-    )
-
-    const TaughtPoint a = MAKE_OFFSET_POINT(0.00,  0.00, 0.00);
-    const TaughtPoint b = MAKE_OFFSET_POINT(0.08,  0.00, 0.00);
-    const TaughtPoint c = MAKE_OFFSET_POINT(0.14,  0.06, 0.00);
-    const TaughtPoint d = MAKE_OFFSET_POINT(0.20,  0.00, 0.00);
-
-    /* Small full circle whose start/end is D. */
-    const TaughtPoint e = MAKE_OFFSET_POINT(0.23,  0.03, 0.00);
-    const TaughtPoint f = MAKE_OFFSET_POINT(0.26,  0.00, 0.00);
-
-    const TaughtPoint g = MAKE_OFFSET_POINT(0.20, -0.08, 0.00);
-    const TaughtPoint h = MAKE_OFFSET_POINT(0.10, -0.14, 0.00);
-    const TaughtPoint i = MAKE_OFFSET_POINT(0.00, -0.08, 0.00);
-
-#undef MAKE_OFFSET_POINT
-
-    return
-        append_line(program, a, b, speed_mps) &&
-        append_arc(program, b, c, d, speed_mps) &&
-        append_circle(program, d, e, f, speed_mps) &&
-        append_line(program, d, g, speed_mps) &&
-        append_arc(program, g, h, i, speed_mps) &&
-        append_line(program, i, a, speed_mps);
-}
-
-
-static bool build_program(
-    TaughtProgram *program,
-    uint32_t program_id,
-    uint8_t contour_repeats,
-    float speed_mps
-)
-{
-    if (
-        program == NULL ||
-        contour_repeats == 0U
-    )
+    const real_t q_start_deg[ROBOT_DOF] =
     {
-        return false;
+         30.0,
+        -45.0,
+         60.0,
+         20.0,
+        -30.0,
+         45.0
+    };
+
+    JointVector q_seed;
+
+    for (uint8_t joint = 0U; joint < ROBOT_DOF; ++joint)
+    {
+        q_seed.q[joint] =
+            q_start_deg[joint] * ROBOT_PI / 180.0;
     }
 
-    memset(program, 0, sizeof(*program));
+    double start_array[4][4];
+    control_fk(robot, q_seed.q, start_array);
 
-    const SingleCircularRequest reference =
-        single_arc_matlab_reference_request();
+    const Mat4 start_pose = array_to_mat4(start_array);
+    const Vec3 base = mat4_translation(start_pose);
+    const Quat orientation = rotm_to_quat(mat4_rotation(start_pose));
 
-    program->program_id = program_id;
-    program->draft_revision = 1U;
-    program->global_speed_scale = 1.0F;
-    program->status = TEACH_DRAFT_SUBMITTED;
+    const Vec3 p0 = vec3_add(base, (Vec3){{x_offset, 0.00, 0.00}});
+    const Vec3 p1 = vec3_add(base, (Vec3){{x_offset + 0.10, 0.00, 0.00}});
+    const Vec3 p2 = vec3_add(base, (Vec3){{x_offset + 0.20, 0.10, 0.00}});
+    const Vec3 p3 = vec3_add(base, (Vec3){{x_offset + 0.30, 0.00, 0.00}});
+    const Vec3 p4 = vec3_add(base, (Vec3){{x_offset + 0.45, 0.15, 0.00}});
+    const Vec3 p5 = vec3_add(base, (Vec3){{x_offset + 0.60, 0.00, 0.00}});
+    const Vec3 p6 = vec3_add(base, (Vec3){{x_offset + 0.70, 0.00, 0.00}});
+    const Vec3 p7 = vec3_add(base, (Vec3){{x_offset + 0.80, -0.10, 0.00}});
+    const Vec3 p8 = vec3_add(base, (Vec3){{x_offset + 0.90, 0.00, 0.00}});
+    const Vec3 p9 = vec3_add(base, (Vec3){{x_offset + 1.00, 0.00, 0.00}});
 
-    uint32_t timestamp_ms = 1U;
+    TaughtSegment *segment =
+        &program->segments[program->segment_count++];
 
-    for (uint8_t repeat = 0U; repeat < contour_repeats; ++repeat)
-    {
-        if (
-            !append_mixed_contour(
-                program,
-                reference.point1,
-                reference.startOrientation,
-                reference.qSeed,
-                speed_mps,
-                &timestamp_ms
-            )
-        )
-        {
-            return false;
-        }
-    }
+    set_segment_common(
+        segment,
+        (*next_segment_id)++,
+        TEACH_SEGMENT_LINE,
+        2U,
+        speed_mps
+    );
 
-    program->draft_crc =
-        state_path_validation_calculate_draft_crc(program);
+    fill_taught_point(&segment->points[0], p0, orientation, &q_seed, (*timestamp_ms)++);
+    fill_taught_point(&segment->points[1], p1, orientation, &q_seed, (*timestamp_ms)++);
 
-    return program->draft_crc != 0U;
-}
+    segment = &program->segments[program->segment_count++];
 
+    set_segment_common(
+        segment,
+        (*next_segment_id)++,
+        TEACH_SEGMENT_ARC,
+        3U,
+        speed_mps
+    );
 
-static const char *segment_name(uint8_t type)
-{
-    switch ((TeachingSegmentType)type)
-    {
-        case TEACH_SEGMENT_LINE:
-            return "LINE";
-        case TEACH_SEGMENT_ARC:
-            return "ARC";
-        case TEACH_SEGMENT_CIRCLE:
-            return "CIRCLE";
-        default:
-            return "UNKNOWN";
-    }
+    fill_taught_point(&segment->points[0], p1, orientation, &q_seed, (*timestamp_ms)++);
+    fill_taught_point(&segment->points[1], p2, orientation, &q_seed, (*timestamp_ms)++);
+    fill_taught_point(&segment->points[2], p3, orientation, &q_seed, (*timestamp_ms)++);
+
+    segment = &program->segments[program->segment_count++];
+
+    set_segment_common(
+        segment,
+        (*next_segment_id)++,
+        TEACH_SEGMENT_CIRCLE,
+        3U,
+        speed_mps
+    );
+
+    fill_taught_point(&segment->points[0], p3, orientation, &q_seed, (*timestamp_ms)++);
+    fill_taught_point(&segment->points[1], p4, orientation, &q_seed, (*timestamp_ms)++);
+    fill_taught_point(&segment->points[2], p5, orientation, &q_seed, (*timestamp_ms)++);
+
+    segment = &program->segments[program->segment_count++];
+
+    set_segment_common(
+        segment,
+        (*next_segment_id)++,
+        TEACH_SEGMENT_LINE,
+        2U,
+        speed_mps
+    );
+
+    fill_taught_point(&segment->points[0], p3, orientation, &q_seed, (*timestamp_ms)++);
+    fill_taught_point(&segment->points[1], p6, orientation, &q_seed, (*timestamp_ms)++);
+
+    segment = &program->segments[program->segment_count++];
+
+    set_segment_common(
+        segment,
+        (*next_segment_id)++,
+        TEACH_SEGMENT_ARC,
+        3U,
+        speed_mps
+    );
+
+    fill_taught_point(&segment->points[0], p6, orientation, &q_seed, (*timestamp_ms)++);
+    fill_taught_point(&segment->points[1], p7, orientation, &q_seed, (*timestamp_ms)++);
+    fill_taught_point(&segment->points[2], p8, orientation, &q_seed, (*timestamp_ms)++);
+
+    segment = &program->segments[program->segment_count++];
+
+    set_segment_common(
+        segment,
+        (*next_segment_id)++,
+        TEACH_SEGMENT_LINE,
+        2U,
+        speed_mps
+    );
+
+    fill_taught_point(&segment->points[0], p8, orientation, &q_seed, (*timestamp_ms)++);
+    fill_taught_point(&segment->points[1], p9, orientation, &q_seed, (*timestamp_ms)++);
+
+    return true;
 }
 
 
@@ -427,16 +372,85 @@ static void configure_validation(
 
     adls_default_parameters(&config->ik_parameters);
 
-    *workspace =
-        (PathValidationWorkspace)
+    *workspace = (PathValidationWorkspace)
+    {
+        .geometry_capacity = TEST_GEOMETRY_CAPACITY,
+        .raw_geometry = raw_geometry,
+        .arc_geometry = arc_geometry,
+        .l_original = l_original,
+        .l_arc = l_arc,
+        .ik_scratch = &ik_scratch
+    };
+}
+
+
+static bool build_program(
+    TaughtProgram *program,
+    const RobotConfig *robot,
+    uint32_t program_id,
+    uint8_t contour_repeats,
+    float speed_mps
+)
+{
+    if (
+        program == NULL ||
+        robot == NULL ||
+        contour_repeats == 0U
+    )
+    {
+        return false;
+    }
+
+    memset(program, 0, sizeof(*program));
+
+    program->program_id = program_id;
+    program->draft_revision = 1U;
+    program->global_speed_scale = 1.0F;
+    program->status = TEACH_DRAFT_SUBMITTED;
+
+    uint16_t segment_id = 1U;
+    uint32_t timestamp_ms = 1000U;
+
+    for (uint8_t contour = 0U; contour < contour_repeats; ++contour)
+    {
+        if (
+            !append_mixed_contour(
+                program,
+                robot,
+                &segment_id,
+                &timestamp_ms,
+                speed_mps,
+                (real_t)contour * 0.05
+            )
+        )
         {
-            .geometry_capacity = TEST_GEOMETRY_CAPACITY,
-            .raw_geometry = raw_geometry,
-            .arc_geometry = arc_geometry,
-            .l_original = l_original,
-            .l_arc = l_arc,
-            .ik_scratch = &ik_scratch
-        };
+            return false;
+        }
+    }
+
+    program->draft_crc =
+        state_path_validation_calculate_draft_crc(program);
+
+    return program->draft_crc != 0U;
+}
+
+
+static const char *segment_name(uint8_t segment_type)
+{
+    switch ((TeachingSegmentType)segment_type)
+    {
+        case TEACH_SEGMENT_LINE:
+            return "LINE";
+
+        case TEACH_SEGMENT_ARC:
+            return "ARC";
+
+        case TEACH_SEGMENT_CIRCLE:
+            return "CIRCLE";
+
+        default:
+            return "UNKNOWN";
+    }
 }
 
 
@@ -465,49 +479,45 @@ static bool run_capacity_case(
     }
 
     TaughtProgram program;
+    ValidatedTrajectory artifact;
+    PathValidationState state;
+    PathValidationOutputs outputs;
+    CountingValidatedStorage counting_storage;
 
     if (
         !build_program(
             &program,
+            robot,
             program_id,
             test_case->contour_repeats,
             test_case->speed_mps
         )
     )
     {
-        fprintf(stderr, "%s: failed to build TaughtProgram.\n", test_case->name);
+        fprintf(stderr, "Failed to build test program: %s\n", test_case->name);
         return false;
     }
 
-    CountingValidatedStorage counter;
-    memset(&counter, 0, sizeof(counter));
-
-    PathValidationStorage storage =
+    const PathValidationStorage storage =
     {
         .begin = counting_begin,
         .write_sample = counting_write_sample,
         .commit = counting_commit,
         .abort = counting_abort,
         .capacity_samples = TEST_STORAGE_CAPACITY,
-        .context = &counter
+        .context = &counting_storage
     };
 
-    PathValidationServices services;
-    memset(&services, 0, sizeof(services));
-
-    PathValidationState state;
-    ValidatedTrajectory artifact;
-    PathValidationOutputs outputs;
-
-    memset(&state, 0, sizeof(state));
     memset(&artifact, 0, sizeof(artifact));
+    memset(&state, 0, sizeof(state));
     memset(&outputs, 0, sizeof(outputs));
+    memset(&counting_storage, 0, sizeof(counting_storage));
 
     state_path_validation_enter(
         &state,
         robot,
         config,
-        &services,
+        NULL,
         workspace,
         &storage,
         &artifact,
@@ -516,36 +526,37 @@ static bool run_capacity_case(
         program.draft_crc
     );
 
-    StateStepResult step_result = STATE_STEP_RUNNING;
-
-    while (step_result == STATE_STEP_RUNNING)
+    while (state.result == PV_RESULT_RUNNING)
     {
-        step_result =
+        if (
             state_path_validation_step(
                 &state,
-                2048U,
+                512U,
                 &outputs
-            );
+            ) == STATE_STEP_FAILED
+        )
+        {
+            fprintf(stderr, "State step failed: %s\n", test_case->name);
+            return false;
+        }
     }
 
     if (
-        step_result != STATE_STEP_COMPLETE ||
         outputs.report.result != PV_RESULT_VALID ||
         !outputs.trajectory_ready ||
-        !counter.committed
+        !counting_storage.committed
     )
     {
         fprintf(
             stderr,
-            "\n%s FAILED: phase=%s error=%s segment=%u sample=%u joint=%u\n",
+            "Validation failed for %s: result=%d error=%s segment=%u sample=%u joint=%u\n",
             test_case->name,
-            state_path_validation_phase_name(outputs.report.phase),
+            (int)outputs.report.result,
             state_path_validation_error_name(outputs.report.error),
             (unsigned)outputs.report.failed_segment,
             (unsigned)outputs.report.failed_sample,
             (unsigned)outputs.report.failed_joint
         );
-
         return false;
     }
 
@@ -716,7 +727,7 @@ int main(void)
             )
         )
         {
-            printf("\nTest 7.6: FAIL\n");
+            printf("\nTEST 7.6: FAIL\n");
             return 1;
         }
 
@@ -725,39 +736,34 @@ int main(void)
         total_samples += samples;
     }
 
+    const uint64_t reserve_bytes =
+        total_allocated_bytes / 4U;
+
+    const uint64_t planning_bytes =
+        total_allocated_bytes + reserve_bytes;
+
     printf("\n============================================================\n");
-    printf("TEST 7.6 - COMBINED MULTI-TRAJECTORY CAPACITY REPORT\n");
+    printf("TEST 7.6 COMBINED STORAGE REPORT\n");
     printf("============================================================\n");
-    printf("trajectories:          %zu\n", sizeof(cases) / sizeof(cases[0]));
+    printf("trajectories tested:   %zu\n", sizeof(cases) / sizeof(cases[0]));
     printf("total samples:         %" PRIu64 "\n", total_samples);
-    printf("raw sample data:       %" PRIu64 " B (%.3f MiB)\n",
+    printf("total raw bytes:       %" PRIu64 " (%.3f MiB)\n",
            total_raw_bytes,
            (double)total_raw_bytes / (1024.0 * 1024.0));
-    printf("actual allocation:     %" PRIu64 " B (%.3f MiB)\n",
+    printf("actual allocation:     %" PRIu64 " (%.3f MiB)\n",
            total_allocated_bytes,
            (double)total_allocated_bytes / (1024.0 * 1024.0));
-    printf("allocation overhead:   %" PRIu64 " B\n",
-           total_allocated_bytes - total_raw_bytes);
+    printf("planning reserve:      +25%% = %" PRIu64 " B\n", reserve_bytes);
+    printf("capacity to plan for:  %" PRIu64 " B (%.3f MiB)\n",
+           planning_bytes,
+           (double)planning_bytes / (1024.0 * 1024.0));
 
-    const uint64_t margin_25 =
-        round_up_u64(
-            (total_allocated_bytes * 125ULL + 99ULL) / 100ULL,
-            FLASH_SECTOR_BYTES
-        );
+    printf("\nCandidate flash sizes:\n");
+    print_flash_capacity_line("8 MiB", MIB(8), planning_bytes);
+    print_flash_capacity_line("16 MiB", MIB(16), planning_bytes);
+    print_flash_capacity_line("32 MiB", MIB(32), planning_bytes);
+    print_flash_capacity_line("64 MiB", MIB(64), planning_bytes);
 
-    printf("with 25%% reserve:      %" PRIu64 " B (%.3f MiB)\n\n",
-           margin_25,
-           (double)margin_25 / (1024.0 * 1024.0));
-
-    print_flash_capacity_line("8 MiB",  MIB(8),  margin_25);
-    print_flash_capacity_line("16 MiB", MIB(16), margin_25);
-    print_flash_capacity_line("32 MiB", MIB(32), margin_25);
-    print_flash_capacity_line("64 MiB", MIB(64), margin_25);
-
-    printf("\nNOTE: the current Renode QSPI backend still uses 3-byte addresses,\n");
-    printf("so only the lower 16 MiB is currently addressable until 4-byte\n");
-    printf("addressing is implemented. The 32/64 MiB lines are sizing references.\n");
-
-    printf("\nTest 7.6: PASS\n");
+    printf("\nTEST 7.6: PASS\n");
     return 0;
 }
