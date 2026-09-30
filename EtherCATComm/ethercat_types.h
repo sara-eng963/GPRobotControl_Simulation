@@ -9,8 +9,7 @@
  *  GENERIC ETHERCAT TYPES
  * ============================================================================
  *
- * These types contain only the bus-level information that already exists in
- * the tested main.c.
+ * These types contain only bus-level information.
  *
  * No CiA-402 logic.
  * No A6-EC register knowledge.
@@ -39,22 +38,13 @@ typedef struct
 {
     int slave;
 
-    /*
-     * Raw EtherCAT Application Layer state.
-     */
+    /* Raw EtherCAT Application Layer state. */
     uint16_t state;
 
-    /*
-     * EtherCAT AL Status Code reported by the slave.
-     *
-     * Example:
-     *      0x0000 = No error
-     */
+    /* EtherCAT AL Status Code reported by the slave. */
     uint16_t alStatusCode;
 
-    /*
-     * SOEM lost-slave flag.
-     */
+    /* SOEM lost-slave flag. */
     bool lost;
 
 } EtherCATSlaveStatus;
@@ -62,15 +52,10 @@ typedef struct
 typedef enum
 {
     ETHERCAT_RECOVERY_ACTION_NONE = 0,
-
     ETHERCAT_RECOVERY_ACTION_ACK_ERROR,
-
     ETHERCAT_RECOVERY_ACTION_REQUEST_OPERATIONAL,
-
     ETHERCAT_RECOVERY_ACTION_RECONFIGURE,
-
     ETHERCAT_RECOVERY_ACTION_RECOVER_LOST,
-
     ETHERCAT_RECOVERY_ACTION_FAILED
 
 } EtherCATRecoveryAction;
@@ -85,7 +70,18 @@ typedef struct
 
     bool dcFound;
 
+    /* Expected WKC calculated from the mapped process image. */
     int expectedWkc;
+
+    /*
+     * Result of the most recent process-data exchange, regardless of which
+     * robot state requested that exchange.  This is the authoritative value
+     * for diagnostics/HMI; simulator-local cached WKC values must not be used.
+     */
+    int lastWkc;
+
+    /* Number of process-data exchanges performed through the master API. */
+    uint64_t exchangeCount;
 
 } EtherCATBusInfo;
 
