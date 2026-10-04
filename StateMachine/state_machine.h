@@ -52,6 +52,14 @@ typedef struct
     bool validatedTrajectoryAvailable;
     bool previewAccepted;
 
+    /* Emergency recovery latch: release -> Reset -> Home. */
+    bool emergencyStopReleased;
+    bool emergencyResetAcknowledged;
+    bool homingRequired;
+
+    /* Enabled by the RTOS wrapper after all new runtime modules are wired. */
+    bool unifiedExecutionPolicy;
+
     /*
      * Safety conditions last observed by the Supervisor.
      */
@@ -130,8 +138,7 @@ bool state_machine_can_move(
     const StateMachine *machine
 );
 
-void state_machine_clear_program(
-    StateMachine *machine
-);
+/* Select the new PATH_EXECUTION and release->Reset->Home recovery policy. */
+void state_machine_enable_unified_execution(StateMachine *machine);
 
 #endif /* STATE_MACHINE_H */

@@ -7,6 +7,10 @@
 #include "States/state_homing.h"
 #include "States/state_idle.h"
 #include "States/state_path_validation.h"
+#include "States/state_path_execution.h"
+#include "States/state_paused.h"
+#include "States/state_fault.h"
+#include "States/state_emergency_stop.h"
 #include "States/state_teaching.h"
 
 #include "FreeRTOS.h"
@@ -22,7 +26,8 @@ typedef enum
     SUPERVISOR_MESSAGE_SAFETY,
     SUPERVISOR_MESSAGE_TEACHING_EVENT,
     SUPERVISOR_MESSAGE_TEACHING_RUNTIME,
-    SUPERVISOR_MESSAGE_APPROACH_CONTROL
+    SUPERVISOR_MESSAGE_APPROACH_CONTROL,
+    SUPERVISOR_MESSAGE_PATH_EXECUTION_INPUTS
 } SupervisorMessageType;
 
 typedef struct
@@ -35,6 +40,7 @@ typedef struct
         TeachingEvent teaching_event;
         TeachingRuntimeInputs teaching_runtime;
         ApproachControlInputs approach_control;
+        PathExecutionInputs path_execution_inputs;
     } data;
 } SupervisorMessage;
 
@@ -53,6 +59,12 @@ typedef struct
 
     const ApproachConfig *approach_config;
     const ApproachServices *approach_services;
+
+    const PathExecutionConfig *path_execution_config;
+    const PathExecutionServices *path_execution_services;
+    const PausedServices *paused_services;
+    const FaultServices *fault_services;
+    const EmergencyStopServices *emergency_stop_services;
 
     uint16_t validation_sample_budget;
     uint32_t first_program_id;

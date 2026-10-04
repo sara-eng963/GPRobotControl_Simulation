@@ -42,12 +42,24 @@ void state_machine_init(
     machine->recordedProgramAvailable = false;
     machine->validatedTrajectoryAvailable = false;
     machine->previewAccepted = false;
+    machine->emergencyStopReleased = false;
+    machine->emergencyResetAcknowledged = false;
+    machine->homingRequired = false;
+    machine->unifiedExecutionPolicy = false;
 
     machine->lastEvent = SUPERVISOR_EVENT_NONE;
     machine->transitionCount = 0U;
     machine->rejectedEventCount = 0U;
 
     machine->initialized = true;
+}
+
+void state_machine_enable_unified_execution(StateMachine *machine)
+{
+    if (machine != NULL && machine->initialized)
+    {
+        machine->unifiedExecutionPolicy = true;
+    }
 }
 
 void state_machine_clear_program(
@@ -202,6 +214,7 @@ static bool is_operator_pausable_state(RobotStateId state)
     switch (state)
     {
         case ROBOT_STATE_APPROACH:
+        case ROBOT_STATE_PATH_EXECUTION:
         case ROBOT_STATE_ARC_STABILIZING:
         case ROBOT_STATE_WELDING:
         case ROBOT_STATE_RETRACTING:
@@ -248,6 +261,7 @@ SupervisorResult state_machine_handle_event(
 {
     return reject_event(machine);
 }
+
     /*
      * A protective stop is not an operator Pause.
      *
@@ -322,6 +336,9 @@ SupervisorResult state_machine_handle_event(
 
         machine->executionMode = ROBOT_EXECUTION_NONE;
         machine->resumeState = ROBOT_STATE_IDLE;
+        machine->emergencyStopReleased = false;
+        machine->emergencyResetAcknowledged = false;
+        machine->homingRequired = true;
 
         return transition_to(
             machine,
@@ -345,6 +362,7 @@ SupervisorResult state_machine_handle_event(
             return reject_event(machine);
         }
 
+        machine->emergencyStopReleased = true;
         return SUPERVISOR_RESULT_HANDLED;
     }
         /*
@@ -502,7 +520,8 @@ if (event->type == SUPERVISOR_EVENT_PAUSE_RESUME)
  */
 if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_HOME)
 {
-    if (machine->activeState != ROBOT_STATE_APPROACH)
+    if ((machine->activeState != ROBOT_STATE_APPROACH) &&
+        (machine->activeState != ROBOT_STATE_PATH_EXECUTION))
     {
         return reject_event(machine);
     }
@@ -522,7 +541,8 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_HOME)
 
 if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
 {
-    if (machine->activeState != ROBOT_STATE_APPROACH)
+    if ((machine->activeState != ROBOT_STATE_APPROACH) &&
+        (machine->activeState != ROBOT_STATE_PATH_EXECUTION))
     {
         return reject_event(machine);
     }
@@ -613,16 +633,22 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
                 machine->executionMode = ROBOT_EXECUTION_NONE;
                 machine->resumeState = ROBOT_STATE_IDLE;
 
-                machine->faultSeverity =
-                    ROBOT_FAULT_SEVERITY_NONE;
+                if (!machine->unifiedExecutionPolicy)
+                {
+                    machine->faultSeverity = ROBOT_FAULT_SEVERITY_NONE;
+                    machine->activeFaultCode = ROBOT_FAULT_CODE_NONE;
+                    return transition_to(machine, ROBOT_STATE_HOMING);
+                }
 
-                machine->activeFaultCode =
-                    ROBOT_FAULT_CODE_NONE;
+                if (!machine->emergencyStopReleased)
+                {
+                    return reject_event(machine);
+                }
 
-                return transition_to(
-                    machine,
-                    ROBOT_STATE_HOMING
-                );
+                /* Reset acknowledges recovery but never starts motion. */
+                machine->emergencyResetAcknowledged = true;
+                machine->homingRequired = true;
+                return SUPERVISOR_RESULT_HANDLED;
 
                 default:
                 /*
@@ -642,6 +668,23 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
      */
     if (event->type == SUPERVISOR_EVENT_HOME)
     {
+        if (machine->activeState == ROBOT_STATE_EMERGENCY_STOP &&
+            machine->unifiedExecutionPolicy)
+        {
+            if (!machine->emergencyStopReleased ||
+                !machine->emergencyResetAcknowledged ||
+                !safety_ready_for_recovery(machine))
+            {
+                return reject_event(machine);
+            }
+
+            machine->faultSeverity = ROBOT_FAULT_SEVERITY_NONE;
+            machine->activeFaultCode = ROBOT_FAULT_CODE_NONE;
+            machine->emergencyResetAcknowledged = false;
+            machine->homingRequired = false;
+            return transition_to(machine, ROBOT_STATE_HOMING);
+        }
+
         if (machine->activeState == ROBOT_STATE_HOMING)
         {
             /*
@@ -893,36 +936,24 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
 
             break;
         }
-                case ROBOT_STATE_APPROACH:
+        case ROBOT_STATE_APPROACH:
         {
             if (event->type == SUPERVISOR_EVENT_STATE_COMPLETE)
             {
-                /*
-                 * Preview executes the trajectory with the welding output
-                 * disabled, so ARC_STABILIZING is skipped.
-                 *
-                 * Production Approach will later enter ARC_STABILIZING.
-                 */
-                if (
-                    machine->executionMode ==
-                    ROBOT_EXECUTION_PREVIEW
-                )
+                if (machine->unifiedExecutionPolicy &&
+                    ((machine->executionMode == ROBOT_EXECUTION_PREVIEW) ||
+                     (machine->executionMode == ROBOT_EXECUTION_PRODUCTION)))
                 {
                     return transition_to(
                         machine,
-                        ROBOT_STATE_WELDING
+                        ROBOT_STATE_PATH_EXECUTION
                     );
                 }
-                if (
-                    machine->executionMode ==
-                    ROBOT_EXECUTION_PRODUCTION
-                )
-                {
-                    return transition_to(
-                        machine,
-                        ROBOT_STATE_ARC_STABILIZING
-                    );
-                }
+
+                if (machine->executionMode == ROBOT_EXECUTION_PREVIEW)
+                    return transition_to(machine, ROBOT_STATE_WELDING);
+                if (machine->executionMode == ROBOT_EXECUTION_PRODUCTION)
+                    return transition_to(machine, ROBOT_STATE_ARC_STABILIZING);
 
                 /*
                  * Reaching Approach without a valid execution mode indicates
@@ -934,28 +965,7 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
             break;
         }
 
-                case ROBOT_STATE_ARC_STABILIZING:
-        {
-            if (event->type == SUPERVISOR_EVENT_STATE_COMPLETE)
-            {
-                if (
-                    machine->executionMode !=
-                    ROBOT_EXECUTION_PRODUCTION
-                )
-                {
-                    return reject_event(machine);
-                }
-
-                return transition_to(
-                    machine,
-                    ROBOT_STATE_WELDING
-                );
-            }
-
-            break;
-        }
-
-        case ROBOT_STATE_WELDING:
+        case ROBOT_STATE_PATH_EXECUTION:
         {
             if (event->type == SUPERVISOR_EVENT_STATE_COMPLETE)
             {
@@ -975,19 +985,6 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
                     return reject_event(machine);
                 }
 
-                return transition_to(
-                    machine,
-                    ROBOT_STATE_RETRACTING
-                );
-            }
-
-            break;
-        }
-
-        case ROBOT_STATE_RETRACTING:
-        {
-            if (event->type == SUPERVISOR_EVENT_STATE_COMPLETE)
-            {
                 RobotExecutionMode completedMode =
                     machine->executionMode;
 
@@ -1023,12 +1020,38 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
 
                 return transition_to(
                     machine,
-                    ROBOT_STATE_IDLE
+                    ROBOT_STATE_HOMING
                 );
             }
 
             break;
         }
+
+        case ROBOT_STATE_ARC_STABILIZING:
+            if (event->type == SUPERVISOR_EVENT_STATE_COMPLETE &&
+                machine->executionMode == ROBOT_EXECUTION_PRODUCTION)
+                return transition_to(machine, ROBOT_STATE_WELDING);
+            break;
+
+        case ROBOT_STATE_WELDING:
+            if (event->type == SUPERVISOR_EVENT_STATE_COMPLETE &&
+                (machine->executionMode == ROBOT_EXECUTION_PREVIEW ||
+                 machine->executionMode == ROBOT_EXECUTION_PRODUCTION))
+                return transition_to(machine, ROBOT_STATE_RETRACTING);
+            break;
+
+        case ROBOT_STATE_RETRACTING:
+            if (event->type == SUPERVISOR_EVENT_STATE_COMPLETE &&
+                (machine->executionMode == ROBOT_EXECUTION_PREVIEW ||
+                 machine->executionMode == ROBOT_EXECUTION_PRODUCTION))
+            {
+                if (machine->executionMode == ROBOT_EXECUTION_PREVIEW)
+                    machine->previewAccepted =
+                        machine->validatedTrajectoryAvailable;
+                machine->executionMode = ROBOT_EXECUTION_NONE;
+                return transition_to(machine, ROBOT_STATE_IDLE);
+            }
+            break;
 
         default:
         {
@@ -1037,4 +1060,29 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
     }
 
     return reject_event(machine);
+}
+
+const char *state_machine_state_name(RobotStateId state)
+{
+    static const char *names[] = {
+        "BOOT", "HOMING", "IDLE", "TEACHING", "PATH_VALIDATION",
+        "APPROACH", "PATH_EXECUTION", "ARC_STABILIZING", "WELDING",
+        "PAUSED", "RETRACTING", "FAULT", "EMERGENCY_STOP"
+    };
+    return ((unsigned)state < (unsigned)ROBOT_STATE_COUNT)
+        ? names[state] : "UNKNOWN_STATE";
+}
+
+const char *state_machine_event_name(SupervisorEventType event)
+{
+    static const char *names[] = {
+        "NONE", "TEACH", "VALIDATE_PREVIEW", "START_REPLAY",
+        "PAUSE_RESUME", "RESET", "HOME", "STATE_COMPLETE",
+        "STATE_FAILED", "VALIDATION_REJECTED", "STATE_ABORTED_HOME",
+        "STATE_ABORTED_RESET", "PROTECTIVE_STOP_ASSERTED",
+        "PROTECTIVE_STOP_CLEARED", "ESTOP_ASSERTED", "ESTOP_RELEASED",
+        "FAULT_DETECTED", "FAULT_ACKNOWLEDGED"
+    };
+    return ((unsigned)event < (sizeof(names) / sizeof(names[0])))
+        ? names[event] : "UNKNOWN_EVENT";
 }

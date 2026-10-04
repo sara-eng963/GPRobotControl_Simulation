@@ -33,6 +33,14 @@ typedef enum
     ROBOT_STATE_TEACHING,
     ROBOT_STATE_PATH_VALIDATION,
     ROBOT_STATE_APPROACH,
+    ROBOT_STATE_PATH_EXECUTION,
+
+    /*
+     * Legacy identifiers retained temporarily for source compatibility.
+     * New supervisory code must use ROBOT_STATE_PATH_EXECUTION. These values
+     * exist only so the pre-migration regression suite still compiles; the
+     * unified runtime does not perform arc stabilization or enter them.
+     */
     ROBOT_STATE_ARC_STABILIZING,
     ROBOT_STATE_WELDING,
     ROBOT_STATE_PAUSED,
@@ -84,7 +92,11 @@ typedef enum
 {
     ROBOT_FAULT_CODE_NONE = 0x0000U,
     ROBOT_FAULT_CODE_PROTECTIVE_STOP = 0x1001U,
-    ROBOT_FAULT_CODE_EMERGENCY_STOP = 0x2001U
+    ROBOT_FAULT_CODE_EMERGENCY_STOP = 0x2001U,
+    ROBOT_FAULT_CODE_EXECUTION_INVALID = 0x3001U,
+    ROBOT_FAULT_CODE_EXECUTION_IO = 0x3002U,
+    ROBOT_FAULT_CODE_WIRE_FEED_RELAY = 0x3003U,
+    ROBOT_FAULT_CODE_RETRACTION = 0x3004U
 
 } RobotFaultCode;
 

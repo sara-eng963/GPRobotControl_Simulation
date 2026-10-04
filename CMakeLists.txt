@@ -71,6 +71,10 @@ add_executable(
     StateMachine/States/state_teaching.c
     StateMachine/States/state_path_validation.c
     StateMachine/States/state_approach.c
+    StateMachine/States/state_path_execution.c
+    StateMachine/States/state_paused.c
+    StateMachine/States/state_fault.c
+    StateMachine/States/state_emergency_stop.c
 
     EtherCATComm/ethercat_master.c
     EtherCATComm/SOEM/soem_backend.c
@@ -490,6 +494,29 @@ endif()
 # ============================================================================
 
 add_executable(
+    runtime_states_test
+    StateMachine/Tests/test_runtime_states.c
+    StateMachine/States/state_path_execution.c
+    StateMachine/States/state_paused.c
+    StateMachine/States/state_fault.c
+    StateMachine/States/state_emergency_stop.c
+)
+
+target_include_directories(
+    runtime_states_test
+    PRIVATE
+    StateMachine
+    StateMachine/States
+)
+
+target_link_libraries(
+    runtime_states_test
+    PRIVATE
+    control_core
+    m
+)
+
+add_executable(
     state_machine_test
 
     StateMachine/Tests/test_state_machine.c
@@ -521,6 +548,10 @@ add_library(
     OBJECT
 
     StateMachine/supervisor_task.c
+    StateMachine/States/state_path_execution.c
+    StateMachine/States/state_paused.c
+    StateMachine/States/state_fault.c
+    StateMachine/States/state_emergency_stop.c
 )
 
 target_compile_features(

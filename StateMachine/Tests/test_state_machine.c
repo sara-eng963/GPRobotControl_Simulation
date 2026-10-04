@@ -3534,6 +3534,75 @@ static void test_controlled_approach_abort_outcomes(void)
         "Wrong-source abort increments rejection count"
     );
 }
+static void test_unified_execution_and_emergency_recovery(void)
+{
+    StateMachine machine;
+    SupervisorEvent event;
+    SupervisorResult result;
+
+    reach_preview_approach(&machine);
+    state_machine_enable_unified_execution(&machine);
+
+    event = make_event(SUPERVISOR_EVENT_STATE_COMPLETE,
+                       ROBOT_STATE_APPROACH);
+    result = state_machine_handle_event(&machine, &event);
+    check_true(result == SUPERVISOR_RESULT_TRANSITIONED,
+               "Unified policy accepts Approach completion");
+    check_true(machine.activeState == ROBOT_STATE_PATH_EXECUTION,
+               "Unified policy enters PATH_EXECUTION");
+
+    event = make_event(SUPERVISOR_EVENT_STATE_COMPLETE,
+                       ROBOT_STATE_PATH_EXECUTION);
+    result = state_machine_handle_event(&machine, &event);
+    check_true(result == SUPERVISOR_RESULT_TRANSITIONED,
+               "Unified execution completion transitions");
+    check_true(machine.activeState == ROBOT_STATE_HOMING,
+               "Unified execution returns through HOMING");
+    check_true(machine.previewAccepted,
+               "Preview is accepted after execution and retraction");
+
+    state_machine_init(&machine);
+    event = make_event(SUPERVISOR_EVENT_STATE_COMPLETE, ROBOT_STATE_BOOT);
+    (void)state_machine_handle_event(&machine, &event);
+    event = make_event(SUPERVISOR_EVENT_STATE_COMPLETE, ROBOT_STATE_HOMING);
+    (void)state_machine_handle_event(&machine, &event);
+    RobotSafetySnapshot healthy = {
+        .motionPermitted = true,
+        .drivesReady = true,
+        .ethercatHealthy = true,
+        .statusValid = true
+    };
+    state_machine_update_safety(&machine, &healthy);
+    state_machine_enable_unified_execution(&machine);
+    event = make_event(SUPERVISOR_EVENT_ESTOP_ASSERTED,
+                       ROBOT_STATE_IDLE);
+    (void)state_machine_handle_event(&machine, &event);
+    check_true(machine.activeState == ROBOT_STATE_EMERGENCY_STOP,
+               "E-stop enters EMERGENCY_STOP");
+
+    event = make_event(SUPERVISOR_EVENT_ESTOP_RELEASED,
+                       ROBOT_STATE_EMERGENCY_STOP);
+    (void)state_machine_handle_event(&machine, &event);
+    check_true(machine.activeState == ROBOT_STATE_EMERGENCY_STOP,
+               "E-stop release alone remains in emergency state");
+
+    event = make_event(SUPERVISOR_EVENT_RESET,
+                       ROBOT_STATE_EMERGENCY_STOP);
+    result = state_machine_handle_event(&machine, &event);
+    check_true(result == SUPERVISOR_RESULT_HANDLED &&
+               machine.activeState == ROBOT_STATE_EMERGENCY_STOP,
+               "Emergency Reset acknowledges without starting motion");
+    check_true(machine.emergencyResetAcknowledged,
+               "Emergency Reset acknowledgement is latched");
+
+    event = make_event(SUPERVISOR_EVENT_HOME,
+                       ROBOT_STATE_EMERGENCY_STOP);
+    result = state_machine_handle_event(&machine, &event);
+    check_true(result == SUPERVISOR_RESULT_TRANSITIONED &&
+               machine.activeState == ROBOT_STATE_HOMING,
+               "Explicit Home begins emergency recovery homing");
+}
+
 int main(void)
 {
     printf(
@@ -3562,6 +3631,7 @@ int main(void)
     test_safety_event_priority();
     test_invalid_input_robustness();
     test_controlled_approach_abort_outcomes();
+    test_unified_execution_and_emergency_recovery();
 
 
 

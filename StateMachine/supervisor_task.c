@@ -28,14 +28,20 @@ typedef struct
     TeachingState teaching;
     PathValidationState validation;
     ApproachState approach;
+    PathExecutionState path_execution;
+    PausedState paused;
+    FaultState fault;
+    EmergencyStopState emergency_stop;
 
     TeachingRuntimeInputs teaching_runtime;
     TeachingEvent pending_teaching_event;
     ApproachControlInputs approach_control;
+    PathExecutionInputs path_execution_inputs;
 
     TeachingOutputs teaching_outputs;
     PathValidationOutputs validation_outputs;
     ApproachOutputs approach_outputs;
+    PathExecutionOutputs path_execution_outputs;
 
     TaughtProgram submitted_program;
 
@@ -130,6 +136,11 @@ static void enter_active_state(SupervisorTaskContext *context)
 
         case ROBOT_STATE_APPROACH:
         {
+            if (machine->previousState == ROBOT_STATE_PAUSED &&
+                context->approach.initialized)
+            {
+                break;
+            }
             ApproachRequest request;
             memset(&request, 0, sizeof(request));
 
@@ -159,6 +170,67 @@ static void enter_active_state(SupervisorTaskContext *context)
             break;
         }
 
+        case ROBOT_STATE_PATH_EXECUTION:
+        {
+            if (machine->previousState == ROBOT_STATE_PAUSED &&
+                context->path_execution.initialized)
+            {
+                state_path_execution_resume(
+                    &context->path_execution,
+                    context->path_execution_inputs.now_ms
+                );
+                break;
+            }
+            PathExecutionRequest request;
+            memset(&request, 0, sizeof(request));
+            request.mode = machine->executionMode;
+            request.trajectory = context->config.validated_trajectory;
+            request.trajectory_ready = machine->validatedTrajectoryAvailable;
+            request.expected_program_id =
+                context->config.validated_trajectory->program_id;
+            request.expected_source_revision =
+                context->config.validated_trajectory->source_revision;
+            request.expected_artifact_crc =
+                context->config.validated_trajectory->artifact_crc;
+            memset(&context->path_execution_inputs, 0,
+                   sizeof(context->path_execution_inputs));
+            state_path_execution_enter(
+                &context->path_execution,
+                &request,
+                context->config.path_execution_config,
+                context->config.path_execution_services
+            );
+            break;
+        }
+
+        case ROBOT_STATE_PAUSED:
+            state_paused_enter(
+                &context->paused,
+                machine->resumeState,
+                context->config.paused_services
+            );
+            break;
+
+        case ROBOT_STATE_FAULT:
+            state_fault_enter(
+                &context->fault,
+                machine->previousState,
+                machine->faultSeverity,
+                machine->activeFaultCode,
+                true,
+                context->config.fault_services
+            );
+            break;
+
+        case ROBOT_STATE_EMERGENCY_STOP:
+            state_emergency_stop_enter(
+                &context->emergency_stop,
+                machine->previousState,
+                machine->safety.timestampMs,
+                context->config.emergency_stop_services
+            );
+            break;
+
         default:
             /* Later state modules are added here without changing policy. */
             break;
@@ -170,6 +242,29 @@ static void handle_policy_event(
     const SupervisorEvent *event
 )
 {
+    /*
+     * HOME/RESET during motion are requests to the active module first.
+     * The global transition is performed only after that module confirms a
+     * controlled stop with STATE_ABORTED_HOME/RESET.
+     */
+    if (event->type == SUPERVISOR_EVENT_RESET ||
+        event->type == SUPERVISOR_EVENT_HOME)
+    {
+        const bool reset = event->type == SUPERVISOR_EVENT_RESET;
+        if (context->machine.activeState == ROBOT_STATE_APPROACH)
+        {
+            context->approach_control.reset_requested = reset;
+            context->approach_control.home_requested = !reset;
+            return;
+        }
+        if (context->machine.activeState == ROBOT_STATE_PATH_EXECUTION)
+        {
+            context->path_execution_inputs.reset_requested = reset;
+            context->path_execution_inputs.home_requested = !reset;
+            return;
+        }
+    }
+
     RobotStateId before = context->machine.activeState;
     SupervisorResult result =
         state_machine_handle_event(&context->machine, event);
@@ -218,6 +313,11 @@ static void handle_message(
         case SUPERVISOR_MESSAGE_APPROACH_CONTROL:
             context->approach_control =
                 message->data.approach_control;
+            break;
+
+        case SUPERVISOR_MESSAGE_PATH_EXECUTION_INPUTS:
+            context->path_execution_inputs =
+                message->data.path_execution_inputs;
             break;
 
         default:
@@ -388,8 +488,103 @@ static void run_active_state(SupervisorTaskContext *context)
             }
             break;
 
+        case ROBOT_STATE_PATH_EXECUTION:
+            context->path_execution_inputs.motion_permission =
+                context->machine.safety.motionPermitted;
+            context->path_execution_inputs.drives_ready =
+                context->machine.safety.drivesReady;
+            context->path_execution_inputs.ethercat_healthy =
+                context->machine.safety.ethercatHealthy;
+            context->path_execution_inputs.estop_active =
+                context->machine.safety.estopActive;
+            context->path_execution_inputs.protective_stop_active =
+                context->machine.safety.protectiveStopActive;
+            context->path_execution_inputs.external_fault_active =
+                context->machine.safety.globalFaultActive;
+            step = state_path_execution_step(
+                &context->path_execution,
+                &context->path_execution_inputs,
+                &context->path_execution_outputs
+            );
+            context->path_execution_inputs.reset_requested = false;
+            context->path_execution_inputs.home_requested = false;
+            context->path_execution_inputs.pause_requested = false;
+
+            if (step == STATE_STEP_FAILED)
+            {
+                emit_step_failure(
+                    context,
+                    (uint32_t)context->path_execution.error
+                );
+            }
+            else if (step == STATE_STEP_COMPLETE)
+            {
+                SupervisorEventType type = SUPERVISOR_EVENT_STATE_COMPLETE;
+                if (context->path_execution.result ==
+                    PATH_EXEC_RESULT_ABORTED)
+                {
+                    type = (context->path_execution.abort_reason ==
+                            PATH_EXEC_ABORT_HOME)
+                        ? SUPERVISOR_EVENT_STATE_ABORTED_HOME
+                        : SUPERVISOR_EVENT_STATE_ABORTED_RESET;
+                }
+                SupervisorEvent event = make_result_event(
+                    type,
+                    ROBOT_STATE_PATH_EXECUTION,
+                    ROBOT_FAULT_SEVERITY_NONE,
+                    ROBOT_FAULT_CODE_NONE
+                );
+                handle_policy_event(context, &event);
+            }
+            break;
+
+        case ROBOT_STATE_PAUSED:
+        {
+            PausedInputs inputs;
+            memset(&inputs, 0, sizeof(inputs));
+            inputs.estop_active = context->machine.safety.estopActive;
+            inputs.external_fault_active =
+                context->machine.safety.globalFaultActive;
+            step = state_paused_step(&context->paused, &inputs);
+            if (step == STATE_STEP_FAILED)
+                emit_step_failure(context, 1U);
+            break;
+        }
+
+        case ROBOT_STATE_FAULT:
+        {
+            FaultInputs inputs;
+            inputs.fault_cause_active =
+                context->machine.safety.globalFaultActive ||
+                context->machine.safety.protectiveStopActive;
+            inputs.safety_healthy =
+                context->machine.safety.statusValid &&
+                !inputs.fault_cause_active &&
+                !context->machine.safety.estopActive;
+            step = state_fault_step(&context->fault, &inputs);
+            (void)step;
+            break;
+        }
+
+        case ROBOT_STATE_EMERGENCY_STOP:
+        {
+            EmergencyStopInputs inputs;
+            inputs.estop_active = context->machine.safety.estopActive;
+            inputs.reset_acknowledged =
+                context->machine.emergencyResetAcknowledged;
+            inputs.safety_healthy =
+                context->machine.safety.statusValid &&
+                !context->machine.safety.estopActive &&
+                !context->machine.safety.protectiveStopActive &&
+                !context->machine.safety.globalFaultActive;
+            step = state_emergency_stop_step(
+                &context->emergency_stop, &inputs);
+            (void)step;
+            break;
+        }
+
         default:
-            /* ARC_STABILIZING/WELDING/RETRACTING modules come next. */
+            /* Legacy execution states are intentionally not dispatched. */
             break;
     }
 }
@@ -431,6 +626,11 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
         (config->validated_trajectory == NULL) ||
         (config->approach_config == NULL) ||
         (config->approach_services == NULL) ||
+        (config->path_execution_config == NULL) ||
+        (config->path_execution_services == NULL) ||
+        (config->paused_services == NULL) ||
+        (config->fault_services == NULL) ||
+        (config->emergency_stop_services == NULL) ||
         (config->validation_sample_budget == 0U) ||
         (config->period_ticks == 0U))
     {
@@ -454,6 +654,7 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
     }
 
     state_machine_init(&g_supervisor.machine);
+    state_machine_enable_unified_execution(&g_supervisor.machine);
     g_supervisor.initialized = true;
     enter_active_state(&g_supervisor);
     return true;
