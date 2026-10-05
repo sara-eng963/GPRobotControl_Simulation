@@ -548,6 +548,7 @@ add_library(
     OBJECT
 
     StateMachine/supervisor_task.c
+    StateMachine/supervisor_io.c
     StateMachine/States/state_path_execution.c
     StateMachine/States/state_paused.c
     StateMachine/States/state_fault.c
@@ -582,3 +583,5 @@ target_link_libraries(
     freertos_config
     control_core
 )
+include("${CMAKE_CURRENT_SOURCE_DIR}/supervisor_interface_test.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/supervisor_mock_sim.cmake")

@@ -20,6 +20,7 @@
 typedef struct
 {
     StateMachine machine;
+    SupervisorInputSnapshot gpio_inputs;
     SupervisorTaskConfig config;
 
     BootState boot;
@@ -52,14 +53,18 @@ typedef struct
 
 static SupervisorTaskContext g_supervisor;
 
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
 static StaticQueue_t g_queue_control;
 static uint8_t g_queue_storage[
     SUPERVISOR_QUEUE_LENGTH * sizeof(SupervisorMessage)
 ];
+#endif
 static QueueHandle_t g_queue;
 
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
 static StaticTask_t g_task_control;
 static StackType_t g_task_stack[SUPERVISOR_TASK_STACK_WORDS];
+#endif
 static TaskHandle_t g_task;
 
 static uint32_t state_error_code(RobotStateId state, uint32_t detail)
@@ -282,6 +287,64 @@ static void handle_policy_event(
     }
 }
 
+static void handle_hmi_command(SupervisorTaskContext *context,
+                               SupervisorHmiCommand command)
+{
+    TeachingEvent teaching = TEACH_EVENT_NONE;
+    SupervisorEventType policy = SUPERVISOR_EVENT_NONE;
+    switch (command)
+    {
+        case SUP_HMI_LINE: teaching = TEACH_EVENT_SELECT_LINE; break;
+        case SUP_HMI_ARC: teaching = TEACH_EVENT_SELECT_ARC; break;
+        case SUP_HMI_CIRCLE: teaching = TEACH_EVENT_SELECT_CIRCLE; break;
+        case SUP_HMI_RECORD: teaching = TEACH_EVENT_RECORD_POINT; break;
+        case SUP_HMI_SPEED_UP: teaching = TEACH_EVENT_SPEED_INCREASE; break;
+        case SUP_HMI_SPEED_DOWN: teaching = TEACH_EVENT_SPEED_DECREASE; break;
+        case SUP_HMI_SPEED_DEFAULT: teaching = TEACH_EVENT_SPEED_DEFAULT; break;
+        case SUP_HMI_VALIDATE_PREVIEW:
+            if (context->machine.activeState == ROBOT_STATE_TEACHING)
+                teaching = TEACH_EVENT_VALIDATE_PATH;
+            else policy = SUPERVISOR_EVENT_VALIDATE_PREVIEW;
+            break;
+        case SUP_HMI_START_REPLAY: policy = SUPERVISOR_EVENT_START_REPLAY; break;
+        case SUP_HMI_PAUSE:
+            if (context->machine.activeState != ROBOT_STATE_PAUSED)
+                policy = SUPERVISOR_EVENT_PAUSE_RESUME;
+            break;
+        case SUP_HMI_RESUME:
+            if (context->machine.activeState == ROBOT_STATE_PAUSED)
+                policy = SUPERVISOR_EVENT_PAUSE_RESUME;
+            break;
+        case SUP_HMI_PAUSE_RESUME: policy = SUPERVISOR_EVENT_PAUSE_RESUME; break;
+        case SUP_HMI_HOME: policy = SUPERVISOR_EVENT_HOME; break;
+        case SUP_HMI_RESET:
+            if (context->machine.activeState == ROBOT_STATE_TEACHING)
+                teaching = TEACH_EVENT_RESET;
+            else policy = SUPERVISOR_EVENT_RESET;
+            break;
+        default: return;
+    }
+    if (command == SUP_HMI_LINE || command == SUP_HMI_ARC ||
+        command == SUP_HMI_CIRCLE)
+    {
+        if (context->machine.activeState == ROBOT_STATE_IDLE)
+        {
+            SupervisorEvent event = make_result_event(SUPERVISOR_EVENT_TEACH,
+                ROBOT_STATE_IDLE, ROBOT_FAULT_SEVERITY_NONE, 0U);
+            handle_policy_event(context, &event);
+        }
+    }
+    if (teaching != TEACH_EVENT_NONE &&
+        context->machine.activeState == ROBOT_STATE_TEACHING)
+        context->pending_teaching_event = teaching;
+    if (policy != SUPERVISOR_EVENT_NONE)
+    {
+        SupervisorEvent event = make_result_event(policy,
+            context->machine.activeState, ROBOT_FAULT_SEVERITY_NONE, 0U);
+        handle_policy_event(context, &event);
+    }
+}
+
 static void handle_message(
     SupervisorTaskContext *context,
     const SupervisorMessage *message
@@ -289,6 +352,9 @@ static void handle_message(
 {
     switch (message->type)
     {
+        case SUPERVISOR_MESSAGE_HMI_COMMAND:
+            handle_hmi_command(context, message->data.hmi_command);
+            break;
         case SUPERVISOR_MESSAGE_EVENT:
             handle_policy_event(context, &message->data.event);
             break;
@@ -597,6 +663,17 @@ static void supervisor_task_entry(void *argument)
 
     for (;;)
     {
+        /* Acquisition only: raw inputs do not authorize motion or create HMI
+         * events until a separately tested input adapter is connected. */
+        SupervisorInputSnapshot sampled = {0};
+        if (context->config.io.read_inputs != NULL)
+        {
+            sampled.valid = context->config.io.read_inputs(
+                context->config.io.context, &sampled);
+        }
+        taskENTER_CRITICAL();
+        context->gpio_inputs = sampled;
+        taskEXIT_CRITICAL();
         for (uint32_t count = 0U;
              count < SUPERVISOR_MAX_MESSAGES_CYCLE;
              ++count)
@@ -606,9 +683,21 @@ static void supervisor_task_entry(void *argument)
                 break;
             }
             handle_message(context, &message);
+            /* Consume Teaching commands before another can overwrite the
+             * single pending event slot (Record must never be coalesced). */
+            if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
         }
 
         run_active_state(context);
+        if (context->config.io.write_outputs != NULL)
+        {
+            SupervisorOutputSnapshot outputs;
+            supervisor_io_make_status(&context->machine, &outputs);
+            /* The adapter owns output diagnostics; this result does not
+             * silently acknowledge any fault or change motion permission. */
+            (void)context->config.io.write_outputs(
+                context->config.io.context, &outputs);
+        }
         vTaskDelayUntil(&last_wake, context->config.period_ticks);
     }
 }
@@ -642,12 +731,17 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
     g_supervisor.next_program_id = config->first_program_id;
     g_supervisor.entered_state = ROBOT_STATE_COUNT;
 
+    /* Prefer static storage when enabled; otherwise use the configured heap. */
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
     g_queue = xQueueCreateStatic(
         SUPERVISOR_QUEUE_LENGTH,
         sizeof(SupervisorMessage),
         g_queue_storage,
         &g_queue_control
     );
+#else
+    g_queue = xQueueCreate(SUPERVISOR_QUEUE_LENGTH, sizeof(SupervisorMessage));
+#endif
     if (g_queue == NULL)
     {
         return false;
@@ -667,6 +761,7 @@ bool supervisor_task_start(UBaseType_t priority)
         return false;
     }
 
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
     g_task = xTaskCreateStatic(
         supervisor_task_entry,
         "Supervisor",
@@ -676,6 +771,19 @@ bool supervisor_task_start(UBaseType_t priority)
         g_task_stack,
         &g_task_control
     );
+#else
+    if (xTaskCreate(
+            supervisor_task_entry,
+            "Supervisor",
+            SUPERVISOR_TASK_STACK_WORDS,
+            &g_supervisor,
+            priority,
+            &g_task) != pdPASS)
+    {
+        g_task = NULL;
+        return false;
+    }
+#endif
     return g_task != NULL;
 }
 
@@ -717,7 +825,45 @@ QueueHandle_t supervisor_task_queue(void)
     return g_queue;
 }
 
+bool supervisor_task_get_inputs(SupervisorInputSnapshot *inputs)
+{
+    if (inputs == NULL || !g_supervisor.initialized) return false;
+    taskENTER_CRITICAL();
+    *inputs = g_supervisor.gpio_inputs;
+    taskEXIT_CRITICAL();
+    return true;
+}
+
+bool supervisor_task_post_hmi(SupervisorHmiCommand command, TickType_t wait_ticks)
+{
+    if ((unsigned int)command >= SUP_HMI_COMMAND_COUNT) return false;
+    SupervisorMessage message = {0};
+    message.type = SUPERVISOR_MESSAGE_HMI_COMMAND;
+    message.data.hmi_command = command;
+    return supervisor_task_post(&message, wait_ticks);
+}
+
 TaskHandle_t supervisor_task_handle(void)
 {
     return g_task;
+}
+
+bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out)
+{
+    if (out == NULL || !g_supervisor.initialized) return false;
+    taskENTER_CRITICAL();
+    out->machine = g_supervisor.machine;
+    out->boot = g_supervisor.boot;
+    out->homing_phase = g_supervisor.homing.phase;
+    out->homing_error = g_supervisor.homing.error;
+    out->teaching = g_supervisor.teaching_outputs;
+    out->validation = g_supervisor.validation_outputs;
+    out->approach = g_supervisor.approach_outputs;
+    out->execution = g_supervisor.path_execution_outputs;
+    out->selected_geometry = g_supervisor.teaching.selected_segment_type;
+    out->working_segment = g_supervisor.teaching.working_segment;
+    out->captured_points = g_supervisor.teaching.captured_point_count;
+    out->segment_count = g_supervisor.teaching.draft.segment_count;
+    taskEXIT_CRITICAL();
+    return true;
 }

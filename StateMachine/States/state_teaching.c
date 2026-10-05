@@ -671,6 +671,21 @@ static void begin_segment(
     state->working_segment.orientation_mode =
         state->selected_orientation_mode;
 
+    /* Attach every later segment to the previous geometric endpoint.
+     * A full circle ends at P1; P3 only defines its geometry.
+     * Copy the complete taught pose and joint seed, not position alone.
+     */
+    if (state->draft.segment_count > 0U)
+    {
+        const TaughtSegment *previous =
+            &state->draft.segments[state->draft.segment_count - 1U];
+        unsigned int endpoint = previous->type == TEACH_SEGMENT_LINE ? 1U :
+                                previous->type == TEACH_SEGMENT_ARC ? 2U : 0U;
+        state->working_segment.points[0] = previous->points[endpoint];
+        state->captured_point_count = 1U;
+        state->working_segment.point_count = 1U;
+    }
+
     state->phase =
         TEACH_PHASE_WAIT_POINT;
 
@@ -1162,11 +1177,20 @@ static bool change_speed(
         TEACH_ERR_NONE;
 
 
-    /*
-     * Preserve teammate behavior:
-     *
-     * a segment snapshots its speed when selected.
+    /* One operator-selected TCP speed for the entire draft job.
+     * Update completed segments and the current segment together.
+     * begin_segment() uses teaching_speed_mps for all future segments.
+     * Submitted drafts are blocked by state_teaching_step() before this call.
      */
+    for (unsigned int i = 0U; i < state->draft.segment_count; ++i)
+    {
+        state->draft.segments[i].speed_mps = requestedSpeed;
+    }
+    state->working_segment.speed_mps = requestedSpeed;
+    state->draft.global_speed_scale = 1.0F;
+    ++state->draft.draft_revision;
+    state->draft.draft_crc = 0U;
+    state->draft_dirty = true;
     return true;
 }
 

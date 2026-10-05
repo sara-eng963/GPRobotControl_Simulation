@@ -2,6 +2,8 @@
 #define SUPERVISOR_TASK_H
 
 #include "state_machine.h"
+#include "supervisor_io.h"
+#include "supervisor_hmi.h"
 #include "States/state_approach.h"
 #include "States/state_boot.h"
 #include "States/state_homing.h"
@@ -27,7 +29,8 @@ typedef enum
     SUPERVISOR_MESSAGE_TEACHING_EVENT,
     SUPERVISOR_MESSAGE_TEACHING_RUNTIME,
     SUPERVISOR_MESSAGE_APPROACH_CONTROL,
-    SUPERVISOR_MESSAGE_PATH_EXECUTION_INPUTS
+    SUPERVISOR_MESSAGE_PATH_EXECUTION_INPUTS,
+    SUPERVISOR_MESSAGE_HMI_COMMAND
 } SupervisorMessageType;
 
 typedef struct
@@ -41,6 +44,7 @@ typedef struct
         TeachingRuntimeInputs teaching_runtime;
         ApproachControlInputs approach_control;
         PathExecutionInputs path_execution_inputs;
+        SupervisorHmiCommand hmi_command;
     } data;
 } SupervisorMessage;
 
@@ -69,7 +73,26 @@ typedef struct
     uint16_t validation_sample_budget;
     uint32_t first_program_id;
     TickType_t period_ticks;
+    /* Optional board adapter; NULL callbacks allow incremental integration. */
+    SupervisorIoServices io;
 } SupervisorTaskConfig;
+
+/* Read-only diagnostics; state contexts remain owned by SupervisorTask. */
+typedef struct {
+    StateMachine machine;
+    BootState boot;
+    HomingPhase homing_phase;
+    HomingError homing_error;
+    TeachingOutputs teaching;
+    PathValidationOutputs validation;
+    ApproachOutputs approach;
+    PathExecutionOutputs execution;
+    TeachingSegmentType selected_geometry;
+    TaughtSegment working_segment;
+    uint8_t captured_points;
+    uint16_t segment_count;
+} SupervisorDiagnostics;
+bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out);
 
 bool supervisor_task_init(const SupervisorTaskConfig *config);
 bool supervisor_task_start(UBaseType_t priority);
@@ -81,6 +104,8 @@ bool supervisor_task_post_from_isr(
 );
 
 bool supervisor_task_get_state(StateMachine *state);
+bool supervisor_task_get_inputs(SupervisorInputSnapshot *inputs);
+bool supervisor_task_post_hmi(SupervisorHmiCommand command, TickType_t wait_ticks);
 QueueHandle_t supervisor_task_queue(void);
 TaskHandle_t supervisor_task_handle(void);
 

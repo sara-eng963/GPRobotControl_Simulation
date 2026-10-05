@@ -193,21 +193,11 @@ static Ray viewport_mouse_ray(
     Camera3D camera
 )
 {
-    const Vector2 local =
-    {
-        mouse.x - viewport.x,
-        mouse.y - viewport.y
-    };
-
-    return
-        GetScreenToWorldRayEx(
-            local,
-            camera,
-            (int)viewport.width,
-            (int)viewport.height
-        );
+    /* BeginMode3D uses the full window; scissoring only clips drawing. */
+    (void)viewport;
+    return GetScreenToWorldRayEx(
+        mouse, camera, GetScreenWidth(), GetScreenHeight());
 }
-
 
 static Vector2 viewport_world_to_screen(
     Vector3 point,
@@ -215,20 +205,11 @@ static Vector2 viewport_world_to_screen(
     Camera3D camera
 )
 {
-    Vector2 local =
-        GetWorldToScreenEx(
-            point,
-            camera,
-            (int)viewport.width,
-            (int)viewport.height
-        );
-
-    local.x += viewport.x;
-    local.y += viewport.y;
-
-    return local;
+    /* Match the projection used to draw the visible target. */
+    (void)viewport;
+    return GetWorldToScreenEx(
+        point, camera, GetScreenWidth(), GetScreenHeight());
 }
-
 
 static Vector3 drag_plane_normal_for_view(
     TeachView view,
