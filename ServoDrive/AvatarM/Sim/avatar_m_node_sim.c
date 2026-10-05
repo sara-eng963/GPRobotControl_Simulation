@@ -1,24 +1,13 @@
 #include "avatar_m_node_sim.h"
 
+#include "../../../CANComm/CANopen/canopen_heartbeat.h"
 #include "../../../CANComm/CANopen/canopen_ids.h"
+#include "../../../CANComm/CANopen/canopen_nmt.h"
 #include "../avatar_m_pdo.h"
+#include "../avatar_m_registers.h"
 
 #include <stddef.h>
 #include <string.h>
-
-#define AVATAR_M_WORK_MODE_INTERPOLATION 7U
-
-#define AVATAR_M_NMT_COMMAND_START       0x01U
-#define AVATAR_M_NMT_COMMAND_STOP        0x02U
-#define AVATAR_M_NMT_COMMAND_PREOP       0x80U
-#define AVATAR_M_NMT_COMMAND_RESET_APP   0x81U
-#define AVATAR_M_NMT_COMMAND_RESET_COMM  0x82U
-
-#define AVATAR_M_HEARTBEAT_OPERATIONAL   0x05U
-#define AVATAR_M_HEARTBEAT_PREOP         0x7FU
-#define AVATAR_M_HEARTBEAT_BOOTUP        0x00U
-
-#define AVATAR_M_DEFAULT_HEARTBEAT_MS    1000U
 
 static bool nmt_targets_node(
     const AvatarMNodeSim *node,
@@ -63,28 +52,28 @@ static AvatarMNodeResult handle_nmt(
         return AVATAR_M_NODE_NO_RESPONSE;
     }
 
-    switch (input->data[0])
+    switch ((CanopenNmtCommand)input->data[0])
     {
-        case AVATAR_M_NMT_COMMAND_START:
+        case CANOPEN_NMT_START:
             node->nmt_state = AVATAR_M_NMT_OPERATIONAL;
             node->heartbeat_elapsed_ms = 0U;
             return AVATAR_M_NODE_NO_RESPONSE;
 
-        case AVATAR_M_NMT_COMMAND_STOP:
+        case CANOPEN_NMT_STOP:
             node->nmt_state = AVATAR_M_NMT_STOPPED;
             node->heartbeat_elapsed_ms = 0U;
             return AVATAR_M_NODE_NO_RESPONSE;
 
-        case AVATAR_M_NMT_COMMAND_PREOP:
+        case CANOPEN_NMT_PRE_OPERATIONAL:
             node->nmt_state = AVATAR_M_NMT_PRE_OPERATIONAL;
             node->heartbeat_elapsed_ms = 0U;
             return AVATAR_M_NODE_NO_RESPONSE;
 
-        case AVATAR_M_NMT_COMMAND_RESET_APP:
-        case AVATAR_M_NMT_COMMAND_RESET_COMM:
+        case CANOPEN_NMT_RESET_APPLICATION:
+        case CANOPEN_NMT_RESET_COMMUNICATION:
             /*
-             * Vendor manual: reset emits heartbeat 0 once, then 0x7F
-             * after returning to pre-operational state.
+             * AVATAR manual: reset emits boot-up 0 once, then 0x7F after
+             * returning to pre-operational state.
              *
              * Saved-object restoration and CAN peripheral reinitialization are
              * not invented here because those details are not represented by
@@ -97,7 +86,7 @@ static AvatarMNodeResult handle_nmt(
 
             build_heartbeat(
                 node,
-                AVATAR_M_HEARTBEAT_BOOTUP,
+                CANOPEN_HEARTBEAT_BOOTUP,
                 response
             );
 
@@ -123,7 +112,7 @@ static AvatarMNodeResult handle_rpdo4(
     }
 
     /* This simulator only claims the documented interpolation-mode behavior. */
-    if (node->work_mode != AVATAR_M_WORK_MODE_INTERPOLATION)
+    if (node->work_mode != (uint8_t)AVATAR_M_MODE_INTERPOLATION)
     {
         return AVATAR_M_NODE_NO_RESPONSE;
     }
@@ -175,7 +164,7 @@ static AvatarMNodeResult handle_sync(
 
     if (
         node->nmt_state != AVATAR_M_NMT_OPERATIONAL ||
-        node->work_mode != AVATAR_M_WORK_MODE_INTERPOLATION ||
+        node->work_mode != (uint8_t)AVATAR_M_MODE_INTERPOLATION ||
         !node->cached_target_valid
     )
     {
@@ -210,7 +199,7 @@ bool avatar_m_node_init(
 
     node->node_id = node_id;
     node->nmt_state = AVATAR_M_NMT_PRE_OPERATIONAL;
-    node->heartbeat_period_ms = AVATAR_M_DEFAULT_HEARTBEAT_MS;
+    node->heartbeat_period_ms = AVATAR_M_DEFAULT_HEARTBEAT_PRODUCER_MS;
 
     return true;
 }
@@ -262,7 +251,7 @@ bool avatar_m_node_tick_ms(
         return false;
     }
 
-    /* Vendor NMT table says heartbeat is invalid in the stopped state. */
+    /* AVATAR manual says heartbeat is invalid in the stopped state. */
     if (node->nmt_state == AVATAR_M_NMT_STOPPED)
     {
         return false;
@@ -287,7 +276,7 @@ bool avatar_m_node_tick_ms(
     {
         build_heartbeat(
             node,
-            AVATAR_M_HEARTBEAT_OPERATIONAL,
+            CANOPEN_HEARTBEAT_OPERATIONAL,
             heartbeat
         );
     }
@@ -295,7 +284,7 @@ bool avatar_m_node_tick_ms(
     {
         build_heartbeat(
             node,
-            AVATAR_M_HEARTBEAT_PREOP,
+            CANOPEN_HEARTBEAT_PRE_OPERATIONAL,
             heartbeat
         );
     }
