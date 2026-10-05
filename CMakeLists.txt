@@ -585,3 +585,28 @@ target_link_libraries(
 )
 include("${CMAKE_CURRENT_SOURCE_DIR}/supervisor_interface_test.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/supervisor_mock_sim.cmake")
+
+# ============================================================================
+# AVATAR M CANOPEN PROTOCOL TEST
+# ============================================================================
+
+add_executable(
+    avatar_m_canopen_test
+
+    CANComm/Tests/test_avatar_m_canopen.c
+    ServoDrive/AvatarM/avatar_m_pdo.c
+)
+
+target_compile_features(
+    avatar_m_canopen_test
+    PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    avatar_m_canopen_test
+    PRIVATE
+    CANComm
+    CANComm/CANopen
+    ServoDrive/AvatarM
+)
