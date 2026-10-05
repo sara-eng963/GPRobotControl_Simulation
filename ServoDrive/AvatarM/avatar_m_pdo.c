@@ -18,6 +18,16 @@ static void write_u32_le(
 }
 
 
+static void write_u16_le(
+    uint8_t *data,
+    uint16_t value
+)
+{
+    data[0] = (uint8_t)(value);
+    data[1] = (uint8_t)(value >> 8);
+}
+
+
 static uint32_t read_u32_le(
     const uint8_t *data
 )
@@ -66,6 +76,78 @@ bool avatar_m_build_rpdo4(
     write_u32_le(
         frame->data,
         (uint32_t)target_position
+    );
+
+    return true;
+}
+
+
+bool avatar_m_parse_rpdo4(
+    uint8_t node_id,
+    const CanFrame *frame,
+    int32_t *target_position
+)
+{
+    if (
+        frame == NULL ||
+        target_position == NULL ||
+        !canopen_node_id_valid(node_id)
+    )
+    {
+        return false;
+    }
+
+    if (
+        frame->id != canopen_rpdo4_id(node_id) ||
+        frame->dlc != 4U
+    )
+    {
+        return false;
+    }
+
+    uint32_t raw_position =
+        read_u32_le(frame->data);
+
+    memcpy(
+        target_position,
+        &raw_position,
+        sizeof(raw_position)
+    );
+
+    return true;
+}
+
+
+bool avatar_m_build_tpdo4(
+    uint8_t node_id,
+    int32_t actual_position,
+    uint16_t statusword,
+    CanFrame *frame
+)
+{
+    if (
+        frame == NULL ||
+        !canopen_node_id_valid(node_id)
+    )
+    {
+        return false;
+    }
+
+    memset(frame, 0, sizeof(*frame));
+
+    frame->id =
+        canopen_tpdo4_id(node_id);
+
+    frame->dlc = 6U;
+
+    write_u32_le(
+        frame->data,
+        (uint32_t)actual_position
+    );
+
+    write_u16_le(
+        &frame->data[4],
+        statusword
     );
 
     return true;
