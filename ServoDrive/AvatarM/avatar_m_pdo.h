@@ -6,6 +6,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct
 {
     int32_t actual_position;
@@ -41,5 +45,9 @@ bool avatar_m_parse_tpdo4(
 void avatar_m_build_sync(
     CanFrame *frame
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* AVATAR_M_PDO_H */
