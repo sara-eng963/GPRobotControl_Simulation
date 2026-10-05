@@ -6,6 +6,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Protocol-level simulation of one AVATAR M-Series CANopen node.
  *
@@ -84,5 +88,9 @@ void avatar_m_node_set_work_mode(
     AvatarMNodeSim *node,
     uint8_t work_mode
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* AVATAR_M_NODE_SIM_H */
