@@ -610,3 +610,20 @@ target_include_directories(
     CANComm/CANopen
     ServoDrive/AvatarM
 )
+
+add_executable(
+    can_backend_test
+    CANComm/Tests/test_can_backend.c
+)
+
+target_compile_features(
+    can_backend_test
+    PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    can_backend_test
+    PRIVATE
+    CANComm
+)
