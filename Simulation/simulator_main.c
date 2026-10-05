@@ -2186,15 +2186,13 @@ static void send_status(
     const int expected_wkc =
         ethercat_master_expected_wkc();
 
-    const int shown_wkc =
-        runtime->last_wkc > 0
-        ? runtime->last_wkc
-        : expected_wkc;
+    const int actual_wkc =
+        ethercat_master_last_wkc();
 
     packet[HMI_STATUS_WORD_WKC] =
         htonl(
-            shown_wkc > 0
-            ? (uint32_t)shown_wkc
+            actual_wkc > 0
+            ? (uint32_t)actual_wkc
             : 0U
         );
 
