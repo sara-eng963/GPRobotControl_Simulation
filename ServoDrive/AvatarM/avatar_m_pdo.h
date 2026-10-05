@@ -19,6 +19,19 @@ bool avatar_m_build_rpdo4(
     CanFrame *frame
 );
 
+bool avatar_m_parse_rpdo4(
+    uint8_t node_id,
+    const CanFrame *frame,
+    int32_t *target_position
+);
+
+bool avatar_m_build_tpdo4(
+    uint8_t node_id,
+    int32_t actual_position,
+    uint16_t statusword,
+    CanFrame *frame
+);
+
 bool avatar_m_parse_tpdo4(
     uint8_t node_id,
     const CanFrame *frame,
