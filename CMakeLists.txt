@@ -2,6 +2,72 @@ cmake_minimum_required(VERSION 3.28)
 
 project(GPRobotControl_Simulation C)
 
+option(
+    ENABLE_SILKIT
+    "Build SIL Kit CAN simulation support"
+    OFF
+)
+
+if(ENABLE_SILKIT)
+
+add_library(
+    silkit_can_backend
+
+    CANComm/SILKit/silkit_can_backend.cpp
+)
+
+target_include_directories(
+    silkit_can_backend
+    PUBLIC
+    CANComm
+    CANComm/SILKit
+)
+
+target_link_libraries(
+    silkit_can_backend
+    PUBLIC
+
+    SilKit::SilKit
+    Threads::Threads
+)
+
+target_compile_features(
+    silkit_can_backend
+    PRIVATE
+    cxx_std_17
+)
+
+    enable_language(CXX)
+
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    set(
+        SILKIT_ROOT
+        ""
+        CACHE PATH
+        "Path to SIL Kit installation root"
+    )
+
+    if(NOT SILKIT_ROOT)
+        message(
+            FATAL_ERROR
+            "ENABLE_SILKIT=ON requires SILKIT_ROOT"
+        )
+    endif()
+
+    find_package(
+        SilKit
+        REQUIRED
+        CONFIG
+        PATHS "${SILKIT_ROOT}"
+        NO_DEFAULT_PATH
+    )
+
+    find_package(Threads REQUIRED)
+
+endif()
+
 set(CMAKE_C_STANDARD 11)
 
 # ----------------------------
@@ -627,3 +693,39 @@ target_include_directories(
     PRIVATE
     CANComm
 )
+
+if(ENABLE_SILKIT)
+add_executable(
+    silkit_can_backend_test
+
+    CANComm/Tests/test_silkit_can_backend.cpp
+)
+
+target_link_libraries(
+    silkit_can_backend_test
+    PRIVATE
+
+    silkit_can_backend
+)
+
+target_compile_features(
+    silkit_can_backend_test
+    PRIVATE
+    cxx_std_17
+)
+
+    add_executable(
+        silkit_smoke_test
+
+        CANComm/Tests/test_silkit_smoke.cpp
+    )
+
+    target_link_libraries(
+        silkit_smoke_test
+        PRIVATE
+
+        SilKit::SilKit
+        Threads::Threads
+    )
+
+endif()
