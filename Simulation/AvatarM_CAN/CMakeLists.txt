@@ -34,10 +34,9 @@ find_package(Threads REQUIRED)
 
 set(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 
-add_executable(
-    avatar_m_silkit_integration_test
+set(
+    AVATAR_M_SILKIT_COMMON_SOURCES
 
-    test_avatar_m_silkit_node.cpp
     avatar_m_silkit_node.cpp
 
     ${REPO_ROOT}/CANComm/SILKit/silkit_can_backend.cpp
@@ -46,23 +45,47 @@ add_executable(
     ${REPO_ROOT}/ServoDrive/AvatarM/avatar_m_pdo.c
 )
 
-target_include_directories(
-    avatar_m_silkit_integration_test
-    PRIVATE
+function(configure_avatar_m_silkit_test target_name)
+    target_include_directories(
+        ${target_name}
+        PRIVATE
 
-    ${REPO_ROOT}
-    ${REPO_ROOT}/CANComm
-    ${REPO_ROOT}/CANComm/CANopen
-    ${REPO_ROOT}/CANComm/SILKit
-    ${REPO_ROOT}/ServoDrive/AvatarM
-    ${REPO_ROOT}/ServoDrive/AvatarM/Sim
-    ${CMAKE_CURRENT_LIST_DIR}
+        ${REPO_ROOT}
+        ${REPO_ROOT}/CANComm
+        ${REPO_ROOT}/CANComm/CANopen
+        ${REPO_ROOT}/CANComm/SILKit
+        ${REPO_ROOT}/ServoDrive/AvatarM
+        ${REPO_ROOT}/ServoDrive/AvatarM/Sim
+        ${CMAKE_CURRENT_LIST_DIR}
+    )
+
+    target_link_libraries(
+        ${target_name}
+        PRIVATE
+
+        SilKit::SilKit
+        Threads::Threads
+    )
+endfunction()
+
+add_executable(
+    avatar_m_silkit_integration_test
+
+    test_avatar_m_silkit_node.cpp
+    ${AVATAR_M_SILKIT_COMMON_SOURCES}
 )
 
-target_link_libraries(
+configure_avatar_m_silkit_test(
     avatar_m_silkit_integration_test
-    PRIVATE
+)
 
-    SilKit::SilKit
-    Threads::Threads
+add_executable(
+    avatar_m_silkit_six_node_test
+
+    test_avatar_m_silkit_six_nodes.cpp
+    ${AVATAR_M_SILKIT_COMMON_SOURCES}
+)
+
+configure_avatar_m_silkit_test(
+    avatar_m_silkit_six_node_test
 )
