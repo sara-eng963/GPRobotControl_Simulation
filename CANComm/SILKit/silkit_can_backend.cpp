@@ -29,6 +29,13 @@ using OperationMode =
     SilKit::Services::Orchestration::OperationMode;
 
 
+struct QueuedCanFrame
+{
+    CanFrame frame{};
+    uint64_t rx_time_ns = 0U;
+};
+
+
 struct SilKitCanContext
 {
     std::unique_ptr<SilKit::IParticipant> participant;
@@ -43,7 +50,7 @@ struct SilKitCanContext
 
     std::mutex rx_mutex;
 
-    std::deque<CanFrame> rx_queue;
+    std::deque<QueuedCanFrame> rx_queue;
 
     std::atomic<bool> ready{false};
 
@@ -138,7 +145,8 @@ CanBackendResult silkit_receive(
         return CAN_BACKEND_WOULD_BLOCK;
     }
 
-    *frame = context->rx_queue.front();
+    *frame =
+        context->rx_queue.front().frame;
 
     context->rx_queue.pop_front();
 
@@ -286,12 +294,25 @@ bool silkit_can_backend_create(
                         frame.data
                     );
 
+                    const uint64_t rx_time_ns =
+                        static_cast<uint64_t>(
+                            std::chrono::duration_cast<
+                                std::chrono::nanoseconds
+                            >(
+                                std::chrono::steady_clock::now()
+                                    .time_since_epoch()
+                            ).count()
+                        );
+
                     std::lock_guard<std::mutex> lock(
                         context->rx_mutex
                     );
 
                     context->rx_queue.push_back(
-                        frame
+                        QueuedCanFrame{
+                            frame,
+                            rx_time_ns
+                        }
                     );
                 }
             );
@@ -397,4 +418,47 @@ bool silkit_can_backend_wait_ready(
     }
 
     return context->ready.load();
+}
+
+
+extern "C"
+bool silkit_can_backend_receive_timestamped(
+    CanBackend *backend,
+    CanFrame *frame,
+    uint64_t *rx_time_ns
+)
+{
+    if (
+        backend == nullptr ||
+        backend->context == nullptr ||
+        frame == nullptr ||
+        rx_time_ns == nullptr
+    )
+    {
+        return false;
+    }
+
+    auto *context =
+        static_cast<SilKitCanContext *>(
+            backend->context
+        );
+
+    std::lock_guard<std::mutex> lock(
+        context->rx_mutex
+    );
+
+    if (context->rx_queue.empty())
+    {
+        return false;
+    }
+
+    const QueuedCanFrame queued =
+        context->rx_queue.front();
+
+    context->rx_queue.pop_front();
+
+    *frame = queued.frame;
+    *rx_time_ns = queued.rx_time_ns;
+
+    return true;
 }
