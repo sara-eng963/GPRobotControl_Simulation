@@ -25,7 +25,6 @@ constexpr uint32_t kBitrate = 1000000U;
 constexpr uint32_t kExpectedSyncUs = 2000U;
 constexpr uint32_t kBurstResetUs = 50000U;
 constexpr std::size_t kNodeCount = 6U;
-constexpr std::size_t kRecentRows = 18U;
 constexpr double kStatsWindowSeconds = 1.0;
 constexpr const char *kDefaultRegistryUri = "silkit://localhost:8500";
 constexpr const char *kNetworkName = "CAN1";
@@ -638,9 +637,9 @@ int main()
     );
 
     InitWindow(
-        1180,
-        760,
-        "CANopen Live Monitor - SIL Kit CAN1"
+        1040,
+        690,
+        "CANopen Live Monitor - Simple View"
     );
 
     SetTargetFPS(60);
@@ -650,7 +649,6 @@ int main()
     uint64_t last_console_us = 0U;
 
     MonitorStats stats;
-    std::deque<FrameInfo> recent;
     std::deque<WireSample> wire_window;
 
     uint64_t previous_window_rpdo =
@@ -662,6 +660,21 @@ int main()
 
     double rpdo_per_s = 0.0;
     double tpdo_per_s = 0.0;
+
+    /*
+     * Human-facing values are intentionally refreshed only 4 times/second.
+     * The logger still records frames and metrics at full speed.
+     */
+    uint64_t last_display_update_us = 0U;
+    double display_frames_per_s = 0.0;
+    double display_load_pct = 0.0;
+    double display_cycle_hz = 0.0;
+    double display_sync_period_ms = 0.0;
+    double display_sync_jitter_ms = 0.0;
+    double display_latency_avg_ms = 0.0;
+    double display_latency_max_ms = 0.0;
+    uint64_t display_missed_sync = 0U;
+    std::array<bool, kNodeCount> display_node_ok{};
 
     std::printf(
         "[CAN MONITOR] ready: %s / %s @ %u bit/s\n",
@@ -741,13 +754,6 @@ int main()
                     worst_bits
                 }
             );
-
-            recent.push_front(info);
-
-            while (recent.size() > kRecentRows)
-            {
-                recent.pop_back();
-            }
 
             frame_log
                 << frame_us << ','
@@ -934,6 +940,38 @@ int main()
             last_console_us = now_us;
         }
 
+        if (
+            last_display_update_us == 0U ||
+            now_us - last_display_update_us >= 250000U
+        )
+        {
+            display_frames_per_s = frames_per_s;
+            display_load_pct = worst_load_pct;
+            display_cycle_hz = observed_cycle_hz;
+            display_sync_period_ms =
+                stats.sync_period_latest_ms;
+            display_sync_jitter_ms =
+                stats.sync_jitter_latest_ms;
+            display_latency_avg_ms = latency_avg;
+            display_latency_max_ms = latency_max;
+            display_missed_sync =
+                stats.missed_sync_cycles;
+
+            for (std::size_t i = 0U; i < kNodeCount; ++i)
+            {
+                const NodeStats &node =
+                    stats.nodes[i];
+
+                display_node_ok[i] =
+                    node.tpdo4_count > 0U &&
+                    node.last_tpdo_us != 0U &&
+                    now_us >= node.last_tpdo_us &&
+                    (now_us - node.last_tpdo_us) < 500000U;
+            }
+
+            last_display_update_us = now_us;
+        }
+
         BeginDrawing();
 
         ClearBackground(
@@ -943,359 +981,278 @@ int main()
         const int width =
             GetScreenWidth();
 
+        const bool cyclic_active =
+            display_cycle_hz > 10.0;
+
+        const bool cycle_good =
+            display_cycle_hz >= 450.0;
+
+        const bool cycle_close =
+            display_cycle_hz >= 350.0;
+
+        const Color cycle_color =
+            !cyclic_active
+                ? muted_color()
+                : cycle_good
+                    ? good_color()
+                    : cycle_close
+                        ? warn_color()
+                        : Color{248, 113, 113, 255};
+
+        unsigned healthy_nodes = 0U;
+
+        for (bool ok : display_node_ok)
+        {
+            if (ok)
+            {
+                healthy_nodes++;
+            }
+        }
+
         DrawText(
-            "CANopen Live Monitor",
+            "CANopen Communication Status",
+            26,
             20,
-            16,
-            28,
+            30,
             text_color()
         );
 
         DrawText(
-            "SIL Kit CAN1 | Classical CAN 2.0A | 1 Mbit/s | 6 AVATAR nodes",
-            20,
-            50,
+            "Simple operator view - raw CAN traffic is logged, not flashed on screen",
+            26,
+            56,
             16,
             muted_color()
         );
 
-        const int gap = 10;
+        const char *overall =
+            !cyclic_active
+                ? "IDLE - waiting for cyclic motion"
+                : cycle_good
+                    ? "RUNNING - close to 500 Hz target"
+                    : cycle_close
+                        ? "RUNNING - below 500 Hz target"
+                        : "RUNNING - well below 500 Hz target";
+
+        DrawRectangle(
+            26,
+            88,
+            width - 52,
+            58,
+            card_color()
+        );
+
+        DrawText(
+            overall,
+            44,
+            104,
+            24,
+            cycle_color
+        );
+
+        const int gap = 14;
         const int metric_width =
-            (width - 40 - 3 * gap) / 4;
+            (width - 52 - 3 * gap) / 4;
 
         draw_metric(
-            20,
-            82,
+            26,
+            166,
             metric_width,
-            "Frames / s | cyclic rate",
-            fixed(frames_per_s, 0) +
-                " | " +
-                fixed(observed_cycle_hz, 0) +
-                " Hz",
-            text_color()
+            "CONTROL RATE",
+            cyclic_active
+                ? fixed(display_cycle_hz, 0) + " Hz"
+                : "--",
+            cycle_color
         );
 
         draw_metric(
-            20 + metric_width + gap,
-            82,
+            26 + metric_width + gap,
+            166,
             metric_width,
-            "Estimated bus load",
-            fixed(nominal_load_pct, 1) +
-                "% / " +
-                fixed(worst_load_pct, 1) +
-                "%",
-            worst_load_pct < 80.0
+            "BUS LOAD (est.)",
+            fixed(display_load_pct, 1) + "%",
+            display_load_pct < 80.0
                 ? good_color()
                 : warn_color()
         );
 
         draw_metric(
-            20 + 2 * (metric_width + gap),
-            82,
+            26 + 2 * (metric_width + gap),
+            166,
             metric_width,
-            "Observed SYNC / jitter",
-            fixed(
-                stats.sync_period_latest_ms,
-                3
-            ) +
-                " / " +
-                fixed(
-                    stats.sync_jitter_latest_ms,
-                    3
-                ) +
-                " ms",
-            stats.sync_jitter_latest_ms < 0.5
-                ? good_color()
-                : warn_color()
+            "SYNC PERIOD",
+            cyclic_active
+                ? fixed(display_sync_period_ms, 2) + " ms"
+                : "--",
+            !cyclic_active
+                ? muted_color()
+                : display_sync_jitter_ms < 0.5
+                    ? good_color()
+                    : warn_color()
         );
 
         draw_metric(
-            20 + 3 * (metric_width + gap),
-            82,
+            26 + 3 * (metric_width + gap),
+            166,
             metric_width,
-            "Observer RPDO->TPDO",
-            fixed(latency_avg, 3) +
-                " ms avg",
+            "FEEDBACK RESPONSE",
+            cyclic_active
+                ? fixed(display_latency_avg_ms, 2) + " ms"
+                : "--",
             text_color()
         );
 
         DrawText(
-            "Node activity",
-            20,
-            170,
+            "Target: 500 Hz / 2.00 ms",
+            26,
+            258,
+            18,
+            muted_color()
+        );
+
+        if (cyclic_active)
+        {
+            const std::string timing_note =
+                "Observed jitter: " +
+                fixed(display_sync_jitter_ms, 3) +
+                " ms   |   Max response: " +
+                fixed(display_latency_max_ms, 3) +
+                " ms   |   2 ms target misses: " +
+                std::to_string(display_missed_sync);
+
+            DrawText(
+                timing_note.c_str(),
+                26,
+                286,
+                17,
+                text_color()
+            );
+        }
+        else
+        {
+            DrawText(
+                "Start Preview or Production to measure the cyclic CAN loop.",
+                26,
+                286,
+                17,
+                text_color()
+            );
+        }
+
+        DrawText(
+            "AVATAR nodes",
+            26,
+            334,
             20,
             text_color()
         );
 
-        const int node_gap = 8;
+        const int node_gap = 12;
         const int node_width =
-            (width - 40 - 5 * node_gap) / 6;
+            (width - 52 - 5 * node_gap) / 6;
 
         for (std::size_t i = 0U;
              i < kNodeCount;
              ++i)
         {
-            const NodeStats &node =
-                stats.nodes[i];
-
             const int x =
-                20 +
+                26 +
                 static_cast<int>(i) *
                 (node_width + node_gap);
 
             DrawRectangle(
                 x,
-                198,
+                366,
                 node_width,
-                112,
+                92,
                 card_color()
             );
 
             const std::string title =
-                "Node " +
+                "NODE " +
                 std::to_string(i + 1U);
 
             DrawText(
                 title.c_str(),
-                x + 10,
-                208,
-                18,
-                text_color()
-            );
-
-            const std::string counts =
-                "RPDO " +
-                std::to_string(node.rpdo4_count) +
-                "  TPDO " +
-                std::to_string(node.tpdo4_count);
-
-            DrawText(
-                counts.c_str(),
-                x + 10,
-                236,
-                14,
+                x + 12,
+                378,
+                17,
                 muted_color()
             );
 
-            const std::string latency =
-                "lat " +
-                fixed(
-                    node.latency_latest_ms,
-                    3
-                ) +
-                " ms";
-
             DrawText(
-                latency.c_str(),
-                x + 10,
-                258,
-                14,
-                text_color()
-            );
-
-            const std::string positions =
-                "T " +
-                std::to_string(
-                    node.target_position
-                ) +
-                "\nA " +
-                std::to_string(
-                    node.actual_position
-                );
-
-            DrawText(
-                positions.c_str(),
-                x + 10,
-                280,
-                12,
-                muted_color()
+                display_node_ok[i]
+                    ? "OK"
+                    : (cyclic_active ? "WAIT" : "IDLE"),
+                x + 12,
+                408,
+                26,
+                display_node_ok[i]
+                    ? good_color()
+                    : muted_color()
             );
         }
 
-        const int table_y = 330;
+        const std::string nodes_summary =
+            "Feedback nodes active: " +
+            std::to_string(healthy_nodes) +
+            "/6";
 
         DrawText(
-            "Recent CAN frames",
-            20,
-            table_y,
-            20,
-            text_color()
+            nodes_summary.c_str(),
+            26,
+            478,
+            18,
+            healthy_nodes == 6U
+                ? good_color()
+                : muted_color()
         );
 
         DrawRectangle(
-            20,
-            table_y + 30,
-            width - 40,
-            28,
+            26,
+            516,
+            width - 52,
+            88,
             card_color()
         );
 
         DrawText(
-            "time ms",
-            30,
-            table_y + 37,
+            "LOGGING CONTINUES AT FULL SPEED",
+            42,
+            530,
+            17,
+            good_color()
+        );
+
+        DrawText(
+            "can-frames.csv  - every observed CAN frame",
+            42,
+            556,
+            15,
+            text_color()
+        );
+
+        DrawText(
+            "can-metrics.csv - communication metrics for MATLAB plots",
+            42,
+            578,
+            15,
+            text_color()
+        );
+
+        DrawText(
+            "Display refresh: 4 Hz. Logging/measurement is not slowed down.",
+            26,
+            620,
             14,
             muted_color()
         );
 
         DrawText(
-            "COB-ID",
-            120,
-            table_y + 37,
-            14,
-            muted_color()
-        );
-
-        DrawText(
-            "type",
-            205,
-            table_y + 37,
-            14,
-            muted_color()
-        );
-
-        DrawText(
-            "node",
-            300,
-            table_y + 37,
-            14,
-            muted_color()
-        );
-
-        DrawText(
-            "DLC",
-            355,
-            table_y + 37,
-            14,
-            muted_color()
-        );
-
-        DrawText(
-            "delta us",
-            405,
-            table_y + 37,
-            14,
-            muted_color()
-        );
-
-        DrawText(
-            "decoded",
-            500,
-            table_y + 37,
-            14,
-            muted_color()
-        );
-
-        int row_y =
-            table_y + 62;
-
-        for (const FrameInfo &frame : recent)
-        {
-            DrawText(
-                fixed(
-                    static_cast<double>(
-                        frame.time_us
-                    ) / 1000.0,
-                    1
-                ).c_str(),
-                30,
-                row_y,
-                13,
-                text_color()
-            );
-
-            DrawText(
-                hex_id(frame.id).c_str(),
-                120,
-                row_y,
-                13,
-                text_color()
-            );
-
-            DrawText(
-                frame.type.c_str(),
-                205,
-                row_y,
-                13,
-                frame.type == "SYNC"
-                    ? good_color()
-                    : text_color()
-            );
-
-            DrawText(
-                frame.node == 0U
-                    ? "-"
-                    : std::to_string(
-                        frame.node
-                    ).c_str(),
-                300,
-                row_y,
-                13,
-                text_color()
-            );
-
-            DrawText(
-                std::to_string(
-                    frame.dlc
-                ).c_str(),
-                355,
-                row_y,
-                13,
-                text_color()
-            );
-
-            DrawText(
-                std::to_string(
-                    frame.delta_us
-                ).c_str(),
-                405,
-                row_y,
-                13,
-                muted_color()
-            );
-
-            DrawText(
-                frame.detail.c_str(),
-                500,
-                row_y,
-                13,
-                muted_color()
-            );
-
-            row_y += 20;
-
-            if (
-                row_y >
-                GetScreenHeight() - 58
-            )
-            {
-                break;
-            }
-        }
-
-        const std::string footer =
-            "2 ms target misses (active bursts): " +
-            std::to_string(
-                stats.missed_sync_cycles
-            ) +
-            "   |   Max observed latency: " +
-            fixed(latency_max, 3) +
-            " ms   |   Logs: " +
-            frame_log_path;
-
-        DrawText(
-            footer.c_str(),
-            20,
-            GetScreenHeight() - 42,
+            "SIL Kit timing is PC observer timing; bus load is an estimate, not a physical CAN measurement.",
+            26,
+            644,
             13,
-            muted_color()
-        );
-
-        DrawText(
-            "Timing is observer callback timing; load is an estimate. SIL Kit here is not a physical CAN arbitration/bit-timing model.",
-            20,
-            GetScreenHeight() - 22,
-            12,
             warn_color()
         );
 
