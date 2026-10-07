@@ -629,13 +629,70 @@ target_link_libraries(
 )
 
 # ============================================================================
+# PATH EXECUTION TEST - CANOPEN / AVATAR
+# ============================================================================
+
+add_executable(
+    path_execution_test
+
+    StateMachine/Tests/test_path_execution.c
+
+    StateMachine/States/state_boot.c
+    StateMachine/States/state_path_execution.c
+
+    Simulation/AvatarM_CAN_GUI/sim_can_bus.c
+
+    CANComm/CANopen/canopen_master.c
+    CANComm/CANopen/canopen_nmt.c
+    CANComm/CANopen/canopen_sdo.c
+    CANComm/CANopen/canopen_heartbeat.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/AvatarM/avatar_m_pdo.c
+    ServoDrive/AvatarM/avatar_m_drive.c
+    ServoDrive/AvatarM/avatar_m_position.c
+    ServoDrive/AvatarM/Sim/avatar_m_node_sim.c
+)
+
+target_compile_features(
+    path_execution_test
+    PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    path_execution_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    CANComm
+    CANComm/CANopen
+
+    ServoDrive/CiA402
+    ServoDrive/AvatarM
+    ServoDrive/AvatarM/Sim
+
+    Simulation/AvatarM_CAN_GUI
+)
+
+target_link_libraries(
+    path_execution_test
+    PRIVATE
+
+    control_core
+    m
+)
+
+# ============================================================================
 # GLOBAL STATE MACHINE UNIT TEST
 # ============================================================================
 
 add_executable(
     runtime_states_test
     StateMachine/Tests/test_runtime_states.c
-    StateMachine/States/state_path_execution.c
     StateMachine/States/state_paused.c
     StateMachine/States/state_fault.c
     StateMachine/States/state_emergency_stop.c
