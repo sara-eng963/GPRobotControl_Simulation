@@ -149,6 +149,43 @@ void canopen_master_close(
     );
 }
 
+void canopen_master_clear_runtime(
+    CanopenMaster *master
+)
+{
+    if (
+        master == NULL ||
+        !master->initialized
+    )
+    {
+        return;
+    }
+
+    for (uint8_t i = 0U; i < master->node_count; ++i)
+    {
+        const uint8_t node_id =
+            master->drives[i].node_id;
+
+        (void)avatar_m_drive_init(
+            &master->drives[i],
+            node_id
+        );
+
+        master->last_heartbeat_ms[i] =
+            0U;
+
+        master->heartbeat_timestamp_valid[i] =
+            false;
+
+        master->tpdo_rx_count[i] =
+            0U;
+    }
+
+    canopen_master_sdo_clear(
+        master
+    );
+}
+
 static void process_heartbeat(
     CanopenMaster *master,
     const CanFrame *frame,
@@ -201,11 +238,18 @@ static bool process_tpdo4(
             )
         )
         {
-            return
+            const bool parsed =
                 avatar_m_drive_process_tpdo4(
                     &master->drives[i],
                     frame
                 );
+
+            if (parsed)
+            {
+                master->tpdo_rx_count[i]++;
+            }
+
+            return parsed;
         }
     }
 
@@ -498,6 +542,24 @@ const AvatarMDrive *canopen_master_drive(
 
     return
         &master->drives[node_index];
+}
+
+uint32_t canopen_master_tpdo_rx_count(
+    const CanopenMaster *master,
+    size_t node_index
+)
+{
+    if (
+        master == NULL ||
+        !master->initialized ||
+        node_index >= master->node_count
+    )
+    {
+        return 0U;
+    }
+
+    return
+        master->tpdo_rx_count[node_index];
 }
 
 bool canopen_master_all_feedback_valid(
@@ -802,6 +864,84 @@ bool canopen_master_begin_read_work_mode(
             &frame,
             0x6060U,
             0x00U,
+            true,
+            now_ms
+        );
+}
+
+bool canopen_master_begin_read_mode_display(
+    CanopenMaster *master,
+    size_t node_index,
+    uint32_t now_ms
+)
+{
+    if (
+        master == NULL ||
+        node_index >= master->node_count
+    )
+    {
+        return false;
+    }
+
+    CanFrame frame;
+
+    if (!avatar_m_drive_build_read_mode_display(
+            &master->drives[node_index],
+            &frame))
+    {
+        return false;
+    }
+
+    return
+        begin_sdo(
+            master,
+            node_index,
+            &frame,
+            0x6061U,
+            0x00U,
+            true,
+            now_ms
+        );
+}
+
+bool canopen_master_begin_read_identity(
+    CanopenMaster *master,
+    size_t node_index,
+    uint8_t subindex,
+    uint32_t now_ms
+)
+{
+    if (
+        master == NULL ||
+        node_index >= master->node_count ||
+        subindex < 1U ||
+        subindex > 4U
+    )
+    {
+        return false;
+    }
+
+    CanFrame frame;
+
+    const uint8_t node_id =
+        master->drives[node_index].node_id;
+
+    if (!canopen_sdo_build_read(
+            node_id,
+            0x1018U,
+            subindex,
+            &frame))
+    {
+        return false;
+    }
+
+    return
+        begin_sdo(
+            master,
+            node_index,
+            &frame,
+            0x1018U,
+            subindex,
             true,
             now_ms
         );
