@@ -49,3 +49,24 @@ The old EtherCAT/A6EC implementation is intentionally absent from
 `sara/can-system-integration`.
 
 The future physical controller entry point is the root `main.c`.
+
+
+## Live MATLAB visualization
+
+The Supervisor sends the same versioned status packet used by the HMI to UDP
+port **5005** for MATLAB. It contains Supervisor state, CAN node readiness,
+six joint angles and TCP XYZ.
+
+Run `MATLAB/can_robot_visualizer.m` in MATLAB.
+
+If MATLAB runs on Windows while the controller runs inside WSL2, start the
+controller with `MATLAB_IP` set to the Windows host/gateway address, for
+example:
+
+```bash
+MATLAB_IP="$(ip route | awk '/default/ {print $3; exit}')" \
+  ./build-can-clean/supervisor_mock_sim
+```
+
+If MATLAB and the controller run in the same Linux environment, the default
+`127.0.0.1` destination is sufficient.
