@@ -86,6 +86,7 @@ REGISTRY_LOG="$LOG_DIR/silkit-registry.log"
 MOTOR_LOG="$LOG_DIR/avatar-m-motors.log"
 SUPERVISOR_LOG="$LOG_DIR/supervisor.log"
 EVENT_LOG="$LOG_DIR/operator-events.txt"
+TRACE_LOG="$LOG_DIR/simulation-trace.csv"
 PANEL_LOG="$LOG_DIR/supervisor-panel.log"
 TEACH_LOG="$LOG_DIR/teaching-sim.log"
 
@@ -206,6 +207,7 @@ wait_for_log     "$MOTOR_LOG"     "AVATAR SIL Kit motor bank ready."     10     
 SILKIT_REGISTRY_URI="$REGISTRY_URI" \
 MATLAB_IP="$MATLAB_IP" \
 SIM_EVENT_LOG="$EVENT_LOG" \
+SIM_TRACE_FILE="$TRACE_LOG" \
     "$SUPERVISOR_BIN" \
     >"$SUPERVISOR_LOG" 2>&1 &
 SUPERVISOR_PID=$!
@@ -256,6 +258,9 @@ echo "   Telemetry destination: $MATLAB_IP:5005"
 echo
 echo " Operator event log:"
 echo "   $EVENT_LOG"
+echo
+echo " Detailed state trace:"
+echo "   $TRACE_LOG"
 echo
 echo " Full runtime logs:"
 echo "   $LOG_DIR"
