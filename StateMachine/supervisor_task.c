@@ -215,6 +215,7 @@ static void enter_active_state(SupervisorTaskContext *context)
                    sizeof(context->path_execution_inputs));
             state_path_execution_enter(
                 &context->path_execution,
+                context->config.canopen_master,
                 &request,
                 context->config.path_execution_config,
                 context->config.path_execution_services
@@ -584,10 +585,6 @@ static void run_active_state(SupervisorTaskContext *context)
         case ROBOT_STATE_PATH_EXECUTION:
             context->path_execution_inputs.motion_permission =
                 context->machine.safety.motionPermitted;
-            context->path_execution_inputs.drives_ready =
-                context->machine.safety.drivesReady;
-            context->path_execution_inputs.ethercat_healthy =
-                context->machine.safety.ethercatHealthy;
             context->path_execution_inputs.estop_active =
                 context->machine.safety.estopActive;
             context->path_execution_inputs.protective_stop_active =
