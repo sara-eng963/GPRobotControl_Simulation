@@ -1,185 +1,322 @@
-function can_robot_visualizer()
-%CAN_ROBOT_VISUALIZER Live AVATAR/CANopen robot visualization.
+%% LIVE CANOPEN / AVATAR VISUALIZER
 %
-% Listens to the CAN Supervisor simulation status stream on UDP port 5005.
-% The packet is the same versioned HMI status packet used by the operator UI.
-%
-% Run this file in MATLAB, then start supervisor_mock_sim in WSL with
-% MATLAB_IP set to the Windows host address.
+% Receives the versioned Supervisor/HMI status packet from the
+% FreeRTOS CANopen / AVATAR simulation over UDP and displays the robot
+% using the project's existing UR5 visual mesh model.
+
+clear;
+clc;
+close all;
+
+%% ========================================================================
+%  1. ADD PROJECT ROOT TO MATLAB PATH
+% =========================================================================
+
+thisFileFolder = fileparts(mfilename("fullpath"));
+repoRoot = fileparts(thisFileFolder);
+addpath(repoRoot);
+
+fprintf("Repository root:\n%s\n\n", repoRoot);
+
+%% ========================================================================
+%  2. UDP RECEIVER
+% =========================================================================
 
 PORT = 5005;
-PACKET_WORDS = 57;
-PACKET_BYTES = 4 * PACKET_WORDS;
-MAGIC = uint32(hex2dec('53544D33')); % "STM3"
-VERSION = uint32(3);
 
-if exist("udpport","file") ~= 2
-    error(["udpport() is unavailable. This visualizer requires a MATLAB " ...
-           "release/toolbox that provides udpport."]);
-end
+udp = udpport( ...
+    "datagram", ...
+    "IPV4", ...
+    "LocalPort", PORT);
 
-u = udpport("byte","IPV4","LocalPort",PORT,"Timeout",0.05);
-cleanupUdp = onCleanup(@() deleteUdp(u)); %#ok<NASGU>
+fprintf( ...
+    "Listening for CANopen Supervisor telemetry on UDP port %d...\n", ...
+    PORT);
 
-fprintf("CAN robot visualizer listening on UDP %d...\n", PORT);
+%% ========================================================================
+%  3. LOAD PROJECT ROBOT CONFIGURATION
+% =========================================================================
 
-stateNames = [ ...
-    "BOOT","HOMING","IDLE","TEACHING","PATH VALIDATION","APPROACH", ...
-    "PATH EXECUTION","ARC STABILIZING","WELDING","PAUSED", ...
-    "RETRACTING","FAULT","EMERGENCY STOP"];
+robot = config.UR5();
 
-% Standard-DH reference model used by ControlCore robot_config_init_ur5().
-a = [0, -0.425, -0.39225, 0, 0, 0];
-d = [0.089159, 0, 0, 0.10915, 0.09465, 0.0823];
-alpha = [pi/2, 0, 0, pi/2, -pi/2, 0];
+%% ========================================================================
+%  4. BUILD UR5 VISUAL ROBOT
+% =========================================================================
+
+visualRobot = robotmodel.buildUR5geometry(robot);
+
+%% ========================================================================
+%  5. INITIAL JOINT CONFIGURATION
+% =========================================================================
+
+q = zeros(robot.dof, 1);
+
+%% ========================================================================
+%  6. CREATE 3-D FIGURE
+% =========================================================================
 
 fig = figure( ...
-    "Name","CANopen / AVATAR Whole-Pipeline Visualizer", ...
-    "NumberTitle","off", ...
-    "Color","w");
+    "Name", "Live CANopen / AVATAR Robot", ...
+    "NumberTitle", "off", ...
+    "Color", [0.12 0.12 0.12], ...
+    "Renderer", "opengl");
 
-layout = tiledlayout(fig,2,2,"TileSpacing","compact","Padding","compact");
+ax = axes("Parent", fig);
 
-axRobot = nexttile(layout,[2 1]);
-axis(axRobot,"equal");
-grid(axRobot,"on");
-hold(axRobot,"on");
-view(axRobot,135,25);
-xlabel(axRobot,"X (m)");
-ylabel(axRobot,"Y (m)");
-zlabel(axRobot,"Z (m)");
-xlim(axRobot,[-1 1]);
-ylim(axRobot,[-1 1]);
-zlim(axRobot,[-0.2 1.2]);
-title(axRobot,"Robot pose");
+hold(ax, "on");
+grid(ax, "on");
+axis(ax, "equal");
+axis(ax, "vis3d");
 
-robotLine = plot3(axRobot,nan,nan,nan,"-o","LineWidth",2,"MarkerSize",5);
-tcpTrail = animatedline(axRobot,"LineWidth",1.5);
+ax.Projection = "perspective";
+view(ax, 135, 25);
 
-axJoints = nexttile(layout);
-grid(axJoints,"on");
-hold(axJoints,"on");
-xlabel(axJoints,"Time (s)");
-ylabel(axJoints,"Joint angle (deg)");
-title(axJoints,"Joint feedback");
-jointLines = gobjects(1,6);
-for k = 1:6
-    jointLines(k) = animatedline(axJoints,"DisplayName",sprintf("J%d",k));
+ax.Color = [0.12 0.12 0.12];
+ax.XColor = [0.85 0.85 0.85];
+ax.YColor = [0.85 0.85 0.85];
+ax.ZColor = [0.85 0.85 0.85];
+ax.GridColor = [0.65 0.65 0.65];
+ax.GridAlpha = 0.30;
+
+xlabel(ax, "X [m]");
+ylabel(ax, "Y [m]");
+zlabel(ax, "Z [m]");
+
+rotate3d(fig, "on");
+
+%% ========================================================================
+%  7. INITIAL ROBOT DRAW
+% =========================================================================
+
+show( ...
+    visualRobot, ...
+    q, ...
+    "Parent", ax, ...
+    "Frames", "off", ...
+    "Visuals", "on", ...
+    "Collisions", "off", ...
+    "PreservePlot", false);
+
+title( ...
+    ax, ...
+    "Waiting for CANopen / AVATAR feedback...", ...
+    "Color", [0.95 0.95 0.95]);
+
+%% ========================================================================
+%  8. IMPROVE 3-D MESH RENDERING
+% =========================================================================
+
+meshObjects = findobj(ax, "Type", "Patch");
+
+for k = 1:numel(meshObjects)
+    meshObjects(k).EdgeColor = "none";
+    meshObjects(k).FaceLighting = "gouraud";
 end
-legend(axJoints,"Location","eastoutside");
 
-axTcp = nexttile(layout);
-grid(axTcp,"on");
-hold(axTcp,"on");
-xlabel(axTcp,"Time (s)");
-ylabel(axTcp,"TCP position (m)");
-title(axTcp,"TCP feedback");
-tcpLines = gobjects(1,3);
-labels = ["X","Y","Z"];
-for k = 1:3
-    tcpLines(k) = animatedline(axTcp,"DisplayName",labels(k));
-end
-legend(axTcp,"Location","eastoutside");
+camlight(ax, "headlight");
+camlight(ax, "right");
+lighting(ax, "gouraud");
+material(ax, "dull");
 
-t0 = tic;
-lastSequence = uint32(0);
+xlim(ax, [-1.0  0.4]);
+ylim(ax, [-0.8  0.8]);
+zlim(ax, [-0.5  1.1]);
+
+drawnow;
+
+%% ========================================================================
+%  9. CAN SUPERVISOR STATUS PACKET
+% =========================================================================
+%
+% The controller sends the same HMI status packet to MATLAB:
+%
+%       57 x uint32 = 228 bytes
+%
+% Network byte order is used.
+%
+% Important MATLAB 1-based word positions:
+%
+%       1       magic = 0x53544D33 ("STM3")
+%       2       protocol version = 3
+%       3       sequence
+%       4       robot state
+%       35:37   TCP X/Y/Z as IEEE-754 float bits
+%       38:43   q1...q6 as IEEE-754 float bits [rad]
+%       44      CAN ready nodes
+%       45      CAN expected nodes
+%
+
+PACKET_WORDS = 57;
+PACKET_BYTES = PACKET_WORDS * 4;
+STATUS_MAGIC = uint32(hex2dec("53544D33"));
+PROTOCOL_VERSION = uint32(3);
+
+stateNames = [ ...
+    "BOOT", ...
+    "HOMING", ...
+    "IDLE", ...
+    "TEACHING", ...
+    "PATH VALIDATION", ...
+    "APPROACH", ...
+    "PATH EXECUTION", ...
+    "ARC STABILIZING", ...
+    "WELDING", ...
+    "PAUSED", ...
+    "RETRACTING", ...
+    "FAULT", ...
+    "EMERGENCY STOP" ...
+];
+
+%% ========================================================================
+%  10. LIVE TELEMETRY LOOP
+% =========================================================================
+
+fprintf("\n");
+fprintf("========================================\n");
+fprintf("LIVE CANOPEN / AVATAR VISUALIZATION\n");
+fprintf("========================================\n");
+fprintf("Waiting for Supervisor status packets...\n");
+fprintf("Close the figure to stop visualization.\n");
+fprintf("========================================\n\n");
 
 while isvalid(fig)
-    while u.NumBytesAvailable >= PACKET_BYTES
-        % If MATLAB fell behind, keep only the newest complete packet.
-        packetCount = floor(u.NumBytesAvailable / PACKET_BYTES);
-        raw = read(u,PACKET_BYTES * packetCount,"uint8");
-        raw = uint8(raw(end-PACKET_BYTES+1:end));
 
-        bytes = reshape(raw,4,[]);
-        bytes = flipud(bytes);
-        words = typecast(bytes(:),"uint32");
+    if udp.NumDatagramsAvailable > 0
 
-        if words(1) ~= MAGIC || words(2) ~= VERSION
+        packets = read( ...
+            udp, ...
+            udp.NumDatagramsAvailable, ...
+            "uint8");
+
+        bytes = uint8(packets(end).Data);
+
+        if numel(bytes) ~= PACKET_BYTES
+            fprintf( ...
+                "Unexpected packet size: %d bytes (expected %d)\n", ...
+                numel(bytes), ...
+                PACKET_BYTES);
+            continue;
+        end
+
+        %% ----------------------------------------------------------------
+        % NETWORK BYTES -> 57 uint32 WORDS
+        % -----------------------------------------------------------------
+
+        byteMatrix = reshape(bytes(:), 4, []);
+        byteMatrix = flipud(byteMatrix);
+
+        words = typecast( ...
+            byteMatrix(:), ...
+            "uint32");
+
+        if ...
+            words(1) ~= STATUS_MAGIC || ...
+            words(2) ~= PROTOCOL_VERSION
+
+            fprintf("Ignored packet with wrong magic/version.\n");
             continue;
         end
 
         sequence = words(3);
-        if sequence == lastSequence
-            continue;
-        end
-        lastSequence = sequence;
+        robotState = double(words(4));
 
-        stateId = double(words(4));
+        %% ----------------------------------------------------------------
+        % EXTRACT TCP AND JOINT FEEDBACK
+        % -----------------------------------------------------------------
+
+        tcp = double( ...
+            typecast( ...
+                uint32(words(35:37)), ...
+                "single"));
+
+        q = double( ...
+            typecast( ...
+                uint32(words(38:43)), ...
+                "single"));
+
+        q = q(:);
+
         canReady = double(words(44));
         canExpected = double(words(45));
 
-        q = double(typecast(uint32(words(38:43)),"single"));
-        tcp = double(typecast(uint32(words(35:37)),"single"));
+        %% ----------------------------------------------------------------
+        % UPDATE ROBOT
+        % -----------------------------------------------------------------
 
-        t = toc(t0);
+        show( ...
+            visualRobot, ...
+            q, ...
+            "Parent", ax, ...
+            "Frames", "off", ...
+            "Visuals", "on", ...
+            "Collisions", "off", ...
+            "FastUpdate", true, ...
+            "PreservePlot", false);
 
-        points = fkPoints(q,a,d,alpha);
-        set(robotLine, ...
-            "XData",points(1,:), ...
-            "YData",points(2,:), ...
-            "ZData",points(3,:));
+        %% ----------------------------------------------------------------
+        % STATUS TITLE
+        % -----------------------------------------------------------------
 
-        addpoints(tcpTrail,tcp(1),tcp(2),tcp(3));
+        qDeg = rad2deg(q);
 
-        for k = 1:6
-            addpoints(jointLines(k),t,rad2deg(q(k)));
-        end
+        if ...
+            robotState >= 0 && ...
+            robotState < numel(stateNames)
 
-        for k = 1:3
-            addpoints(tcpLines(k),t,tcp(k));
-        end
-
-        if stateId >= 0 && stateId < numel(stateNames)
-            stateText = stateNames(stateId+1);
+            stateText = stateNames(robotState + 1);
         else
             stateText = "UNKNOWN";
         end
 
-        title(axRobot,sprintf( ...
-            "State: %s   |   CAN: %d/%d nodes   |   seq %u", ...
-            stateText,canReady,canExpected,sequence));
+        titleText = sprintf( ...
+            ['CANOPEN / AVATAR FEEDBACK\n' ...
+             'State: %s   CAN: %d/%d nodes   Seq: %u\n' ...
+             'TCP [%.3f %.3f %.3f] m\n' ...
+             'J1 %.2f°   J2 %.2f°   J3 %.2f°   ' ...
+             'J4 %.2f°   J5 %.2f°   J6 %.2f°'], ...
+            stateText, ...
+            canReady, ...
+            canExpected, ...
+            sequence, ...
+            tcp(1), ...
+            tcp(2), ...
+            tcp(3), ...
+            qDeg(1), ...
+            qDeg(2), ...
+            qDeg(3), ...
+            qDeg(4), ...
+            qDeg(5), ...
+            qDeg(6));
 
-        % Keep time plots readable during long runs.
-        if t > 20
-            xlim(axJoints,[t-20,t]);
-            xlim(axTcp,[t-20,t]);
-        end
+        title( ...
+            ax, ...
+            titleText, ...
+            "Color", [0.95 0.95 0.95]);
+
+        fprintf( ...
+            ['%-15s CAN=%d/%d  ' ...
+             'J=[%7.2f %7.2f %7.2f %7.2f %7.2f %7.2f] deg\n'], ...
+            stateText, ...
+            canReady, ...
+            canExpected, ...
+            qDeg(1), ...
+            qDeg(2), ...
+            qDeg(3), ...
+            qDeg(4), ...
+            qDeg(5), ...
+            qDeg(6));
 
         drawnow limitrate;
+
+    else
+        pause(0.005);
     end
-
-    pause(0.01);
-end
 end
 
+%% ========================================================================
+%  11. CLEANUP
+% =========================================================================
 
-function points = fkPoints(q,a,d,alpha)
-T = eye(4);
-points = zeros(3,7);
+clear udp;
 
-for i = 1:6
-    th = q(i);
-    ct = cos(th);
-    st = sin(th);
-    ca = cos(alpha(i));
-    sa = sin(alpha(i));
-
-    A = [ ...
-        ct, -st*ca,  st*sa, a(i)*ct; ...
-        st,  ct*ca, -ct*sa, a(i)*st; ...
-         0,     sa,     ca,      d(i); ...
-         0,      0,      0,         1];
-
-    T = T * A;
-    points(:,i+1) = T(1:3,4);
-end
-end
-
-
-function deleteUdp(u)
-try
-    delete(u);
-catch
-end
-end
+fprintf("\nVisualizer closed.\n");
