@@ -50,7 +50,12 @@ typedef struct
 
 typedef struct
 {
-    const EtherCATMasterConfig *ethercat_config;
+    /*
+     * Communication object used by BOOT.
+     * The platform creates and initializes this before SupervisorTask starts.
+     */
+    CanopenMaster *canopen_master;
+
     const RobotConfig *robot;
     const HomingConfig *homing_config;
     const TeachingConfig *teaching_config;

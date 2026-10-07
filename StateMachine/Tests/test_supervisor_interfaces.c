@@ -131,7 +131,7 @@ int main(void)
     check(!supervisor_task_start(2), "Starting before initialization is rejected");
     check(!supervisor_task_post_hmi(SUP_HMI_LINE, 0), "Posting before queue creation fails");
 
-    static EtherCATMasterConfig bus;
+    static CanopenMaster canopen_master;
     static RobotConfig robot;
     static HomingConfig homing;
     static TeachingConfig teaching;
@@ -148,7 +148,7 @@ int main(void)
     static EmergencyStopServices emergency;
     SupervisorTaskConfig config = {0};
     check(!supervisor_task_init(&config), "Missing required configuration is rejected");
-    config.ethercat_config = &bus;
+    config.canopen_master = &canopen_master;
     config.robot = &robot;
     config.homing_config = &homing;
     config.teaching_config = &teaching;

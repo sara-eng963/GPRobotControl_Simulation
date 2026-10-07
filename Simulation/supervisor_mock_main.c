@@ -2,8 +2,11 @@
 #include "../HMI/hmi_task.h"
 #include "../HMI/hmi_protocol.h"
 #include "MockHardware/mock_backend.h"
+#include "AvatarM_CAN_GUI/sim_can_bus.h"
+#include "../CANComm/CANopen/canopen_master.h"
 #include "../EtherCATComm/ethercat_master.h"
 #include "../ServoDrive/A6EC/a6ec_drive.h"
+#include "../ServoDrive/CiA402/cia402.h"
 #include "../ControlCore/Kinematics/control_fk.h"
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -26,6 +29,16 @@ typedef struct {
 } RamValidatedStorage;
 static RobotConfig robot;
 static EtherCATMasterConfig ethercat_config;
+
+/*
+ * Transitional simulation split:
+ *   BOOT   -> CANopen / AVATAR
+ *   HOMING -> legacy EtherCAT / A6EC until the next migration step.
+ */
+static AvatarMSimBus can_boot_bus;
+static CanBackend can_boot_backend;
+static CanopenMaster can_boot_master;
+
 static HomingConfig homing_config;
 static TeachingConfig teaching_config;
 static PathValidationConfig path_validation_config;
@@ -451,7 +464,22 @@ static void post_required(SupervisorMessage *m) {
 static void input_task(void *arg)
 {
     (void)arg;bool old_estop=false,old_protective=false,old_fault=false;
+    TickType_t previous_can_tick=xTaskGetTickCount();
+
     for(;;) {
+        const TickType_t current_can_tick=xTaskGetTickCount();
+        const TickType_t elapsed_ticks=current_can_tick-previous_can_tick;
+
+        if(elapsed_ticks>0) {
+            const uint32_t elapsed_ms=(uint32_t)(
+                ((uint64_t)elapsed_ticks*1000ULL)/
+                (uint64_t)configTICK_RATE_HZ);
+            if(elapsed_ms>0) {
+                avatar_sim_bus_tick(&can_boot_bus,elapsed_ms);
+                previous_can_tick=current_can_tick;
+            }
+        }
+
         StateMachine machine;
         supervisor_task_get_state(&machine);
         if(machine.activeState==ROBOT_STATE_IDLE && machine.previousState==ROBOT_STATE_HOMING)homed=true;
@@ -648,15 +676,68 @@ static void udp_status(void *ctx,const SupervisorDiagnostics *s)
         fflush(stdout);old=s->machine.activeState;old_relay=wire_feed;
     }
 }
+static bool configure_can_boot_sim(void)
+{
+    if (!avatar_sim_bus_init(
+            &can_boot_bus,
+            &can_boot_backend))
+    {
+        return false;
+    }
+
+    /*
+     * Do not let BOOT pass because the simulator started pre-configured.
+     * Force the six virtual drives to require mode selection and CiA-402
+     * enabling exactly like the standalone CAN BOOT test.
+     */
+    for (uint8_t i = 0U; i < SIM_NUM_AXES; ++i)
+    {
+        avatar_m_node_set_work_mode(
+            &can_boot_bus.nodes[i],
+            1U
+        );
+
+        avatar_m_node_set_statusword(
+            &can_boot_bus.nodes[i],
+            CIA402_STATE_SWITCH_ON_DISABLED
+        );
+
+        avatar_m_node_set_actual_position(
+            &can_boot_bus.nodes[i],
+            (int32_t)((i + 1U) * 1000U)
+        );
+    }
+
+    const CanopenMasterConfig config =
+    {
+        .backend = &can_boot_backend,
+        .node_ids = {1U, 2U, 3U, 4U, 5U, 6U},
+        .node_count = SIM_NUM_AXES,
+        .heartbeat_timeout_ms = 300U,
+        .sdo_timeout_ms = 50U
+    };
+
+    return canopen_master_init(
+        &can_boot_master,
+        &config
+    );
+}
+
 static bool start_system(void)
 {
     configure_robot();configure_state_dependencies();mock_backend_reset();
+
+    if (!configure_can_boot_sim())
+    {
+        fprintf(stderr, "Could not initialize CANopen BOOT simulation.\n");
+        return false;
+    }
     /* Simulated initial pose near home; the real Homing module still moves it. */
     for(int i=0;i<6;i++)mock_backend_set_joint(i,robot.configuration.home[i]+0.01);
     execution_services=(PathExecutionServices){approach_read_validated_sample,targets,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
     paused_services=(PausedServices){hold,off,NULL};fault_services=(FaultServices){safe,NULL};emergency_services=(EmergencyStopServices){safe,NULL};
     SupervisorTaskConfig c={0};
-    c.ethercat_config=&ethercat_config;c.robot=&robot;c.homing_config=&homing_config;c.teaching_config=&teaching_config;
+    c.canopen_master=&can_boot_master;c.robot=&robot;c.homing_config=&homing_config;c.teaching_config=&teaching_config;
     c.validation_config=&path_validation_config;c.validation_services=&path_validation_services;
     c.validation_workspace=&path_validation_workspace;c.validation_storage=&path_validation_storage;c.validated_trajectory=&validated_trajectory;
     c.approach_config=&approach_config;c.approach_services=&approach_services;

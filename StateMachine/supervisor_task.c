@@ -17,6 +17,17 @@
 #define SUPERVISOR_TASK_STACK_WORDS   4096U
 #define SUPERVISOR_MAX_MESSAGES_CYCLE 16U
 
+static uint32_t supervisor_now_ms(void)
+{
+    const TickType_t ticks =
+        xTaskGetTickCount();
+
+    return (uint32_t)(
+        ((uint64_t)ticks * 1000ULL) /
+        (uint64_t)configTICK_RATE_HZ
+    );
+}
+
 typedef struct
 {
     StateMachine machine;
@@ -425,7 +436,8 @@ static void run_active_state(SupervisorTaskContext *context)
         case ROBOT_STATE_BOOT:
             step = state_boot_step(
                 &context->boot,
-                context->config.ethercat_config
+                context->config.canopen_master,
+                supervisor_now_ms()
             );
             if (step == STATE_STEP_FAILED)
                 emit_step_failure(context, (uint32_t)context->boot.error);
@@ -705,7 +717,7 @@ static void supervisor_task_entry(void *argument)
 bool supervisor_task_init(const SupervisorTaskConfig *config)
 {
     if ((config == NULL) ||
-        (config->ethercat_config == NULL) ||
+        (config->canopen_master == NULL) ||
         (config->robot == NULL) ||
         (config->homing_config == NULL) ||
         (config->teaching_config == NULL) ||
