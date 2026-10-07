@@ -1,7 +1,7 @@
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <time.h>
 
 #include "state_boot.h"
 #include "state_homing.h"
@@ -9,944 +9,561 @@
 #include "state_teaching.h"
 
 #include "robot_config.h"
-
-#include "ethercat_master.h"
-
-#include "a6ec_drive.h"
+#include "sim_can_bus.h"
+#include "canopen_master.h"
+#include "avatar_m_position.h"
 #include "cia402.h"
 
+#define TEST_NUM_AXES 6U
+#define TEST_IDLE_CYCLES 20U
+#define TEST_REDUCTION_RATIO 50.0
+#define DEG2RAD(x) ((x) * ROBOT_PI / 180.0)
 
-#define TEST_NUM_AXES       6
-#define TEST_CYCLE_TIME_NS  1000000U
-
-#define TEST_IDLE_CYCLES    20U
-
-
-#define DEG2RAD(x) \
-    ((x) * ROBOT_PI / 180.0)
-
-
-/* ============================================================================
- * TEST HELPERS
- * ============================================================================
- */
-
-static void sleep_1ms(void)
+static void configure_robot(RobotConfig *robot)
 {
-    const struct timespec delay =
-    {
-        .tv_sec = 0,
-        .tv_nsec = 1000000L
-    };
-
-
-    nanosleep(
-        &delay,
-        NULL
-    );
+    robot_config_init_ur5(robot);
+    robot->configuration.homeDefined = true;
+    robot->configuration.home[0] = DEG2RAD(0.0);
+    robot->configuration.home[1] = DEG2RAD(-90.0);
+    robot->configuration.home[2] = DEG2RAD(90.0);
+    robot->configuration.home[3] = DEG2RAD(0.0);
+    robot->configuration.home[4] = DEG2RAD(0.0);
+    robot->configuration.home[5] = DEG2RAD(0.0);
 }
 
-
-/* ============================================================================
- * RUN BOOT
- * ============================================================================
- */
-
-static bool run_boot(
-    const EtherCATMasterConfig *ethercatConfig
+static bool configure_scales(
+    AvatarMPositionScale scales[TEST_NUM_AXES]
 )
 {
-    BootState boot;
-
-
-    state_boot_enter(
-        &boot
-    );
-
-
-    for (;;)
+    for (size_t i = 0U; i < TEST_NUM_AXES; ++i)
     {
-        const StateStepResult result =
-            state_boot_step(
-                &boot,
-                ethercatConfig
-            );
-
-
-        if (
-            result ==
-            STATE_STEP_COMPLETE
-        )
-        {
-            return true;
-        }
-
-
-        if (
-            result ==
-            STATE_STEP_FAILED
-        )
-        {
-            printf(
-                "BOOT failed before TEACHING test.\n"
-            );
-
-
-            return false;
-        }
-
-
-        sleep_1ms();
-    }
-}
-
-
-/* ============================================================================
- * RUN HOMING
- * ============================================================================
- */
-
-static bool run_homing(
-    RobotConfig *robot
-)
-{
-    robot_config_init_ur5(
-        robot
-    );
-
-
-    /*
-     * Same temporary simulation home used by the existing HOMING/IDLE tests.
-     */
-    robot->configuration.homeDefined =
-        true;
-
-
-    robot->configuration.home[0] =
-        DEG2RAD(0.0);
-
-    robot->configuration.home[1] =
-        DEG2RAD(-90.0);
-
-    robot->configuration.home[2] =
-        DEG2RAD(90.0);
-
-    robot->configuration.home[3] =
-        DEG2RAD(0.0);
-
-    robot->configuration.home[4] =
-        DEG2RAD(0.0);
-
-    robot->configuration.home[5] =
-        DEG2RAD(0.0);
-
-
-    const HomingConfig homingConfig =
-    {
-        .duration =
-            5.0,
-
-        .dt =
-            0.001,
-
-        .positionTolerance =
-            DEG2RAD(0.5),
-
-        .requiredStableCycles =
-            20U,
-
-        .maxVerificationCycles =
-            2000U
-    };
-
-
-    HomingState homing;
-
-
-    state_homing_enter(
-        &homing
-    );
-
-
-    for (;;)
-    {
-        const StateStepResult result =
-            state_homing_step(
-                &homing,
-                &homingConfig,
-                robot
-            );
-
-
-        if (
-            result ==
-            STATE_STEP_COMPLETE
-        )
-        {
-            return true;
-        }
-
-
-        if (
-            result ==
-            STATE_STEP_FAILED
-        )
-        {
-            printf(
-                "HOMING failed before TEACHING test.\n"
-            );
-
-
-            return false;
-        }
-
-
-        sleep_1ms();
-    }
-}
-
-
-/* ============================================================================
- * RUN IDLE UNTIL TEACH COMMAND
- * ============================================================================
- */
-
-static bool run_idle_to_teach(void)
-{
-    IdleState idle;
-
-
-    state_idle_enter(
-        &idle
-    );
-
-
-    for (;;)
-    {
-        IdleCommand command =
-            IDLE_COMMAND_NONE;
-
-
-        if (
-            idle.cyclesHeld >=
-            TEST_IDLE_CYCLES
-        )
-        {
-            command =
-                IDLE_COMMAND_TEACH;
-        }
-
-
-        const StateStepResult result =
-            state_idle_step(
-                &idle,
-                command
-            );
-
-
-        if (
-            result ==
-            STATE_STEP_COMPLETE
-        )
-        {
-            return
-                idle.exitCommand ==
-                IDLE_COMMAND_TEACH;
-        }
-
-
-        if (
-            result ==
-            STATE_STEP_FAILED
-        )
-        {
-            printf(
-                "IDLE failed before TEACHING test.\n"
-            );
-
-
-            return false;
-        }
-
-
-        sleep_1ms();
-    }
-}
-
-
-/* ============================================================================
- * SIMULATE MANUAL GUIDANCE
- * ============================================================================
- *
- * TEACHING itself does not command motion.
- *
- * In the real robot the manual-guidance/admittance controller owns that job.
- *
- * For this PC/KickCAT test only, this helper changes J1 while holding the other
- * five joints at their measured positions. That gives Teaching a second real
- * PDO/FK pose to record.
- */
-
-static bool simulate_guided_joint_move(
-    double joint1OffsetRad
-)
-{
-    int32_t targets[TEST_NUM_AXES];
-
-
-    for (
-        int slave = 1;
-        slave <= TEST_NUM_AXES;
-        ++slave
-    )
-    {
-        A6ECPDOFeedback feedback;
-
-
-        a6ec_read_feedback(
-            slave,
-            &feedback
-        );
-
-
-        targets[slave - 1] =
-            feedback.actualPosition;
-    }
-
-
-    const double q1Current =
-        a6ec_position_units_to_joint_rad(
-            targets[0]
-        );
-
-
-    targets[0] =
-        a6ec_joint_rad_to_position_units(
-            q1Current +
-            joint1OffsetRad
-        );
-
-
-    /*
-     * Send the target for several cycles to represent an external guidance
-     * controller moving the robot before the operator records P2.
-     */
-    for (
-        int cycle = 0;
-        cycle < 20;
-        ++cycle
-    )
-    {
-        for (
-            int slave = 1;
-            slave <= TEST_NUM_AXES;
-            ++slave
-        )
-        {
-            A6ECPDOFeedback feedback;
-
-
-            a6ec_read_feedback(
-                slave,
-                &feedback
-            );
-
-
-            if (
-                cia402_get_state(
-                    feedback.statusword
-                )
-                !=
-                CIA402_STATE_OPERATION_ENABLED
-            )
-            {
-                return false;
-            }
-
-
-            const A6ECPDOCommand command =
-            {
-                .controlword =
-                    CIA402_CONTROLWORD_ENABLE_OPERATION,
-
-                .targetPosition =
-                    targets[slave - 1]
-            };
-
-
-            a6ec_write_command(
-                slave,
-                &command
-            );
-        }
-
-
-        if (
-            ethercat_master_exchange()
-            <
-            ethercat_master_expected_wkc()
-        )
+        if (!avatar_m_position_scale_default(
+                &scales[i],
+                TEST_REDUCTION_RATIO))
         {
             return false;
         }
-
-
-        sleep_1ms();
     }
-
 
     return true;
 }
 
-
-/* ============================================================================
- * CLEAN SHUTDOWN
- * ============================================================================
- */
-
-static void disable_drives(void)
+static bool configure_simulated_start(
+    AvatarMSimBus *bus,
+    const RobotConfig *robot,
+    const AvatarMPositionScale scales[TEST_NUM_AXES]
+)
 {
-    for (
-        int attempt = 0;
-        attempt < 100;
-        ++attempt
-    )
+    for (size_t i = 0U; i < TEST_NUM_AXES; ++i)
     {
-        bool allDisabled =
-            true;
+        int32_t raw = 0;
 
-
-        for (
-            int slave = 1;
-            slave <= TEST_NUM_AXES;
-            ++slave
-        )
+        if (!avatar_m_joint_rad_to_position_units(
+                &scales[i],
+                robot->configuration.home[i] + DEG2RAD(5.0),
+                &raw))
         {
-            A6ECPDOFeedback feedback;
-
-
-            a6ec_read_feedback(
-                slave,
-                &feedback
-            );
-
-
-            const uint16_t driveState =
-                cia402_get_state(
-                    feedback.statusword
-                );
-
-
-            if (
-                driveState !=
-                CIA402_STATE_SWITCH_ON_DISABLED
-            )
-            {
-                allDisabled =
-                    false;
-            }
-
-
-            const A6ECPDOCommand command =
-            {
-                .controlword =
-                    cia402_get_disable_controlword(
-                        driveState
-                    ),
-
-                .targetPosition =
-                    feedback.actualPosition
-            };
-
-
-            a6ec_write_command(
-                slave,
-                &command
-            );
+            return false;
         }
 
-
-        ethercat_master_exchange();
-
-
-        if (allDisabled)
-        {
-            return;
-        }
-
-
-        sleep_1ms();
+        avatar_m_node_set_work_mode(&bus->nodes[i], 1U);
+        avatar_m_node_set_statusword(
+            &bus->nodes[i],
+            CIA402_STATE_SWITCH_ON_DISABLED
+        );
+        avatar_m_node_set_actual_position(&bus->nodes[i], raw);
     }
+
+    avatar_sim_bus_set_demo_rate(bus, 1000000.0);
+    avatar_sim_bus_set_demo_motion(bus, true);
+    return true;
 }
 
+static bool run_boot(
+    AvatarMSimBus *bus,
+    CanopenMaster *master,
+    uint32_t *now_ms
+)
+{
+    BootState boot;
+    state_boot_enter(&boot);
 
-/* ============================================================================
- * TEACHING INTEGRATION TEST
- * ============================================================================
+    StateStepResult result = STATE_STEP_RUNNING;
+
+    while (result == STATE_STEP_RUNNING && *now_ms < 5000U)
+    {
+        ++(*now_ms);
+        avatar_sim_bus_tick(bus, 1U);
+        result = state_boot_step(&boot, master, *now_ms);
+    }
+
+    return result == STATE_STEP_COMPLETE;
+}
+
+static bool run_homing(
+    AvatarMSimBus *bus,
+    CanopenMaster *master,
+    const RobotConfig *robot,
+    const AvatarMPositionScale scales[TEST_NUM_AXES],
+    uint32_t *now_ms
+)
+{
+    const HomingConfig config =
+    {
+        .duration = 1.0,
+        .dt = 0.002,
+        .positionTolerance = DEG2RAD(0.5),
+        .requiredStableCycles = 20U,
+        .maxVerificationCycles = 2000U
+    };
+
+    HomingState homing;
+    state_homing_enter(&homing);
+
+    StateStepResult result = STATE_STEP_RUNNING;
+
+    while (result == STATE_STEP_RUNNING && *now_ms < 12000U)
+    {
+        ++(*now_ms);
+        avatar_sim_bus_tick(bus, 1U);
+
+        result = state_homing_step(
+            &homing,
+            &config,
+            robot,
+            master,
+            scales,
+            *now_ms
+        );
+    }
+
+    return result == STATE_STEP_COMPLETE;
+}
+
+static bool run_idle_to_teach(
+    AvatarMSimBus *bus,
+    CanopenMaster *master,
+    uint32_t *now_ms
+)
+{
+    IdleState idle;
+    state_idle_enter(&idle);
+
+    StateStepResult result = STATE_STEP_RUNNING;
+
+    while (result == STATE_STEP_RUNNING && *now_ms < 14000U)
+    {
+        ++(*now_ms);
+        avatar_sim_bus_tick(bus, 1U);
+
+        const IdleCommand command =
+            idle.cyclesHeld >= TEST_IDLE_CYCLES
+                ? IDLE_COMMAND_TEACH
+                : IDLE_COMMAND_NONE;
+
+        result = state_idle_step(
+            &idle,
+            command,
+            master,
+            *now_ms
+        );
+    }
+
+    return
+        result == STATE_STEP_COMPLETE &&
+        idle.exitCommand == IDLE_COMMAND_TEACH;
+}
+
+/*
+ * TEACHING itself never commands motion. This helper stands in for the
+ * future manual-guidance/admittance controller. It changes J1 in the AVATAR
+ * simulator, then publishes a normal RPDO4/SYNC/TPDO4 exchange so the master
+ * receives the new measured pose before P2 is recorded.
  */
+static bool simulate_guided_joint_move(
+    AvatarMSimBus *bus,
+    CanopenMaster *master,
+    const AvatarMPositionScale scales[TEST_NUM_AXES],
+    double joint1_offset_rad,
+    uint32_t *now_ms
+)
+{
+    int32_t targets[TEST_NUM_AXES];
+
+    for (size_t i = 0U; i < TEST_NUM_AXES; ++i)
+    {
+        const AvatarMDrive *drive =
+            canopen_master_drive(master, i);
+
+        if (
+            drive == NULL ||
+            !drive->feedback_valid ||
+            drive->cia402_state !=
+                CIA402_STATE_OPERATION_ENABLED
+        )
+        {
+            return false;
+        }
+
+        targets[i] = drive->feedback.actual_position;
+    }
+
+    double q1 = 0.0;
+
+    if (!avatar_m_position_units_to_joint_rad(
+            &scales[0],
+            targets[0],
+            &q1))
+    {
+        return false;
+    }
+
+    if (!avatar_m_joint_rad_to_position_units(
+            &scales[0],
+            q1 + joint1_offset_rad,
+            &targets[0]))
+    {
+        return false;
+    }
+
+    for (size_t i = 0U; i < TEST_NUM_AXES; ++i)
+    {
+        avatar_m_node_set_actual_position(
+            &bus->nodes[i],
+            targets[i]
+        );
+    }
+
+    if (!canopen_master_send_target_cycle(
+            master,
+            targets,
+            TEST_NUM_AXES))
+    {
+        return false;
+    }
+
+    *now_ms += 2U;
+    avatar_sim_bus_tick(bus, 2U);
+
+    return canopen_master_poll(master, *now_ms);
+}
+
+static StateStepResult teaching_event(
+    TeachingState *teaching,
+    const RobotConfig *robot,
+    TeachingRuntimeInputs *runtime,
+    CanopenMaster *master,
+    const AvatarMPositionScale scales[TEST_NUM_AXES],
+    uint32_t now_ms,
+    TeachingEvent event,
+    TeachingOutputs *outputs
+)
+{
+    runtime->timestamp_ms = now_ms;
+
+    return state_teaching_step(
+        teaching,
+        robot,
+        runtime,
+        master,
+        scales,
+        now_ms,
+        event,
+        outputs
+    );
+}
 
 int main(void)
 {
-    printf(
+    puts(
         "\n"
         "============================================================\n"
-        " TEACHING STATE INTEGRATION TEST\n"
-        "============================================================\n"
+        " CANOPEN / AVATAR TEACHING INTEGRATION TEST\n"
+        "============================================================"
     );
-
-
-    const EtherCATMasterConfig ethercatConfig =
-    {
-        .interfaceName =
-            "ecatA",
-
-        .expectedSlaveCount =
-            TEST_NUM_AXES,
-
-        .cycleTimeNs =
-            TEST_CYCLE_TIME_NS
-    };
-
-
-    /* ------------------------------------------------------------------------
-     * BOOT
-     * ------------------------------------------------------------------------
-     */
-
-    if (
-        !run_boot(
-            &ethercatConfig
-        )
-    )
-    {
-        ethercat_master_close();
-
-        return 1;
-    }
-
-
-    printf(
-        "BOOT COMPLETE\n"
-    );
-
-
-    /* ------------------------------------------------------------------------
-     * HOMING
-     * ------------------------------------------------------------------------
-     */
 
     RobotConfig robot;
+    configure_robot(&robot);
 
+    AvatarMPositionScale scales[TEST_NUM_AXES];
 
-    if (
-        !run_homing(
-            &robot
-        )
-    )
+    if (!configure_scales(scales))
     {
-        disable_drives();
-
-        ethercat_master_close();
-
+        puts("Could not configure AVATAR position scales.");
         return 1;
     }
 
+    AvatarMSimBus bus = {0};
+    CanBackend backend = {0};
 
-    printf(
-        "HOMING COMPLETE\n"
-    );
-
-
-    /* ------------------------------------------------------------------------
-     * IDLE -> TEACH
-     * ------------------------------------------------------------------------
-     */
-
-    if (!run_idle_to_teach())
+    if (!avatar_sim_bus_init(&bus, &backend))
     {
-        printf(
-            "IDLE did not exit through TEACH.\n"
-        );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        puts("Could not initialize AVATAR simulation bus.");
         return 1;
     }
 
-
-    printf(
-        "IDLE COMPLETE -> TEACHING\n"
-    );
-
-
-    /* ------------------------------------------------------------------------
-     * ENTER TEACHING
-     * ------------------------------------------------------------------------
-     */
-
-    const TeachingConfig teachingConfig =
+    if (!configure_simulated_start(&bus, &robot, scales))
     {
-        .default_speed_mps =
-            0.010F,
+        puts("Could not configure simulated start positions.");
+        return 1;
+    }
 
-        .minimum_speed_mps =
-            0.001F,
+    CanopenMaster master = {0};
 
-        .maximum_speed_mps =
-            0.100F,
-
-        .speed_step_mps =
-            0.001F,
-
-        .minimum_point_separation_m =
-            0.002F,
-
-        .collinearity_epsilon_m2 =
-            1.0e-10F
+    const CanopenMasterConfig master_config =
+    {
+        .backend = &backend,
+        .node_ids = {1U, 2U, 3U, 4U, 5U, 6U},
+        .node_count = TEST_NUM_AXES,
+        .heartbeat_timeout_ms = 300U,
+        .sdo_timeout_ms = 50U
     };
 
+    if (!canopen_master_init(&master, &master_config))
+    {
+        puts("Could not initialize CANopen master.");
+        return 1;
+    }
+
+    uint32_t now_ms = 0U;
+
+    if (!run_boot(&bus, &master, &now_ms))
+    {
+        puts("CAN BOOT failed before TEACHING test.");
+        canopen_master_close(&master);
+        return 1;
+    }
+
+    puts("CAN BOOT COMPLETE");
+
+    if (!run_homing(
+            &bus,
+            &master,
+            &robot,
+            scales,
+            &now_ms))
+    {
+        puts("CAN HOMING failed before TEACHING test.");
+        canopen_master_close(&master);
+        return 1;
+    }
+
+    puts("CAN HOMING COMPLETE");
+
+    if (!run_idle_to_teach(
+            &bus,
+            &master,
+            &now_ms))
+    {
+        puts("CAN IDLE did not exit through TEACH.");
+        canopen_master_close(&master);
+        return 1;
+    }
+
+    puts("CAN IDLE COMPLETE -> TEACHING");
+
+    const TeachingConfig teaching_config =
+    {
+        .default_speed_mps = 0.010F,
+        .minimum_speed_mps = 0.001F,
+        .maximum_speed_mps = 0.100F,
+        .speed_step_mps = 0.001F,
+        .minimum_point_separation_m = 0.002F,
+        .collinearity_epsilon_m2 = 1.0e-10F
+    };
 
     TeachingRuntimeInputs runtime =
     {
-        .timestamp_ms =
-            1000U,
-
-        .calibration_version =
-            1U,
-
-        .active_frame_id =
-            1U,
-
-        .active_tool_id =
-            1U,
-
-        .robot_motion_settled =
-            true,
-
-        .manual_guidance_active =
-            true,
-
-        .motion_permitted =
-            true,
-
-        .estop_active =
-            false,
-
-        .protective_stop_active =
-            false,
-
-        .global_fault_active =
-            false,
-
-        .robot_homed =
-            true
+        .calibration_version = 1U,
+        .active_frame_id = 1U,
+        .active_tool_id = 1U,
+        .robot_motion_settled = true,
+        .manual_guidance_active = true,
+        .motion_permitted = true,
+        .estop_active = false,
+        .protective_stop_active = false,
+        .global_fault_active = false,
+        .robot_homed = true
     };
-
 
     TeachingState teaching;
     TeachingOutputs outputs;
 
-
     state_teaching_enter(
         &teaching,
-        &teachingConfig,
+        &teaching_config,
         1U
     );
 
-
     if (!teaching.initialized)
     {
-        printf(
-            "TEACHING initialization failed.\n"
-        );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        puts("TEACHING initialization failed.");
+        canopen_master_close(&master);
         return 1;
     }
 
-
     printf(
         "TEACHING -> %s\n",
-        state_teaching_phase_name(
-            teaching.phase
-        )
+        state_teaching_phase_name(teaching.phase)
     );
 
-
-    /* ------------------------------------------------------------------------
-     * SELECT LINE
-     * ------------------------------------------------------------------------
-     */
-
-    (void)state_teaching_step(
+    (void)teaching_event(
         &teaching,
         &robot,
         &runtime,
+        &master,
+        scales,
+        now_ms,
         TEACH_EVENT_SELECT_LINE,
         &outputs
     );
-
 
     if (!teaching.last_event_accepted)
     {
         printf(
             "SELECT_LINE rejected: %s\n",
-            state_teaching_error_name(
-                outputs.error
-            )
+            state_teaching_error_name(outputs.error)
         );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        canopen_master_close(&master);
         return 1;
     }
 
+    puts("Teaching: LINE selected");
 
-    printf(
-        "Teaching: LINE selected\n"
-    );
-
-
-    /* ------------------------------------------------------------------------
-     * RECORD P1 FROM REAL SIMULATED DRIVE FEEDBACK + FK
-     * ------------------------------------------------------------------------
-     */
-
-    (void)state_teaching_step(
+    (void)teaching_event(
         &teaching,
         &robot,
         &runtime,
+        &master,
+        scales,
+        now_ms,
         TEACH_EVENT_RECORD_POINT,
         &outputs
     );
-
 
     if (!teaching.last_event_accepted)
     {
         printf(
             "P1 rejected: %s\n",
-            state_teaching_error_name(
-                outputs.error
-            )
+            state_teaching_error_name(outputs.error)
         );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        canopen_master_close(&master);
         return 1;
     }
 
+    puts("Teaching: P1 recorded from AVATAR TPDO4 + FK");
 
-    printf(
-        "Teaching: P1 recorded\n"
-    );
-
-
-    /* ------------------------------------------------------------------------
-     * VERIFY TEAMMATE DUPLICATE-POINT LOGIC IS STILL PRESENT
-     * ------------------------------------------------------------------------
-     */
-
-    (void)state_teaching_step(
+    (void)teaching_event(
         &teaching,
         &robot,
         &runtime,
+        &master,
+        scales,
+        now_ms,
         TEACH_EVENT_RECORD_POINT,
         &outputs
     );
 
-
     if (
-        teaching.last_event_accepted
-        ||
-        outputs.error !=
-        TEACH_ERR_DUPLICATE_POINT
+        teaching.last_event_accepted ||
+        outputs.error != TEACH_ERR_DUPLICATE_POINT
     )
     {
-        printf(
-            "Duplicate-point behavior changed unexpectedly.\n"
-        );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        puts("Duplicate-point behavior changed unexpectedly.");
+        canopen_master_close(&master);
         return 1;
     }
 
+    puts("Teaching: duplicate P2 correctly rejected");
 
-    printf(
-        "Teaching: duplicate P2 correctly rejected\n"
-    );
-
-
-    /* ------------------------------------------------------------------------
-     * SIMULATE EXTERNAL MANUAL GUIDANCE
-     * ------------------------------------------------------------------------
-     */
-
-    if (
-        !simulate_guided_joint_move(
-            DEG2RAD(10.0)
-        )
-    )
+    if (!simulate_guided_joint_move(
+            &bus,
+            &master,
+            scales,
+            DEG2RAD(10.0),
+            &now_ms))
     {
-        printf(
-            "Simulated guidance move failed.\n"
-        );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        puts("Simulated CAN guidance move failed.");
+        canopen_master_close(&master);
         return 1;
     }
 
-
-    runtime.timestamp_ms =
-        2000U;
-
-
-    /* ------------------------------------------------------------------------
-     * RECORD P2 FROM UPDATED MOTOR FEEDBACK + FK
-     * ------------------------------------------------------------------------
-     */
-
-    (void)state_teaching_step(
+    (void)teaching_event(
         &teaching,
         &robot,
         &runtime,
+        &master,
+        scales,
+        now_ms,
         TEACH_EVENT_RECORD_POINT,
         &outputs
     );
-
 
     if (!teaching.last_event_accepted)
     {
         printf(
             "P2 rejected: %s\n",
-            state_teaching_error_name(
-                outputs.error
-            )
+            state_teaching_error_name(outputs.error)
         );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        canopen_master_close(&master);
         return 1;
     }
 
-
-    if (
-        teaching.draft.segment_count !=
-        1U
-    )
+    if (teaching.draft.segment_count != 1U)
     {
-        printf(
-            "LINE segment was not committed.\n"
-        );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        puts("LINE segment was not committed.");
+        canopen_master_close(&master);
         return 1;
     }
 
+    puts("Teaching: P2 recorded -> LINE segment complete");
 
-    printf(
-        "Teaching: P2 recorded -> LINE segment complete\n"
-    );
-
-
-    /* ------------------------------------------------------------------------
-     * VALIDATE / SUBMIT DRAFT
-     * ------------------------------------------------------------------------
-     */
-
-    const StateStepResult teachingResult =
-        state_teaching_step(
+    const StateStepResult teaching_result =
+        teaching_event(
             &teaching,
             &robot,
             &runtime,
+            &master,
+            scales,
+            now_ms,
             TEACH_EVENT_VALIDATE_PATH,
             &outputs
         );
 
-
     if (
-        teachingResult !=
-        STATE_STEP_COMPLETE
-        ||
-        !teaching.last_event_accepted
-        ||
+        teaching_result != STATE_STEP_COMPLETE ||
+        !teaching.last_event_accepted ||
         !outputs.validation_request
     )
     {
         printf(
             "Validation request failed: %s\n",
-            state_teaching_error_name(
-                outputs.error
-            )
+            state_teaching_error_name(outputs.error)
         );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        canopen_master_close(&master);
         return 1;
     }
 
-
-    if (
-        teaching.draft.draft_crc ==
-        0U
-    )
+    if (teaching.draft.draft_crc == 0U)
     {
-        printf(
-            "Draft CRC was not generated.\n"
-        );
-
-
-        disable_drives();
-
-        ethercat_master_close();
-
+        puts("Draft CRC was not generated.");
+        canopen_master_close(&master);
         return 1;
     }
-
 
     printf(
         "TEACHING -> %s\n",
-        state_teaching_phase_name(
-            teaching.phase
-        )
+        state_teaching_phase_name(teaching.phase)
     );
 
-
-    printf(
+    puts(
         "\n"
         "============================================================\n"
-        " TEACHING INTEGRATION TEST PASSED\n"
-        "============================================================\n"
+        " CANOPEN TEACHING INTEGRATION TEST PASSED\n"
+        "============================================================"
+    );
+
+    printf(
         "Program ID    : %lu\n"
         "Segments      : %u\n"
         "Segment 1     : %s\n"
@@ -962,16 +579,6 @@ int main(void)
         (unsigned long)teaching.draft.draft_crc
     );
 
-
-    disable_drives();
-
-    ethercat_master_close();
-
-
-    printf(
-        "Drives disabled and EtherCAT closed cleanly.\n"
-    );
-
-
+    canopen_master_close(&master);
     return 0;
 }
