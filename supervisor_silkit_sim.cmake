@@ -127,6 +127,44 @@ if(ENABLE_SILKIT)
     )
 
 
+
+    if(TARGET raylib)
+
+        add_executable(
+            can_live_monitor
+
+            ${CMAKE_SOURCE_DIR}/Simulation/AvatarM_CAN/can_live_monitor.cpp
+        )
+
+        target_compile_features(
+            can_live_monitor
+            PRIVATE
+            cxx_std_17
+        )
+
+        target_include_directories(
+            can_live_monitor
+            PRIVATE
+
+            ${CMAKE_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/CANComm
+            ${CMAKE_SOURCE_DIR}/CANComm/CANopen
+            ${CMAKE_SOURCE_DIR}/CANComm/SILKit
+        )
+
+        target_link_libraries(
+            can_live_monitor
+            PRIVATE
+
+            silkit_can_backend
+            raylib
+            Threads::Threads
+            m
+        )
+
+    endif()
+
+
     find_package(
         Python3
         COMPONENTS Interpreter
