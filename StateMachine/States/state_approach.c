@@ -1,8 +1,5 @@
 #include "state_approach.h"
 
-#include "../../EtherCATComm/ethercat_master.h"
-
-#include "../../ServoDrive/A6EC/a6ec_drive.h"
 #include "../../ServoDrive/CiA402/cia402.h"
 
 #include <math.h>
@@ -36,6 +33,7 @@
 #define APPROACH_QUINTIC_PEAK_JERK          (60.0)
 
 #define APPROACH_EPSILON                    (1.0e-12)
+#define APPROACH_CYCLIC_FEEDBACK_TIMEOUT_MS (100U)
 
 
 /* ============================================================================
@@ -285,203 +283,65 @@ static bool joint_vector_in_limits(
 
 
 /* ============================================================================
- * HARDWARE ACCESS USING THE EXISTING PROJECT MODULES
+ * CANOPEN / AVATAR HARDWARE ACCESS
  * ============================================================================ */
+
+static bool position_scales_valid(
+    const AvatarMPositionScale position_scales[ROBOT_DOF]
+)
+{
+    if (position_scales == NULL)
+    {
+        return false;
+    }
+
+    for (size_t axis = 0U; axis < ROBOT_DOF; ++axis)
+    {
+        if (!avatar_m_position_scale_valid(
+                &position_scales[axis]))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+static bool master_layout_valid(
+    const CanopenMaster *master
+)
+{
+    return
+        master != NULL &&
+        master->initialized &&
+        master->node_count == ROBOT_DOF;
+}
+
 
 static bool read_feedback_ready(
     ApproachState *state,
+    uint32_t now_ms,
     JointVector *actual_q,
     int32_t actual_units[ROBOT_DOF]
 )
 {
     if (
         state == NULL ||
-        actual_q == NULL
+        actual_q == NULL ||
+        !master_layout_valid(state->master) ||
+        !position_scales_valid(state->position_scales)
     )
     {
         return false;
     }
 
-
-    for (int slave = 1;
-         slave <= ROBOT_DOF;
-         ++slave)
-    {
-        if (
-            ethercat_master_slave_inputs(slave) == NULL ||
-            ethercat_master_slave_outputs(slave) == NULL
-        )
-        {
-            state->error =
-                APPROACH_ERR_PDO_UNAVAILABLE;
-
-            state->failed_joint =
-                (uint8_t)slave;
-
-            return false;
-        }
-
-
-        A6ECPDOFeedback feedback;
-
-
-        a6ec_read_feedback(
-            slave,
-            &feedback
-        );
-
-
-        const uint16_t drive_state =
-            cia402_get_state(
-                feedback.statusword
-            );
-
-
-        if (
-            drive_state !=
-            CIA402_STATE_OPERATION_ENABLED
-        )
-        {
-            state->error =
-                APPROACH_ERR_DRIVE_NOT_READY;
-
-            state->failed_joint =
-                (uint8_t)slave;
-
-            return false;
-        }
-
-
-        const real_t q =
-            (real_t)
-            a6ec_position_units_to_joint_rad(
-                feedback.actualPosition
-            );
-
-
-        if (!finite_real(q))
-        {
-            state->error =
-                APPROACH_ERR_FEEDBACK;
-
-            state->failed_joint =
-                (uint8_t)slave;
-
-            return false;
-        }
-
-
-        actual_q->q[slave - 1] =
-            q;
-
-
-        if (actual_units != NULL)
-        {
-            actual_units[slave - 1] =
-                feedback.actualPosition;
-        }
-    }
-
-
-    return true;
-}
-
-
-static bool write_target_units(
-    ApproachState *state,
-    const int32_t target_units[ROBOT_DOF]
-)
-{
-    if (
-        state == NULL ||
-        target_units == NULL
-    )
-    {
-        return false;
-    }
-
-
-    for (int slave = 1;
-         slave <= ROBOT_DOF;
-         ++slave)
-    {
-        if (
-            ethercat_master_slave_inputs(slave) == NULL ||
-            ethercat_master_slave_outputs(slave) == NULL
-        )
-        {
-            state->error =
-                APPROACH_ERR_PDO_UNAVAILABLE;
-
-            state->failed_joint =
-                (uint8_t)slave;
-
-            return false;
-        }
-
-
-        A6ECPDOFeedback feedback;
-
-
-        a6ec_read_feedback(
-            slave,
-            &feedback
-        );
-
-
-        const uint16_t drive_state =
-            cia402_get_state(
-                feedback.statusword
-            );
-
-
-        if (
-            drive_state !=
-            CIA402_STATE_OPERATION_ENABLED
-        )
-        {
-            state->error =
-                APPROACH_ERR_DRIVE_NOT_READY;
-
-            state->failed_joint =
-                (uint8_t)slave;
-
-            return false;
-        }
-
-
-        const A6ECPDOCommand command =
-        {
-            .controlword =
-                CIA402_CONTROLWORD_ENABLE_OPERATION,
-
-            .targetPosition =
-                target_units[slave - 1]
-        };
-
-
-        a6ec_write_command(
-            slave,
-            &command
-        );
-    }
-
-
-    const int actual_wkc =
-        ethercat_master_exchange();
-
-
-    const int expected_wkc =
-        ethercat_master_expected_wkc();
-
-
-    if (
-        expected_wkc <= 0 ||
-        actual_wkc < expected_wkc
-    )
+    if (!canopen_master_healthy(
+            state->master,
+            now_ms))
     {
         state->error =
-            APPROACH_ERR_WKC;
+            APPROACH_ERR_COMMUNICATION;
 
         state->failed_joint =
             0U;
@@ -489,6 +349,171 @@ static bool write_target_units(
         return false;
     }
 
+    for (size_t axis = 0U;
+         axis < ROBOT_DOF;
+         ++axis)
+    {
+        const AvatarMDrive *drive =
+            canopen_master_drive(
+                state->master,
+                axis
+            );
+
+        if (
+            drive == NULL ||
+            !drive->feedback_valid
+        )
+        {
+            state->error =
+                APPROACH_ERR_FEEDBACK;
+
+            state->failed_joint =
+                (uint8_t)(axis + 1U);
+
+            return false;
+        }
+
+        if (
+            drive->cia402_state !=
+            CIA402_STATE_OPERATION_ENABLED
+        )
+        {
+            state->error =
+                APPROACH_ERR_DRIVE_NOT_READY;
+
+            state->failed_joint =
+                (uint8_t)(axis + 1U);
+
+            return false;
+        }
+
+        double q = 0.0;
+
+        if (!avatar_m_position_units_to_joint_rad(
+                &state->position_scales[axis],
+                drive->feedback.actual_position,
+                &q) ||
+            !isfinite(q))
+        {
+            state->error =
+                APPROACH_ERR_FEEDBACK;
+
+            state->failed_joint =
+                (uint8_t)(axis + 1U);
+
+            return false;
+        }
+
+        actual_q->q[axis] =
+            (real_t)q;
+
+        if (actual_units != NULL)
+        {
+            actual_units[axis] =
+                drive->feedback.actual_position;
+        }
+    }
+
+    return true;
+}
+
+
+static void capture_tpdo_counts(
+    ApproachState *state
+)
+{
+    for (size_t axis = 0U;
+         axis < ROBOT_DOF;
+         ++axis)
+    {
+        state->command_tpdo_count[axis] =
+            canopen_master_tpdo_rx_count(
+                state->master,
+                axis
+            );
+    }
+}
+
+
+static bool command_feedback_arrived(
+    const ApproachState *state
+)
+{
+    for (size_t axis = 0U;
+         axis < ROBOT_DOF;
+         ++axis)
+    {
+        if (
+            canopen_master_tpdo_rx_count(
+                state->master,
+                axis
+            )
+            <=
+            state->command_tpdo_count[axis]
+        )
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+static bool command_due(
+    const ApproachState *state,
+    uint32_t now_ms
+)
+{
+    return
+        !state->command_clock_started ||
+        (uint32_t)(
+            now_ms -
+            state->last_command_ms
+        ) >=
+            state->command_period_ms;
+}
+
+
+static bool write_target_units(
+    ApproachState *state,
+    const int32_t target_units[ROBOT_DOF],
+    uint32_t now_ms
+)
+{
+    if (
+        state == NULL ||
+        target_units == NULL ||
+        !master_layout_valid(state->master)
+    )
+    {
+        return false;
+    }
+
+    capture_tpdo_counts(state);
+
+    if (!canopen_master_send_target_cycle(
+            state->master,
+            target_units,
+            ROBOT_DOF))
+    {
+        state->error =
+            APPROACH_ERR_COMMUNICATION;
+
+        state->failed_joint =
+            0U;
+
+        return false;
+    }
+
+    state->last_command_ms =
+        now_ms;
+
+    state->command_clock_started =
+        true;
+
+    state->awaiting_feedback =
+        true;
 
     return true;
 }
@@ -497,7 +522,8 @@ static bool write_target_units(
 static bool send_joint_target(
     ApproachState *state,
     const JointVector *target_q,
-    bool use_exact_final_units
+    bool use_exact_final_units,
+    uint32_t now_ms
 )
 {
     if (
@@ -509,9 +535,7 @@ static bool send_joint_target(
         return false;
     }
 
-
     int32_t target_units[ROBOT_DOF];
-
 
     if (use_exact_final_units)
     {
@@ -523,28 +547,33 @@ static bool send_joint_target(
     }
     else
     {
-        for (int joint = 0;
-             joint < ROBOT_DOF;
-             ++joint)
+        for (size_t axis = 0U;
+             axis < ROBOT_DOF;
+             ++axis)
         {
-            target_units[joint] =
-                a6ec_joint_rad_to_position_units(
-                    target_q->q[joint]
-                );
+            if (!avatar_m_joint_rad_to_position_units(
+                    &state->position_scales[axis],
+                    target_q->q[axis],
+                    &target_units[axis]))
+            {
+                state->error =
+                    APPROACH_ERR_POSITION_CONVERSION;
+
+                state->failed_joint =
+                    (uint8_t)(axis + 1U);
+
+                return false;
+            }
         }
     }
 
-
-    if (
-        !write_target_units(
+    if (!write_target_units(
             state,
-            target_units
-        )
-    )
+            target_units,
+            now_ms))
     {
         return false;
     }
-
 
     state->last_command =
         *target_q;
@@ -552,18 +581,22 @@ static bool send_joint_target(
     state->last_command_valid =
         true;
 
-
     return true;
 }
 
 
 static bool hold_actual(
-    ApproachState *state
+    ApproachState *state,
+    uint32_t now_ms
 )
 {
+    if (!command_due(state, now_ms))
+    {
+        return true;
+    }
+
     JointVector actual_q;
     int32_t actual_units[ROBOT_DOF];
-
 
     memset(
         &actual_q,
@@ -571,41 +604,32 @@ static bool hold_actual(
         sizeof(actual_q)
     );
 
-
-    if (
-        !read_feedback_ready(
+    if (!read_feedback_ready(
             state,
+            now_ms,
             &actual_q,
-            actual_units
-        )
-    )
+            actual_units))
     {
         return false;
     }
-
 
     /*
-     * Hold the exact measured native position units.
-     *
-     * This avoids a needless units -> rad -> units round trip.
+     * Hold the exact measured AVATAR raw position.
+     * This avoids a needless raw -> rad -> raw round trip.
      */
-    if (
-        !write_target_units(
+    if (!write_target_units(
             state,
-            actual_units
-        )
-    )
+            actual_units,
+            now_ms))
     {
         return false;
     }
-
 
     state->last_command =
         actual_q;
 
     state->last_command_valid =
         true;
-
 
     return true;
 }
@@ -624,12 +648,10 @@ static bool following_error_valid(
         return false;
     }
 
-
     if (!state->last_command_valid)
     {
         return true;
     }
-
 
     for (int joint = 0;
          joint < ROBOT_DOF;
@@ -650,7 +672,6 @@ static bool following_error_valid(
             return false;
         }
     }
-
 
     return true;
 }
@@ -902,7 +923,7 @@ static bool prepare_leg(
 
 
     /*
-     * Round UP to an exact number of 1 ms intervals.
+     * Round UP to an exact number of 2 ms / 500 Hz intervals.
      *
      * This preserves the teammate Approach timing policy while using our
      * ControlCore JointTrajectory implementation.
@@ -1216,6 +1237,8 @@ void state_approach_get_outputs(
 void state_approach_enter(
     ApproachState *state,
     const RobotConfig *robot,
+    CanopenMaster *master,
+    const AvatarMPositionScale position_scales[ROBOT_DOF],
     const ApproachRequest *request,
     const ApproachConfig *config,
     const ApproachServices *services
@@ -1249,6 +1272,8 @@ void state_approach_enter(
 
     if (
         robot == NULL ||
+        master == NULL ||
+        position_scales == NULL ||
         request == NULL ||
         config == NULL ||
         services == NULL
@@ -1269,6 +1294,18 @@ void state_approach_enter(
 
     state->robot =
         robot;
+
+    state->master =
+        master;
+
+    state->position_scales =
+        position_scales;
+
+    state->command_period_ms =
+        (uint32_t)(
+            PATH_VALIDATION_SAMPLE_PERIOD_US /
+            1000UL
+        );
 
     state->request =
         *request;
@@ -1324,6 +1361,7 @@ void state_approach_enter(
 StateStepResult state_approach_step(
     ApproachState *state,
     const ApproachControlInputs *inputs,
+    uint32_t now_ms,
     ApproachOutputs *outputs
 )
 {
@@ -1336,6 +1374,31 @@ StateStepResult state_approach_step(
     {
         return
             STATE_STEP_FAILED;
+    }
+
+
+    if (
+        !master_layout_valid(state->master) ||
+        !position_scales_valid(state->position_scales) ||
+        !canopen_master_poll(
+            state->master,
+            now_ms
+        )
+    )
+    {
+        const StateStepResult result =
+            approach_fail(
+                state,
+                APPROACH_ERR_COMMUNICATION,
+                0U
+            );
+
+        state_approach_get_outputs(
+            state,
+            outputs
+        );
+
+        return result;
     }
 
 
@@ -1454,6 +1517,52 @@ StateStepResult state_approach_step(
     }
 
 
+    /*
+     * Do not advance the motion sequence until every axis has returned a
+     * fresh TPDO4 after the previous RPDO4 + SYNC command.
+     */
+    if (state->awaiting_feedback)
+    {
+        if (command_feedback_arrived(state))
+        {
+            state->awaiting_feedback =
+                false;
+        }
+        else if (
+            (uint32_t)(
+                now_ms -
+                state->last_command_ms
+            ) >=
+            APPROACH_CYCLIC_FEEDBACK_TIMEOUT_MS
+        )
+        {
+            const StateStepResult result =
+                approach_fail(
+                    state,
+                    APPROACH_ERR_CYCLIC_FEEDBACK,
+                    0U
+                );
+
+            state_approach_get_outputs(
+                state,
+                outputs
+            );
+
+            return result;
+        }
+        else
+        {
+            state_approach_get_outputs(
+                state,
+                outputs
+            );
+
+            return
+                STATE_STEP_RUNNING;
+        }
+    }
+
+
     /* ========================================================================
      * PHASE MACHINE
      * ======================================================================== */
@@ -1475,6 +1584,16 @@ StateStepResult state_approach_step(
                     &state->config,
                     state->robot
                 )
+                ||
+                !master_layout_valid(
+                    state->master
+                )
+                ||
+                !position_scales_valid(
+                    state->position_scales
+                )
+                ||
+                state->command_period_ms == 0U
             )
             {
                 step_result =
@@ -1654,11 +1773,25 @@ StateStepResult state_approach_step(
                         .target_position_units[joint];
 
 
+                double target_q = 0.0;
+
+                if (!avatar_m_position_units_to_joint_rad(
+                        &state->position_scales[joint],
+                        state->final_target_units[joint],
+                        &target_q))
+                {
+                    step_result =
+                        approach_fail(
+                            state,
+                            APPROACH_ERR_POSITION_CONVERSION,
+                            (uint8_t)(joint + 1)
+                        );
+
+                    break;
+                }
+
                 state->final_target.q[joint] =
-                    (real_t)
-                    a6ec_position_units_to_joint_rad(
-                        state->final_target_units[joint]
-                    );
+                    (real_t)target_q;
             }
 
 
@@ -1704,6 +1837,7 @@ StateStepResult state_approach_step(
             if (
                 !read_feedback_ready(
                     state,
+                    now_ms,
                     &state->q_start,
                     actual_units
                 )
@@ -1925,7 +2059,7 @@ StateStepResult state_approach_step(
                 !inputs->motion_permission
             )
             {
-                if (!hold_actual(state))
+                if (!hold_actual(state, now_ms))
                 {
                     step_result =
                         approach_fail(
@@ -1958,7 +2092,7 @@ StateStepResult state_approach_step(
                 !inputs->motion_permission
             )
             {
-                if (!hold_actual(state))
+                if (!hold_actual(state, now_ms))
                 {
                     step_result =
                         approach_fail(
@@ -1987,6 +2121,7 @@ StateStepResult state_approach_step(
             if (
                 !read_feedback_ready(
                     state,
+                    now_ms,
                     &actual_q,
                     NULL
                 )
@@ -2029,6 +2164,14 @@ StateStepResult state_approach_step(
                 state->phase =
                     APPROACH_PHASE_VERIFY_TARGET;
 
+                break;
+            }
+
+
+            if (!command_due(
+                    state,
+                    now_ms))
+            {
                 break;
             }
 
@@ -2102,7 +2245,8 @@ StateStepResult state_approach_step(
                 !send_joint_target(
                     state,
                     &sample.q,
-                    exact_final
+                    exact_final,
+                    now_ms
                 )
             )
             {
@@ -2156,7 +2300,7 @@ StateStepResult state_approach_step(
 
         case APPROACH_PHASE_PAUSED:
         {
-            if (!hold_actual(state))
+            if (!hold_actual(state, now_ms))
             {
                 step_result =
                     approach_fail(
@@ -2197,6 +2341,7 @@ StateStepResult state_approach_step(
             if (
                 !read_feedback_ready(
                     state,
+                    now_ms,
                     &actual_q,
                     NULL
                 )
@@ -2238,7 +2383,7 @@ StateStepResult state_approach_step(
                 !inputs->motion_permission
             )
             {
-                if (!hold_actual(state))
+                if (!hold_actual(state, now_ms))
                 {
                     step_result =
                         approach_fail(
@@ -2267,6 +2412,7 @@ StateStepResult state_approach_step(
             if (
                 !read_feedback_ready(
                     state,
+                    now_ms,
                     &actual_q,
                     NULL
                 )
@@ -2307,14 +2453,22 @@ StateStepResult state_approach_step(
 
 
             /*
-             * Keep commanding the EXACT sample-0 drive units during final
-             * verification.
+             * Keep commanding the EXACT sample-0 AVATAR raw target during
+             * final verification at the same 2 ms / 500 Hz command period.
              */
+            if (!command_due(
+                    state,
+                    now_ms))
+            {
+                break;
+            }
+
             if (
                 !send_joint_target(
                     state,
                     &state->final_target,
-                    true
+                    true,
+                    now_ms
                 )
             )
             {
