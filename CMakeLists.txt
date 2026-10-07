@@ -168,11 +168,11 @@ target_include_directories(
     StateMachine
     StateMachine/States
 
-    EtherCATComm
-    EtherCATComm/SOEM
+    CANComm
+    CANComm/CANopen
 
     ServoDrive/CiA402
-    ServoDrive/A6EC
+    ServoDrive/AvatarM
 )
 
 target_link_libraries(
