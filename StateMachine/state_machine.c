@@ -24,7 +24,7 @@ void state_machine_init(
      *
      *     motionPermitted = false
      *     drivesReady = false
-     *     ethercatHealthy = false
+     *     communicationHealthy = false
      *
      * Motion cannot be authorized until real status has been received.
      */
@@ -127,7 +127,7 @@ static bool safety_ready_for_recovery(
         machine->safety.statusValid &&
         machine->safety.motionPermitted &&
         machine->safety.drivesReady &&
-        machine->safety.ethercatHealthy &&
+        machine->safety.communicationHealthy &&
         !machine->safety.estopActive &&
         !machine->safety.protectiveStopActive &&
         !machine->safety.globalFaultActive;
@@ -161,7 +161,7 @@ bool state_machine_can_move(
         machine->safety.statusValid &&
         machine->safety.motionPermitted &&
         machine->safety.drivesReady &&
-        machine->safety.ethercatHealthy &&
+        machine->safety.communicationHealthy &&
         !machine->safety.estopActive &&
         !machine->safety.protectiveStopActive &&
         !machine->safety.globalFaultActive;
