@@ -27,8 +27,7 @@ typedef struct {
 static RobotConfig robot;
 /*
  * Active Supervisor simulation uses the CANopen / AVATAR stack end-to-end.
- * Legacy EtherCAT/A6EC modules remain in the repository only for historical
- * tests and the old simulator target.
+ * The removed EtherCAT/A6EC implementation is preserved on the archive branch.
  */
 static AvatarMSimBus can_boot_bus;
 static CanBackend can_boot_backend;

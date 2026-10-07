@@ -1,48 +1,51 @@
-# Simulation entry point
+# CANopen / AVATAR simulation
 
-The canonical PC simulator entry point is:
-
-```
-Simulation/simulator_main.c
-```
-
-It uses the **FreeRTOS POSIX port** and drives the same global StateMachine and
-state modules intended for the real robot.
+The canonical PC controller simulation is:
 
 ```
-PC simulator
-Simulation/simulator_main.c
-        |
-        v
+Simulation/supervisor_mock_main.c
+```
+
+It runs the real FreeRTOS Supervisor and robot state modules against the AVATAR
+CANopen simulator.
+
+```
 FreeRTOS POSIX
-        |
-        v
-StateMachine/state_machine.c
-        |
-        +--> BOOT
-        +--> HOMING
-        +--> IDLE
-        +--> TEACHING
-        +--> PATH_VALIDATION
-        +--> APPROACH
+    |
+    v
+Supervisor / StateMachine
+    |
+    +--> BOOT
+    +--> HOMING
+    +--> IDLE
+    +--> TEACHING
+    +--> PATH_VALIDATION
+    +--> APPROACH
+    +--> PATH_EXECUTION
+    |
+    v
+CanopenMaster
+    |
+    +--> NMT / heartbeat / expedited SDO
+    +--> 6 x RPDO4 target positions
+    +--> SYNC
+    +--> 6 x TPDO4 feedback
+    |
+    v
+AVATAR M node simulator
 ```
 
-Simulation-only boundaries around the shared robot logic are:
+Motion states use a 2 ms / 500 Hz application command grid. Each cyclic motion
+command sends the six RPDO4 targets followed by SYNC, and the motion states
+require fresh TPDO4 feedback before advancing.
 
-- KickCAT virtual EtherCAT slaves,
-- SOEM on the PC,
-- desktop HMI UDP,
-- simulated hand guidance,
-- RAM-backed validated-trajectory storage,
-- MATLAB UDP telemetry.
+Simulation-only boundaries are the AVATAR node model, desktop HMI UDP,
+simulated hand guidance, RAM-backed validated-trajectory storage and software
+fault/E-stop injection. They are not claims about physical motor dynamics or a
+real 1 Mbit/s CAN bus.
 
-The future real controller entry point is the root `main.c`. That file is
-reserved for the teammate implementing the STM32/FreeRTOS target runtime.
+The old EtherCAT/A6EC implementation is intentionally absent from
+`sara/can-replacement`. It remains recoverable from Git history and from
+`sara/can-system-integration`.
 
-The previous pre-global-FSM simulator was archived at:
-
-```
-Legacy/old_simulator_main.c
-```
-
-It is not part of the normal build.
+The future physical controller entry point is the root `main.c`.

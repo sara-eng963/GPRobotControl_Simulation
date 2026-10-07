@@ -1,140 +1,67 @@
-# Real HMI + Teaching Simulation
+# Operator HMI + Teaching Simulation
 
-This folder is the new operator-facing HMI integration. The old planner/test UI
-remains untouched under `HMI-Mock/`.
+This folder contains the operator-facing HMI used with the CANopen Supervisor
+simulation.
 
 ## Two-window workflow
 
-The new simulation deliberately mirrors the intended physical workflow:
+1. **Supervisor panel** — robot state, program selection, Record,
+   Validate/Preview, Start/Replay, Pause, Reset and Home.
+2. **Teaching Simulation** — a PC-only substitute for physical hand guiding.
 
-1. **Industrial Robot HMI** — the first window represents the real panel.
-   It contains the physical-panel controls:
-   - robot status screen,
-   - E-Stop,
-   - Line / Circular Arc / Circle selection,
-   - Record,
-   - one context-sensitive Validate / Preview button,
-   - speed decrease / increase / default,
-   - Start / Replay,
-   - Pause,
-   - Reset,
-   - Home.
-2. **Teaching Simulation** — the second window substitutes only for physical
-   hand guiding. It displays one current TCP guide target, the actual TCP, and
-   the points already recorded by the real Teaching state.
-
-There is intentionally **no A/B/C batch waypoint editor** in the new HMI.
-The operator moves the simulated robot to one pose, returns to the first HMI
-window, presses **RECORD**, then moves to the next pose and presses **RECORD**
-again.
-
-The Validate / Preview control is the same physical HMI button:
-- in Teaching it reads **VALIDATE PATH** and starts Path Validation,
-- while validation runs it reads **VALIDATING...** and is disabled,
-- after a valid result it reads **PREVIEW**,
-- the second click requests Preview and the FSM enters Approach.
-
-
-## Stable HMI API boundary
-
-The Raylib panel is only the current stand-in for the future physical HMI.
-
-The permanent controller-facing boundary is:
+The Teaching window does not inject taught points directly. It requests a
+simulated guidance pose; the controller-side simulator solves IK, updates the
+AVATAR simulated joints, and `state_teaching.c` records the resulting AVATAR
+feedback through the normal FK path.
 
 ```
-HMI/hmi_api.h
-    HmiEvent / HmiProgramSelection
-
-HMI/hmi_state_bridge.h/.c
-    HmiEvent -> StateMachine inputs/state APIs
-
-HMI/hmi_types.h
-    HMI status contract
-
-HMI/hmi_protocol.h/.c
-    PC UDP transport only
-```
-
-`Simulation/simulator_main.c` and the future real `main.c` should both use
-`hmi_state_bridge_handle_event()`,
-`hmi_state_bridge_apply_inputs()`, and
-`hmi_state_bridge_on_state_transition()`.
-
-When the physical HMI arrives, only the transport that produces `HmiEvent`
-values changes. The event names and controller/state-machine mapping stay the
-same.
-
-The desktop software E-stop and mouse-guidance packets are simulation-only and
-are intentionally outside `HmiEvent`. A real E-stop belongs to the hardware
-safety chain.
-
-## State-machine integration
-
-`Simulation/simulator_main.c` is the FreeRTOS POSIX PC entry point and runs the actual state modules:
-
-```
-BOOT -> HOMING -> IDLE -> TEACHING -> PATH_VALIDATION -> APPROACH
-```
-
-The second window does not inject a fake Teaching point into
-`state_teaching.c`. Instead it behaves like a simulation-only external
-manual-guidance controller:
-
-```
-3D TCP target
-    -> ControlCore ADLS IK
-    -> short ControlCore JointTrajectory
-    -> A6-EC CSP targets
-    -> KickCAT simulated drives
-    -> actual PDO feedback
-    -> state_teaching.c RECORD
+Teaching target
+    -> ControlCore IK
+    -> AVATAR simulated joint feedback
+    -> CanopenMaster / TPDO4
+    -> state_teaching.c
     -> ControlCore FK
     -> TaughtPoint
 ```
 
-That keeps the existing Teaching logic unchanged.
+The operational panel displays CAN node readiness as `CAN: 6/6 nodes`.
 
-## Path Validation and Approach
+## Controller-facing API
 
-Path Validation uses a host RAM implementation of the existing
-`PathValidationStorage` interface. Approach reads sample 0 from the same
-committed artifact through its existing `ApproachServices` callback.
+`HMI/hmi_api.h` defines the stable operator events. The PC transport is
+implemented by `HMI/hmi_protocol.c`; the FreeRTOS controller integration is
+implemented by `HMI/hmi_task.c` and `StateMachine/supervisor_task.c`.
 
-Collision callbacks remain disabled in this PC UI simulator because no final
-cell collision model exists yet. The simulator does not pretend that this is a
-production safety check.
-
-## MATLAB
-
-MATLAB telemetry is preserved on UDP port **5005** using the same six
-`int32_t` A6 position-unit values used by the previous simulator. The current
-MATLAB visualizer can therefore remain unchanged.
+The desktop software E-stop and simulated guidance packets are simulation-only.
+A physical E-stop belongs to the independent hardware safety chain.
 
 ## Build
 
 ```bash
-cmake -S . -B build
-cmake --build build --target robot_simulator robot_hmi teaching_sim
+cmake -S . -B build-can-supervisor
+
+cmake --build build-can-supervisor \
+  --target supervisor_mock_sim supervisor_panel teaching_sim \
+  -j "$(nproc)"
 ```
 
 ## Run
 
-With KickCAT installed in `~/KickCAT`, the easiest command is:
+In separate terminals:
 
 ```bash
-bash ./scripts/run_full_simulation.sh
+./build-can-supervisor/supervisor_mock_sim
+./build-can-supervisor/supervisor_panel
+./build-can-supervisor/teaching_sim
 ```
 
-That command configures CMake, builds `robot_simulator`, `robot_hmi` and
-`teaching_sim`, then launches KickCAT, the FreeRTOS simulator and both HMI
-windows.
+No virtual Ethernet pair, SOEM or external EtherCAT slave simulator is
+required.
 
-If everything is already built, you can still launch directly with:
+For the automated full sequence, run:
 
 ```bash
-./scripts/run_hmi_state_simulation.sh
+ctest --test-dir build-can-supervisor \
+  -R '^supervisor_mock_sequence$' \
+  --output-on-failure -V
 ```
-
-Wait for the first HMI window to show **IDLE**, select a program, press
-**START / REPLAY**, move the robot from the Teaching Simulation window, and
-press **RECORD** on the first window for each taught point.

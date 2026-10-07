@@ -133,5 +133,5 @@ Physical HMI button
 Only the transport changes.
 
 Simulation-only items are intentionally NOT part of the stable HMI event API:
-mouse TCP guidance, software E-stop toggle, KickCAT, MATLAB telemetry and mock
-Preview execution.
+mouse TCP guidance, software E-stop toggle, the AVATAR CANopen simulator and
+PC-only telemetry/debug behavior.

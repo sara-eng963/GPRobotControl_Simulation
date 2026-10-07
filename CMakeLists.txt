@@ -96,15 +96,6 @@ add_subdirectory(
     FreeRTOS-Kernel
 )
 
-# ----------------------------
-# SOEM
-# ----------------------------
-
-add_subdirectory(
-    ../SOEM
-    SOEM-build
-)
-
 # ============================================================================
 # CONTROL CORE
 # ============================================================================
@@ -112,82 +103,14 @@ add_subdirectory(
 add_subdirectory(ControlCore)
 
 # ============================================================================
-# PC ROBOT SIMULATOR
+# CANOPEN / AVATAR PC SUPERVISOR SIMULATOR
 # ============================================================================
 #
-# Simulation/simulator_main.c is the PC entry point. It runs the actual global
-# StateMachine under the FreeRTOS POSIX port and connects it to KickCAT/SOEM,
-# the desktop HMI, simulated hand-guiding support and MATLAB telemetry.
+# The active end-to-end PC simulator is supervisor_mock_sim, defined in
+# supervisor_mock_sim.cmake near the end of this file. It runs the real
+# Supervisor/StateMachine with the AVATAR CANopen simulator.
 #
-# Root main.c is intentionally NOT part of the PC build; it is reserved for
-# the future real STM32/FreeRTOS robot application.
 # ============================================================================
-
-add_executable(
-    robot_simulator
-
-    Simulation/simulator_main.c
-
-    HMI/hmi_state_bridge.c
-
-    StateMachine/state_machine.c
-    StateMachine/States/state_boot.c
-    StateMachine/States/state_homing.c
-    StateMachine/States/state_idle.c
-    StateMachine/States/state_teaching.c
-    StateMachine/States/state_path_validation.c
-    StateMachine/States/state_approach.c
-    StateMachine/States/state_path_execution.c
-    StateMachine/States/state_paused.c
-    StateMachine/States/state_fault.c
-    StateMachine/States/state_emergency_stop.c
-
-    EtherCATComm/ethercat_master.c
-    EtherCATComm/SOEM/soem_backend.c
-
-    ServoDrive/CiA402/cia402.c
-    ServoDrive/A6EC/a6ec_pdo.c
-    ServoDrive/A6EC/a6ec_drive.c
-
-    StateMachine/state_machine.c
-    
-)
-
-target_compile_features(
-    robot_simulator
-    PRIVATE
-    c_std_11
-)
-
-target_include_directories(
-    robot_simulator
-    PRIVATE
-
-    HMI
-
-    StateMachine
-    StateMachine/States
-
-    CANComm
-    CANComm/CANopen
-
-    ServoDrive/CiA402
-    ServoDrive/AvatarM
-)
-
-target_link_libraries(
-    robot_simulator
-    PRIVATE
-
-    freertos_kernel
-    freertos_config
-
-    control_core
-    soem
-    pthread
-    m
-)
-
 
 # ============================================================================
 # RAYLIB
@@ -200,61 +123,6 @@ add_subdirectory(
     external/raylib
     ${CMAKE_BINARY_DIR}/raylib
 )
-
-# ============================================================================
-# MODULAR ROBOT MOTION HMI
-# ============================================================================
-
-add_executable(
-    mock_hmi
-
-    hmi_mock.c
-
-    HMI-Mock/hmi_app.c
-    HMI-Mock/hmi_protocol.c
-    HMI-Mock/hmi_theme.c
-    HMI-Mock/hmi_runtime_guard.c
-    HMI-Mock/waypoint_editor_3d.c
-    HMI-Mock/workspace_monitor.c
-)
-
-target_compile_features(
-    mock_hmi
-    PRIVATE
-    c_std_11
-)
-
-target_include_directories(
-    mock_hmi
-    PRIVATE
-    HMI-Mock
-)
-
-target_link_libraries(
-    mock_hmi
-    PRIVATE
-    raylib
-    control_core
-    m
-)
-
-# ---------------------------------------------------------------------------
-# HMI runtime isolation for the PC EtherCAT simulation
-# ---------------------------------------------------------------------------
-#
-# hmi_runtime_guard.c wraps these raylib calls so the GUI is capped at 20 FPS
-# and 4x MSAA is removed.  This keeps WSLg rendering from competing as heavily
-# with the 1 ms FreeRTOS/SOEM + KickCAT simulation.
-#
-# The controller timing is unchanged.
-
-target_link_options(
-    mock_hmi
-    PRIVATE
-    -Wl,--wrap=SetTargetFPS
-    -Wl,--wrap=SetConfigFlags
-)
-
 
 # ============================================================================
 # REAL ROBOT HMI PANEL + TEACHING-SIM WINDOW
@@ -764,11 +632,11 @@ target_include_directories(
     StateMachine
     StateMachine/States
 
-    EtherCATComm
-    EtherCATComm/SOEM
+    CANComm
+    CANComm/CANopen
 
     ServoDrive/CiA402
-    ServoDrive/A6EC
+    ServoDrive/AvatarM
 )
 
 target_link_libraries(
