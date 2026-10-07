@@ -58,6 +58,7 @@ static float guidance_xyz[3];
 static unsigned guidance_error;
 static bool homed;
 static int udp=-1;
+static int matlab_udp=-1;
 static struct sockaddr_in matlab_status_address;
 static bool matlab_status_ready;
 static uint32_t last_sequence, status_sequence;
@@ -851,6 +852,40 @@ static bool configure_matlab_status_destination(void)
         return false;
     }
 
+    /*
+     * Use a separate UDP socket for MATLAB. The HMI command socket is bound
+     * specifically to 127.0.0.1:5010, so reusing it for a Windows/WSL host
+     * destination can produce packets with an unusable loopback source.
+     * An unbound socket lets Linux select the correct WSL interface/source.
+     */
+    matlab_udp =
+        socket(
+            AF_INET,
+            SOCK_DGRAM,
+            0
+        );
+
+    if (matlab_udp < 0)
+    {
+        perror("[MATLAB] UDP socket");
+        matlab_status_ready =
+            false;
+        return false;
+    }
+
+    if (fcntl(
+            matlab_udp,
+            F_SETFL,
+            O_NONBLOCK) < 0)
+    {
+        perror("[MATLAB] nonblocking UDP");
+        close(matlab_udp);
+        matlab_udp = -1;
+        matlab_status_ready =
+            false;
+        return false;
+    }
+
     matlab_status_ready =
         true;
 
@@ -859,6 +894,7 @@ static bool configure_matlab_status_destination(void)
         ip,
         (unsigned)MATLAB_STATUS_PORT
     );
+    fflush(stdout);
 
     return true;
 }
@@ -901,14 +937,26 @@ static void udp_status(void *ctx,const SupervisorDiagnostics *s)
      */
     if (matlab_status_ready)
     {
-        (void)sendto(
-            udp,
+        const ssize_t matlab_sent =
+            sendto(
+            matlab_udp,
             w,
             sizeof(w),
             MSG_DONTWAIT,
             (struct sockaddr *)&matlab_status_address,
             sizeof(matlab_status_address)
         );
+
+        static bool matlab_send_error_reported = false;
+
+        if (
+            matlab_sent < 0 &&
+            !matlab_send_error_reported
+        )
+        {
+            perror("[MATLAB] UDP send");
+            matlab_send_error_reported = true;
+        }
     }
 
     static RobotStateId old=ROBOT_STATE_COUNT;static bool old_relay;
