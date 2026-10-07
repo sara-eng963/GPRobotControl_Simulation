@@ -2677,8 +2677,8 @@ const char *state_approach_error_name(
         case APPROACH_ERR_TARGET_LIMIT:
             return "TARGET_LIMIT";
 
-        case APPROACH_ERR_PDO_UNAVAILABLE:
-            return "PDO_UNAVAILABLE";
+        case APPROACH_ERR_COMMUNICATION:
+            return "COMMUNICATION";
 
         case APPROACH_ERR_FEEDBACK:
             return "FEEDBACK";
@@ -2701,8 +2701,8 @@ const char *state_approach_error_name(
         case APPROACH_ERR_FOLLOWING_ERROR:
             return "FOLLOWING_ERROR";
 
-        case APPROACH_ERR_WKC:
-            return "WKC";
+        case APPROACH_ERR_CYCLIC_FEEDBACK:
+            return "CYCLIC_FEEDBACK";
 
         case APPROACH_ERR_EXTERNAL_FAULT:
             return "EXTERNAL_FAULT";
