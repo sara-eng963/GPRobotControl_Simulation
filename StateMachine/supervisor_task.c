@@ -139,6 +139,7 @@ static void enter_active_state(SupervisorTaskContext *context)
             state_path_validation_enter(
                 &context->validation,
                 context->config.robot,
+                context->config.avatar_position_scales,
                 context->config.validation_config,
                 context->config.validation_services,
                 context->config.validation_workspace,
