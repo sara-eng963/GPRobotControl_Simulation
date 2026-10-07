@@ -100,8 +100,8 @@ static void test_initialization(void)
     );
 
     check_true(
-        !machine.safety.ethercatHealthy,
-        "EtherCAT is not assumed healthy initially"
+        !machine.safety.communicationHealthy,
+        "Communication is not assumed healthy initially"
     );
 
     check_true(
@@ -1064,7 +1064,7 @@ static void test_preview_safety_gating_and_approach_entry(void)
 
     safety.motionPermitted = true;
     safety.drivesReady = true;
-    safety.ethercatHealthy = true;
+    safety.communicationHealthy = true;
 
     safety.timestampMs = 5000U;
 
@@ -1157,7 +1157,7 @@ static void reach_preview_approach(
     safety.statusValid = true;
     safety.motionPermitted = true;
     safety.drivesReady = true;
-    safety.ethercatHealthy = true;
+    safety.communicationHealthy = true;
     safety.timestampMs = 6000U;
 
     state_machine_update_safety(
@@ -1347,7 +1347,7 @@ static void test_production_start_and_execution_sequence(void)
     safety.statusValid = true;
     safety.motionPermitted = true;
     safety.drivesReady = true;
-    safety.ethercatHealthy = true;
+    safety.communicationHealthy = true;
     safety.timestampMs = 7000U;
 
     state_machine_update_safety(
@@ -3569,7 +3569,7 @@ static void test_unified_execution_and_emergency_recovery(void)
     RobotSafetySnapshot healthy = {
         .motionPermitted = true,
         .drivesReady = true,
-        .ethercatHealthy = true,
+        .communicationHealthy = true,
         .statusValid = true
     };
     state_machine_update_safety(&machine, &healthy);
