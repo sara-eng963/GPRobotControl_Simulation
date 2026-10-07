@@ -86,6 +86,24 @@ bool avatar_m_drive_build_read_work_mode(
     );
 }
 
+bool avatar_m_drive_build_read_mode_display(
+    const AvatarMDrive *drive,
+    CanFrame *frame
+)
+{
+    if (drive == NULL)
+    {
+        return false;
+    }
+
+    return canopen_sdo_build_read(
+        drive->node_id,
+        AVATAR_M_OD_MODES_OF_OPERATION_DISPLAY,
+        AVATAR_M_SUBINDEX_0,
+        frame
+    );
+}
+
 bool avatar_m_drive_build_set_heartbeat_period(
     const AvatarMDrive *drive,
     uint16_t heartbeat_period_ms,
