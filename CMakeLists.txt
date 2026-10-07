@@ -479,7 +479,7 @@ target_link_libraries(
 )
 
 # ============================================================================
-# TEACHING STATE INTEGRATION TEST
+# TEACHING STATE INTEGRATION TEST - CANOPEN / AVATAR
 # ============================================================================
 
 add_executable(
@@ -492,36 +492,44 @@ add_executable(
     StateMachine/States/state_idle.c
     StateMachine/States/state_teaching.c
 
-    EtherCATComm/ethercat_master.c
-    EtherCATComm/SOEM/soem_backend.c
+    Simulation/AvatarM_CAN_GUI/sim_can_bus.c
+
+    CANComm/CANopen/canopen_master.c
+    CANComm/CANopen/canopen_nmt.c
+    CANComm/CANopen/canopen_sdo.c
+    CANComm/CANopen/canopen_heartbeat.c
 
     ServoDrive/CiA402/cia402.c
 
-    ServoDrive/A6EC/a6ec_pdo.c
-    ServoDrive/A6EC/a6ec_drive.c
+    ServoDrive/AvatarM/avatar_m_pdo.c
+    ServoDrive/AvatarM/avatar_m_drive.c
+    ServoDrive/AvatarM/avatar_m_position.c
+    ServoDrive/AvatarM/Sim/avatar_m_node_sim.c
+)
+
+target_compile_features(
+    teaching_test
+    PRIVATE
+    c_std_11
 )
 
 target_include_directories(
     teaching_test
     PRIVATE
-
     StateMachine
     StateMachine/States
-
-    EtherCATComm
-    EtherCATComm/SOEM
-
+    CANComm
+    CANComm/CANopen
     ServoDrive/CiA402
-    ServoDrive/A6EC
+    ServoDrive/AvatarM
+    ServoDrive/AvatarM/Sim
+    Simulation/AvatarM_CAN_GUI
 )
 
 target_link_libraries(
     teaching_test
     PRIVATE
-
     control_core
-    soem
-    pthread
     m
 )
 
