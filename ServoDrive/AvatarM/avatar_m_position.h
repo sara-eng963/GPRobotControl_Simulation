@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Position conversion for an AVATAR M actuator installed as one robot joint.
  *
@@ -57,5 +61,9 @@ bool avatar_m_position_units_to_joint_rad(
     int32_t position_units,
     double *joint_rad
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* AVATAR_M_POSITION_H */
