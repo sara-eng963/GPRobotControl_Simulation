@@ -1,7 +1,7 @@
 #include "../StateMachine/supervisor_task.h"
 #include "../HMI/hmi_task.h"
 #include "../HMI/hmi_protocol.h"
-#include "AvatarM_CAN_GUI/sim_can_bus.h"
+#include "../CANComm/SILKit/silkit_can_backend.h"
 #include "../CANComm/CANopen/canopen_master.h"
 #include "../ServoDrive/CiA402/cia402.h"
 #include "../ServoDrive/AvatarM/avatar_m_position.h"
@@ -30,8 +30,7 @@ static RobotConfig robot;
  * Active Supervisor simulation uses the CANopen / AVATAR stack end-to-end.
  * The removed EtherCAT/A6EC implementation is preserved on the archive branch.
  */
-static AvatarMSimBus can_boot_bus;
-static CanBackend can_boot_backend;
+static CanBackend silkit_backend;
 static CanopenMaster can_boot_master;
 static AvatarMPositionScale avatar_position_scales[SIM_NUM_AXES];
 
@@ -211,30 +210,11 @@ static bool sim_apply_guided_joint_vector(
     }
 
     /*
-     * This is the PC-only manual-guidance stand-in. TEACHING itself still
-     * only reads feedback; the external guidance simulator changes the
-     * measured joints and publishes a normal RPDO4/SYNC/TPDO4 exchange.
+     * PC-only manual-guidance stand-in:
+     * the Teaching window requests a Cartesian pose, but all resulting joint
+     * commands still travel through the real CanopenMaster -> SIL Kit CAN1
+     * transport -> six AVATAR SIL Kit nodes. No motor state is mutated here.
      */
-    avatar_sim_bus_set_demo_motion(
-        &can_boot_bus,
-        false
-    );
-
-    for (size_t axis = 0U;
-         axis < SIM_NUM_AXES;
-         ++axis)
-    {
-        avatar_m_node_set_actual_position(
-            &can_boot_bus.nodes[axis],
-            targets[axis]
-        );
-    }
-
-    avatar_sim_bus_set_demo_motion(
-        &can_boot_bus,
-        true
-    );
-
     return canopen_master_send_target_cycle(
         &can_boot_master,
         targets,
@@ -653,28 +633,14 @@ static bool write_outputs(void *ctx,const SupervisorOutputSnapshot *out) { (void
 static void post_required(SupervisorMessage *m) {
     if(!supervisor_task_post(m,0)) {
         /* A failed safety/runtime publication must not be silently ignored. */
-        safe(NULL);fprintf(stderr,"Supervisor queue overflow in mock adapter\n");exit(1);
+        safe(NULL);fprintf(stderr,"Supervisor queue overflow in simulation adapter\n");exit(1);
     }
 }
 static void input_task(void *arg)
 {
     (void)arg;bool old_estop=false,old_protective=false,old_fault=false;
-    TickType_t previous_can_tick=xTaskGetTickCount();
 
     for(;;) {
-        const TickType_t current_can_tick=xTaskGetTickCount();
-        const TickType_t elapsed_ticks=current_can_tick-previous_can_tick;
-
-        if(elapsed_ticks>0) {
-            const uint32_t elapsed_ms=(uint32_t)(
-                ((uint64_t)elapsed_ticks*1000ULL)/
-                (uint64_t)configTICK_RATE_HZ);
-            if(elapsed_ms>0) {
-                avatar_sim_bus_tick(&can_boot_bus,elapsed_ms);
-                previous_can_tick=current_can_tick;
-            }
-        }
-
         StateMachine machine;
         supervisor_task_get_state(&machine);
         if(machine.activeState==ROBOT_STATE_IDLE && machine.previousState==ROBOT_STATE_HOMING)homed=true;
@@ -951,69 +917,70 @@ static void udp_status(void *ctx,const SupervisorDiagnostics *s)
         fflush(stdout);old=s->machine.activeState;old_relay=wire_feed;
     }
 }
-static bool configure_can_boot_sim(void)
+static bool configure_silkit_can(void)
 {
-    if (!avatar_sim_bus_init(
-            &can_boot_bus,
-            &can_boot_backend))
+    const char *registry_uri =
+        getenv("SILKIT_REGISTRY_URI");
+
+    if (
+        registry_uri == NULL ||
+        registry_uri[0] == '\0'
+    )
     {
+        registry_uri =
+            "silkit://localhost:8500";
+    }
+
+    const SilKitCanBackendConfig backend_config =
+    {
+        .participant_name = "RobotControllerSupervisor",
+        .controller_name = "RobotCAN",
+        .network_name = "CAN1",
+        .registry_uri = registry_uri,
+        .bitrate = 1000000U
+    };
+
+    if (!silkit_can_backend_create(
+            &silkit_backend,
+            &backend_config))
+    {
+        fprintf(
+            stderr,
+            "Could not create SIL Kit CAN backend. Is the registry running?\n"
+        );
+
         return false;
     }
 
-    /*
-     * Do not let BOOT pass because the simulator started pre-configured.
-     * Force the six virtual drives to require mode selection and CiA-402
-     * enabling exactly like the standalone CAN BOOT test.
-     */
-    for (uint8_t i = 0U; i < SIM_NUM_AXES; ++i)
+    if (!silkit_can_backend_wait_ready(
+            &silkit_backend,
+            5000U))
     {
-        avatar_m_node_set_work_mode(
-            &can_boot_bus.nodes[i],
-            1U
+        fprintf(
+            stderr,
+            "SIL Kit CAN backend did not become ready within 5 s.\n"
         );
 
-        avatar_m_node_set_statusword(
-            &can_boot_bus.nodes[i],
-            CIA402_STATE_SWITCH_ON_DISABLED
+        can_backend_close(
+            &silkit_backend
         );
 
-        const double initial_joint =
-            robot.configuration.home[i] +
-            DEG2RAD(5.0);
-
-        int32_t initial_position = 0;
-
-        if (!avatar_m_joint_rad_to_position_units(
-                &avatar_position_scales[i],
-                initial_joint,
-                &initial_position))
-        {
-            return false;
-        }
-
-        avatar_m_node_set_actual_position(
-            &can_boot_bus.nodes[i],
-            initial_position
-        );
+        return false;
     }
-
-    avatar_sim_bus_set_demo_rate(
-        &can_boot_bus,
-        1000000.0
-    );
-    avatar_sim_bus_set_demo_motion(
-        &can_boot_bus,
-        true
-    );
 
     const CanopenMasterConfig config =
     {
-        .backend = &can_boot_backend,
+        .backend = &silkit_backend,
         .node_ids = {1U, 2U, 3U, 4U, 5U, 6U},
         .node_count = SIM_NUM_AXES,
         .heartbeat_timeout_ms = 300U,
         .sdo_timeout_ms = 50U
     };
+
+    printf(
+        "[SILKIT] Controller connected: %s, CAN1 @ 1 Mbit/s\n",
+        registry_uri
+    );
 
     return canopen_master_init(
         &can_boot_master,
@@ -1025,9 +992,9 @@ static bool start_system(void)
 {
     configure_robot();configure_state_dependencies();
 
-    if (!configure_can_boot_sim())
+    if (!configure_silkit_can())
     {
-        fprintf(stderr, "Could not initialize CANopen BOOT simulation.\n");
+        fprintf(stderr, "Could not initialize SIL Kit CANopen transport.\n");
         return false;
     }
     execution_services=(PathExecutionServices){approach_read_validated_sample,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
@@ -1044,7 +1011,7 @@ static bool start_system(void)
     HmiTaskConfig h={udp_event,udp_status,NULL,pdMS_TO_TICKS(10)};
     return supervisor_task_init(&c) && hmi_task_init(&h) &&
         supervisor_task_start(4) && hmi_task_start(2) &&
-        xTaskCreate(input_task,"MockInputs",1024,NULL,3,NULL)==pdPASS;
+        xTaskCreate(input_task,"SimInputs",1024,NULL,3,NULL)==pdPASS;
 }
 int main(void)
 {
@@ -1053,6 +1020,6 @@ int main(void)
     if(udp<0 || bind(udp,(struct sockaddr*)&addr,sizeof(addr))<0){perror("GUI command port 5010");return 1;}
     (void)configure_matlab_status_destination();
     if(fcntl(udp,F_SETFL,O_NONBLOCK)<0 || !start_system()){fprintf(stderr,"Startup failed\n");return 1;}
-    puts("REAL state modules + HMI task + AVATAR CANopen simulator. No physical bus.\nGUI UDP ports: commands 5010, panel 5011, teaching 5012. MATLAB status: 5005.");
+    puts("REAL state modules + HMI task + SIL Kit CAN1 + six external AVATAR virtual nodes.\nGUI UDP ports: commands 5010, panel 5011, teaching 5012. MATLAB status: 5005.");
     vTaskStartScheduler();return 1;
 }
