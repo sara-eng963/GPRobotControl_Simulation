@@ -534,57 +534,41 @@ target_link_libraries(
 )
 
 # ============================================================================
-# PATH VALIDATION STATE INTEGRATION TEST
+# PATH VALIDATION STATE INTEGRATION TEST - AVATAR EXECUTION ARTIFACT
 # ============================================================================
-#
-# test_path_validation.c has not been added to the repository yet.
-# Keep the target available automatically once that test file exists, without
-# preventing unrelated targets (such as state_machine_test) from configuring.
-#
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/StateMachine/Tests/test_path_validation.c")
 
-    add_executable(
-        path_validation_test
+add_executable(
+    path_validation_test
 
-        StateMachine/Tests/test_path_validation.c
+    StateMachine/Tests/test_path_validation.c
+    StateMachine/States/state_path_validation.c
 
-        StateMachine/States/state_teaching.c
-        StateMachine/States/state_path_validation.c
+    ServoDrive/AvatarM/avatar_m_position.c
+)
 
-        EtherCATComm/ethercat_master.c
-        EtherCATComm/SOEM/soem_backend.c
+target_compile_features(
+    path_validation_test
+    PRIVATE
+    c_std_11
+)
 
-        ServoDrive/CiA402/cia402.c
+target_include_directories(
+    path_validation_test
+    PRIVATE
 
-        ServoDrive/A6EC/a6ec_pdo.c
-        ServoDrive/A6EC/a6ec_drive.c
-    )
+    StateMachine
+    StateMachine/States
 
-    target_include_directories(
-        path_validation_test
-        PRIVATE
+    ServoDrive/AvatarM
+)
 
-        StateMachine
-        StateMachine/States
+target_link_libraries(
+    path_validation_test
+    PRIVATE
 
-        EtherCATComm
-        EtherCATComm/SOEM
-
-        ServoDrive/CiA402
-        ServoDrive/A6EC
-    )
-
-    target_link_libraries(
-        path_validation_test
-        PRIVATE
-
-        control_core
-        soem
-        pthread
-        m
-    )
-
-endif()
+    control_core
+    m
+)
 
 # ============================================================================
 # GLOBAL STATE MACHINE UNIT TEST
