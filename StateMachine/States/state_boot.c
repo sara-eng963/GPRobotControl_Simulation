@@ -1,173 +1,205 @@
 #include "state_boot.h"
 
-#include "../../EtherCATComm/ethercat_master.h"
-
-#include "../../ServoDrive/A6EC/a6ec_drive.h"
-#include "../../ServoDrive/A6EC/a6ec_registers.h"
-#include "../../ServoDrive/A6EC/a6ec_identity.h"
-
+#include "../../ServoDrive/AvatarM/avatar_m_registers.h"
 #include "../../ServoDrive/CiA402/cia402.h"
-
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
+#define BOOT_HEARTBEAT_PRODUCER_MS          100U
+#define BOOT_HEARTBEAT_TIMEOUT_MS           300U
+#define BOOT_PHASE_TIMEOUT_MS               3000U
+#define BOOT_CYCLIC_RESPONSE_TIMEOUT_MS     100U
+#define BOOT_DRIVE_ENABLE_MAX_ATTEMPTS      20U
+#define BOOT_STABILITY_REQUIRED_CYCLES      20U
 
-/* ============================================================================
- * BOOT CONFIGURATION
- * ============================================================================
- */
-
-/*
- * Number of consecutive healthy EtherCAT PDO cycles required before
- * communication is considered stable.
- *
- * Current control period:
- *
- *      1 cycle = 1 ms
- *
- * Therefore:
- *
- *      20 cycles = 20 ms
- */
-#define BOOT_STABILITY_REQUIRED_CYCLES     20U
-#define BOOT_ETHERCAT_RECOVERY_MAX_ATTEMPTS    5U
-
-/*
- * Maximum number of cyclic attempts allowed while enabling all drives.
- *
- * At a 1 ms EtherCAT period:
- *
- *      5000 cycles = 5 seconds
- */
-#define BOOT_DRIVE_ENABLE_TIMEOUT_CYCLES   5000U
-
-
-/* ============================================================================
- * INTERNAL HELPERS
- * ============================================================================
- */
+typedef enum
+{
+    BOOT_SDO_WAITING = 0,
+    BOOT_SDO_DONE,
+    BOOT_SDO_FAILED
+} BootSdoPollResult;
 
 static void boot_advance(
     BootState *boot,
-    BootPhase nextPhase
+    BootPhase next_phase,
+    uint32_t now_ms
 )
 {
-    boot->phase =
-        nextPhase;
-
-    boot->stableCycles =
-        0U;
-
-    boot->recoveryAttempts =
-        0U;
+    boot->phase = next_phase;
+    boot->axisIndex = 0U;
+    boot->identitySubindex = 1U;
+    boot->transactionStarted = false;
+    boot->stableCycles = 0U;
+    boot->phaseStartedMs = now_ms;
 }
-
 
 static StateStepResult boot_fail(
     BootState *boot,
     BootError error,
-    int failedAxis
+    int failed_axis
 )
 {
-    boot->error =
-        error;
-
-    boot->failedAxis =
-        failedAxis;
-
-    boot->phase =
-        BOOT_PHASE_FAILED;
-
-    return
-        STATE_STEP_FAILED;
+    boot->error = error;
+    boot->failedAxis = failed_axis;
+    boot->phase = BOOT_PHASE_FAILED;
+    return STATE_STEP_FAILED;
 }
 
-static bool boot_attempt_ethercat_recovery(
-    BootState *boot,
-    int slaveCount
+static bool phase_timed_out(
+    const BootState *boot,
+    uint32_t now_ms
 )
 {
-    /*
-     * Do not retry forever.
-     */
+    return
+        (uint32_t)(now_ms - boot->phaseStartedMs) >=
+        BOOT_PHASE_TIMEOUT_MS;
+}
+
+static BootSdoPollResult collect_sdo(
+    BootState *boot,
+    CanopenMaster *master,
+    bool expect_read,
+    uint8_t expected_size,
+    uint32_t *value
+)
+{
+    const CanopenMasterSdoState state =
+        canopen_master_sdo_state(master);
+
+    if (state == CANOPEN_MASTER_SDO_PENDING)
+    {
+        return BOOT_SDO_WAITING;
+    }
+
+    if (state == CANOPEN_MASTER_SDO_COMPLETE)
+    {
+        const CanopenSdoResponse *response =
+            canopen_master_sdo_response(master);
+
+        if (response == NULL)
+        {
+            return BOOT_SDO_FAILED;
+        }
+
+        if (
+            expect_read &&
+            (
+                response->type != CANOPEN_SDO_RESPONSE_READ ||
+                response->data_size != expected_size
+            )
+        )
+        {
+            return BOOT_SDO_FAILED;
+        }
+
+        if (
+            !expect_read &&
+            response->type != CANOPEN_SDO_RESPONSE_WRITE_OK
+        )
+        {
+            return BOOT_SDO_FAILED;
+        }
+
+        if (expect_read && value != NULL)
+        {
+            *value = response->value;
+        }
+
+        canopen_master_sdo_clear(master);
+        boot->transactionStarted = false;
+
+        return BOOT_SDO_DONE;
+    }
+
     if (
-        boot->recoveryAttempts >=
-        BOOT_ETHERCAT_RECOVERY_MAX_ATTEMPTS
+        state == CANOPEN_MASTER_SDO_ABORT ||
+        state == CANOPEN_MASTER_SDO_TIMEOUT ||
+        state == CANOPEN_MASTER_SDO_TRANSPORT_ERROR
     )
     {
-        printf(
-            "BOOT: EtherCAT recovery limit reached (%u attempts)\n",
-            BOOT_ETHERCAT_RECOVERY_MAX_ATTEMPTS
-        );
+        if (state == CANOPEN_MASTER_SDO_ABORT)
+        {
+            const CanopenSdoResponse *response =
+                canopen_master_sdo_response(master);
 
+            if (response != NULL)
+            {
+                printf(
+                    "BOOT: SDO abort 0x%08lX\n",
+                    (unsigned long)response->abort_code
+                );
+            }
+        }
+
+        return BOOT_SDO_FAILED;
+    }
+
+    return BOOT_SDO_FAILED;
+}
+
+static bool all_nodes_report_state(
+    const CanopenMaster *master,
+    AvatarMHeartbeatState expected
+)
+{
+    if (
+        master == NULL ||
+        master->node_count != BOOT_EXPECTED_NODE_COUNT
+    )
+    {
         return false;
     }
 
-
-    /*
-     * Count this recovery attempt.
-     */
-    boot->recoveryAttempts++;
-
-
-    printf(
-        "\nBOOT: EtherCAT recovery attempt %u/%u\n",
-        boot->recoveryAttempts,
-        BOOT_ETHERCAT_RECOVERY_MAX_ATTEMPTS
-    );
-
-
-    /*
-     * Show us what state every slave is currently in.
-     */
-    ethercat_master_print_slave_diagnostics();
-
-
-    /*
-     * Give every slave one recovery decision.
-     */
-    for (
-        int slave = 1;
-        slave <= slaveCount;
-        slave++
-    )
+    for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
     {
-        EtherCATRecoveryAction action =
-            ethercat_master_recovery_step(
-                slave
-            );
-
+        const AvatarMDrive *drive =
+            canopen_master_drive(master, i);
 
         if (
-            action !=
-            ETHERCAT_RECOVERY_ACTION_NONE
+            drive == NULL ||
+            !drive->heartbeat_seen ||
+            drive->heartbeat_state != expected
         )
         {
-            printf(
-                "BOOT: Slave %d recovery action = %d\n",
-                slave,
-                action
-            );
+            return false;
         }
     }
 
-
-    /*
-     * true means:
-     *
-     * "A recovery attempt was allowed/performed.
-     *  Let BOOT run another cycle and check again."
-     */
     return true;
 }
 
+static bool expected_node_layout(
+    const CanopenMaster *master
+)
+{
+    if (
+        master == NULL ||
+        !master->initialized ||
+        master->node_count != BOOT_EXPECTED_NODE_COUNT
+    )
+    {
+        return false;
+    }
 
-/* ============================================================================
- * ENTER BOOT
- * ============================================================================
- */
+    for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
+    {
+        const AvatarMDrive *drive =
+            canopen_master_drive(master, i);
+
+        if (
+            drive == NULL ||
+            drive->node_id != (uint8_t)(i + 1U)
+        )
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
 
 void state_boot_enter(
     BootState *boot
@@ -178,37 +210,24 @@ void state_boot_enter(
         return;
     }
 
+    memset(boot, 0, sizeof(*boot));
 
-    boot->phase =
-        BOOT_PHASE_INIT;
-
-    boot->error =
-        BOOT_ERROR_NONE;
-
-    boot->failedAxis =
-        0;
-
-    boot->stableCycles =
-        0U;
-
-    boot->recoveryAttempts =
-        0U;
+    boot->phase = BOOT_PHASE_INIT;
+    boot->error = BOOT_ERROR_NONE;
+    boot->enableStage = BOOT_ENABLE_READ_STATUS;
+    boot->identitySubindex = 1U;
 }
-
-
-/* ============================================================================
- * BOOT STATE
- * ============================================================================
- */
 
 StateStepResult state_boot_step(
     BootState *boot,
-    const EtherCATMasterConfig *ethercatConfig
+    CanopenMaster *master,
+    uint32_t now_ms
 )
 {
     if (
         boot == NULL ||
-        ethercatConfig == NULL
+        master == NULL ||
+        !master->initialized
     )
     {
         if (boot != NULL)
@@ -220,440 +239,391 @@ StateStepResult state_boot_step(
             );
         }
 
-        return
-            STATE_STEP_FAILED;
+        return STATE_STEP_FAILED;
     }
 
+    if (!canopen_master_poll(master, now_ms))
+    {
+        return boot_fail(
+            boot,
+            BOOT_ERROR_SDO,
+            boot->axisIndex < BOOT_EXPECTED_NODE_COUNT
+                ? (int)boot->axisIndex + 1
+                : 0
+        );
+    }
 
     switch (boot->phase)
     {
-        /* ====================================================================
-         * INITIALIZE ETHERCAT MASTER CONFIGURATION
-         * ====================================================================
-         */
-
         case BOOT_PHASE_INIT:
         {
-            if (
-                !ethercat_master_init(
-                    ethercatConfig
-                )
-            )
+            if (!expected_node_layout(master))
             {
                 return boot_fail(
                     boot,
-                    BOOT_ERROR_MASTER_INIT,
+                    BOOT_ERROR_NODE_COUNT,
                     0
                 );
             }
 
+            canopen_master_clear_runtime(master);
+
+            master->heartbeat_timeout_ms =
+                BOOT_HEARTBEAT_TIMEOUT_MS;
 
             boot_advance(
                 boot,
-                BOOT_PHASE_OPEN_BUS
+                BOOT_PHASE_RESET_COMMUNICATION,
+                now_ms
             );
 
-            return
-                STATE_STEP_RUNNING;
+            return STATE_STEP_RUNNING;
         }
 
-
-        /* ====================================================================
-         * OPEN ETHERCAT INTERFACE
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_OPEN_BUS:
+        case BOOT_PHASE_RESET_COMMUNICATION:
         {
-            if (
-                !ethercat_master_open()
-            )
+            if (!canopen_master_send_nmt_all(
+                    master,
+                    CANOPEN_NMT_RESET_COMMUNICATION))
             {
                 return boot_fail(
                     boot,
-                    BOOT_ERROR_OPEN_BUS,
+                    BOOT_ERROR_RESET_COMMUNICATION,
                     0
                 );
             }
 
-
             boot_advance(
                 boot,
-                BOOT_PHASE_DISCOVER_SLAVES
+                BOOT_PHASE_WAIT_BOOTUP,
+                now_ms
             );
 
-            return
-                STATE_STEP_RUNNING;
+            return STATE_STEP_RUNNING;
         }
 
-
-        /* ====================================================================
-         * DISCOVER EXPECTED SLAVES
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_DISCOVER_SLAVES:
+        case BOOT_PHASE_WAIT_BOOTUP:
         {
-            int slaveCount =
-                ethercat_master_scan();
+            if (all_nodes_report_state(
+                    master,
+                    AVATAR_M_HEARTBEAT_STATE_BOOTUP))
+            {
+                boot_advance(
+                    boot,
+                    BOOT_PHASE_VERIFY_IDENTITIES,
+                    now_ms
+                );
 
+                return STATE_STEP_RUNNING;
+            }
 
-            if (
-                slaveCount <= 0 ||
-                slaveCount !=
-                    ethercatConfig->expectedSlaveCount
-            )
+            if (phase_timed_out(boot, now_ms))
             {
                 return boot_fail(
                     boot,
-                    BOOT_ERROR_SLAVE_COUNT,
+                    BOOT_ERROR_BOOTUP_TIMEOUT,
                     0
                 );
             }
 
-
-            boot_advance(
-                boot,
-                BOOT_PHASE_VERIFY_SLAVE_IDENTITIES
-            );
-
-            return
-                STATE_STEP_RUNNING;
+            return STATE_STEP_RUNNING;
         }
 
-
-        /* ====================================================================
-         * VERIFY SLAVE IDENTITIES
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_VERIFY_SLAVE_IDENTITIES:
-{
-    for (
-        int slave = 1;
-        slave <= ethercatConfig->expectedSlaveCount;
-        slave++
-    )
-    {
-        EtherCATSlaveIdentity identity;
-
-
-        if (
-            !ethercat_master_slave_identity(
-                slave,
-                &identity
-            )
-        )
+        case BOOT_PHASE_VERIFY_IDENTITIES:
         {
-            printf(
-                "BOOT: Could not read identity of slave %d\n",
-                slave
-            );
+            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            {
+                boot_advance(
+                    boot,
+                    BOOT_PHASE_CONFIGURE_HEARTBEAT,
+                    now_ms
+                );
 
+                return STATE_STEP_RUNNING;
+            }
 
-            return boot_fail(
-                boot,
-                BOOT_ERROR_SLAVE_IDENTITY,
-                slave
-            );
-        }
+            if (!boot->transactionStarted)
+            {
+                if (!canopen_master_begin_read_identity(
+                        master,
+                        boot->axisIndex,
+                        boot->identitySubindex,
+                        now_ms))
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_NODE_IDENTITY,
+                        (int)boot->axisIndex + 1
+                    );
+                }
 
+                boot->transactionStarted = true;
+                return STATE_STEP_RUNNING;
+            }
 
-        /* ---------------------------------------------------------------
-         * VERIFY VENDOR ID
-         * ---------------------------------------------------------------
-         */
+            uint32_t value = 0U;
 
-        if (
-            identity.vendorId !=
-            A6EC_EXPECTED_VENDOR_ID
-        )
-        {
-            printf(
-                "BOOT: Slave %d Vendor ID mismatch\n"
-                "      Expected: 0x%08lX\n"
-                "      Actual  : 0x%08lX\n",
-                slave,
-                (unsigned long)A6EC_EXPECTED_VENDOR_ID,
-                (unsigned long)identity.vendorId
-            );
+            const BootSdoPollResult sdo =
+                collect_sdo(
+                    boot,
+                    master,
+                    true,
+                    4U,
+                    &value
+                );
 
+            if (sdo == BOOT_SDO_WAITING)
+            {
+                return STATE_STEP_RUNNING;
+            }
 
-            return boot_fail(
-                boot,
-                BOOT_ERROR_SLAVE_IDENTITY,
-                slave
-            );
-        }
+            if (sdo == BOOT_SDO_FAILED)
+            {
+                return boot_fail(
+                    boot,
+                    BOOT_ERROR_NODE_IDENTITY,
+                    (int)boot->axisIndex + 1
+                );
+            }
 
-
-        /* ---------------------------------------------------------------
-         * VERIFY PRODUCT CODE
-         * ---------------------------------------------------------------
-         */
-
-        if (
-            identity.productCode !=
-            A6EC_EXPECTED_PRODUCT_CODE
-        )
-        {
-            printf(
-                "BOOT: Slave %d Product Code mismatch\n"
-                "      Expected: 0x%08lX\n"
-                "      Actual  : 0x%08lX\n",
-                slave,
-                (unsigned long)A6EC_EXPECTED_PRODUCT_CODE,
-                (unsigned long)identity.productCode
-            );
-
-
-            return boot_fail(
-                boot,
-                BOOT_ERROR_SLAVE_IDENTITY,
-                slave
-            );
-        }
-
-
-        /*
-         * Revision and serial number are recorded for diagnostics,
-         * but are not hard-fail conditions yet.
-         */
-        printf(
-            "BOOT: Slave %d identity OK "
-            "[Vendor=0x%08lX Product=0x%08lX "
-            "Revision=0x%08lX Serial=0x%08lX]\n",
-            slave,
-            (unsigned long)identity.vendorId,
-            (unsigned long)identity.productCode,
-            (unsigned long)identity.revision,
-            (unsigned long)identity.serialNumber
-        );
-    }
-
-
-    boot_advance(
-        boot,
-        BOOT_PHASE_MAP_PDOS
-    );
-
-
-    return
-        STATE_STEP_RUNNING;
-}
-
-
-        /* ====================================================================
-         * CONFIGURE ALL A6-EC DRIVES
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_CONFIGURE_DRIVES:
-{
-    for (
-        int slave = 1;
-        slave <= ethercatConfig->expectedSlaveCount;
-        slave++
-    )
-    {
-        int8_t modeReadback =
-            0;
-
-
-        if (
-            !a6ec_set_csp_mode(
-                slave,
-                &modeReadback
-            )
-        )
-        {
-            printf(
-                "BOOT: Slave %d CSP SDO configuration FAILED\n",
-                slave
-            );
-
-            while (
-                ethercat_master_has_error()
+            if (
+                boot->identitySubindex == 1U &&
+                value != (uint32_t)AVATAR_M_EXPECTED_VENDOR_ID
             )
             {
                 printf(
-                    "SOEM: %s\n",
-                    ethercat_master_pop_error_string()
+                    "BOOT: Node %u vendor mismatch. "
+                    "Expected=0x%08lX Actual=0x%08lX\n",
+                    (unsigned)boot->axisIndex + 1U,
+                    (unsigned long)AVATAR_M_EXPECTED_VENDOR_ID,
+                    (unsigned long)value
+                );
+
+                return boot_fail(
+                    boot,
+                    BOOT_ERROR_NODE_IDENTITY,
+                    (int)boot->axisIndex + 1
                 );
             }
 
-            return boot_fail(
-                boot,
-                BOOT_ERROR_DRIVE_CONFIGURATION,
-                slave
-            );
+            if (
+                boot->identitySubindex == 2U &&
+                value != (uint32_t)AVATAR_M_EXPECTED_PRODUCT_CODE
+            )
+            {
+                printf(
+                    "BOOT: Node %u product mismatch. "
+                    "Expected=0x%08lX Actual=0x%08lX\n",
+                    (unsigned)boot->axisIndex + 1U,
+                    (unsigned long)AVATAR_M_EXPECTED_PRODUCT_CODE,
+                    (unsigned long)value
+                );
+
+                return boot_fail(
+                    boot,
+                    BOOT_ERROR_NODE_IDENTITY,
+                    (int)boot->axisIndex + 1
+                );
+            }
+
+            if (boot->identitySubindex == 1U)
+            {
+                boot->identitySubindex = 2U;
+            }
+            else
+            {
+                boot->identitySubindex = 1U;
+                boot->axisIndex++;
+            }
+
+            return STATE_STEP_RUNNING;
         }
 
-
-        printf(
-            "BOOT: Slave %d CSP readback = %d\n",
-            slave,
-            modeReadback
-        );
-
-
-        if (
-            modeReadback !=
-            A6EC_MODE_CSP
-        )
+        case BOOT_PHASE_CONFIGURE_HEARTBEAT:
         {
-            printf(
-                "BOOT: Slave %d expected CSP=%d but read back %d\n",
-                slave,
-                A6EC_MODE_CSP,
-                modeReadback
-            );
+            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            {
+                boot_advance(
+                    boot,
+                    BOOT_PHASE_CONFIGURE_INTERPOLATION_MODE,
+                    now_ms
+                );
 
-            return boot_fail(
-                boot,
-                BOOT_ERROR_DRIVE_CONFIGURATION,
-                slave
-            );
-        }
-    }
+                return STATE_STEP_RUNNING;
+            }
 
+            if (!boot->transactionStarted)
+            {
+                if (!canopen_master_begin_set_heartbeat_period(
+                        master,
+                        boot->axisIndex,
+                        BOOT_HEARTBEAT_PRODUCER_MS,
+                        now_ms))
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_HEARTBEAT_CONFIGURATION,
+                        (int)boot->axisIndex + 1
+                    );
+                }
 
-    boot_advance(
-        boot,
-        BOOT_PHASE_CONFIGURE_DC
-    );
+                boot->transactionStarted = true;
+                return STATE_STEP_RUNNING;
+            }
 
-    return
-        STATE_STEP_RUNNING;
-}
+            const BootSdoPollResult sdo =
+                collect_sdo(
+                    boot,
+                    master,
+                    false,
+                    0U,
+                    NULL
+                );
 
+            if (sdo == BOOT_SDO_WAITING)
+            {
+                return STATE_STEP_RUNNING;
+            }
 
-        /* ====================================================================
-         * MAP PDO PROCESS DATA
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_MAP_PDOS:
-        {
-            int mappedBytes =
-                ethercat_master_map_pdos();
-
-
-            if (mappedBytes <= 0)
+            if (sdo == BOOT_SDO_FAILED)
             {
                 return boot_fail(
                     boot,
-                    BOOT_ERROR_PDO_MAPPING,
-                    0
+                    BOOT_ERROR_HEARTBEAT_CONFIGURATION,
+                    (int)boot->axisIndex + 1
                 );
             }
 
-
-            boot_advance(
-                boot,
-                BOOT_PHASE_CONFIGURE_DRIVES
-            );
-
-            return
-                STATE_STEP_RUNNING;
+            boot->axisIndex++;
+            return STATE_STEP_RUNNING;
         }
 
-
-        /* ====================================================================
-         * CONFIGURE DISTRIBUTED CLOCKS
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_CONFIGURE_DC:
+        case BOOT_PHASE_CONFIGURE_INTERPOLATION_MODE:
         {
+            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            {
+                boot_advance(
+                    boot,
+                    BOOT_PHASE_VERIFY_INTERPOLATION_MODE,
+                    now_ms
+                );
+
+                return STATE_STEP_RUNNING;
+            }
+
+            if (!boot->transactionStarted)
+            {
+                if (!canopen_master_begin_set_interpolation_mode(
+                        master,
+                        boot->axisIndex,
+                        now_ms))
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_MODE_CONFIGURATION,
+                        (int)boot->axisIndex + 1
+                    );
+                }
+
+                boot->transactionStarted = true;
+                return STATE_STEP_RUNNING;
+            }
+
+            const BootSdoPollResult sdo =
+                collect_sdo(
+                    boot,
+                    master,
+                    false,
+                    0U,
+                    NULL
+                );
+
+            if (sdo == BOOT_SDO_WAITING)
+            {
+                return STATE_STEP_RUNNING;
+            }
+
+            if (sdo == BOOT_SDO_FAILED)
+            {
+                return boot_fail(
+                    boot,
+                    BOOT_ERROR_MODE_CONFIGURATION,
+                    (int)boot->axisIndex + 1
+                );
+            }
+
+            boot->axisIndex++;
+            return STATE_STEP_RUNNING;
+        }
+
+        case BOOT_PHASE_VERIFY_INTERPOLATION_MODE:
+        {
+            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            {
+                boot_advance(
+                    boot,
+                    BOOT_PHASE_REQUEST_OPERATIONAL,
+                    now_ms
+                );
+
+                return STATE_STEP_RUNNING;
+            }
+
+            if (!boot->transactionStarted)
+            {
+                if (!canopen_master_begin_read_mode_display(
+                        master,
+                        boot->axisIndex,
+                        now_ms))
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_MODE_VERIFICATION,
+                        (int)boot->axisIndex + 1
+                    );
+                }
+
+                boot->transactionStarted = true;
+                return STATE_STEP_RUNNING;
+            }
+
+            uint32_t value = 0U;
+
+            const BootSdoPollResult sdo =
+                collect_sdo(
+                    boot,
+                    master,
+                    true,
+                    1U,
+                    &value
+                );
+
+            if (sdo == BOOT_SDO_WAITING)
+            {
+                return STATE_STEP_RUNNING;
+            }
+
             if (
-                !ethercat_master_configure_distributed_clocks()
+                sdo == BOOT_SDO_FAILED ||
+                (uint8_t)value != (uint8_t)AVATAR_M_MODE_INTERPOLATION
             )
             {
                 return boot_fail(
                     boot,
-                    BOOT_ERROR_DC_CONFIGURATION,
-                    0
+                    BOOT_ERROR_MODE_VERIFICATION,
+                    (int)boot->axisIndex + 1
                 );
             }
 
-
-            boot_advance(
-                boot,
-                BOOT_PHASE_SAFE_OP
-            );
-
-            return
-                STATE_STEP_RUNNING;
+            boot->axisIndex++;
+            return STATE_STEP_RUNNING;
         }
 
-
-        /* ====================================================================
-         * WAIT FOR ETHERCAT SAFE-OP
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_SAFE_OP:
+        case BOOT_PHASE_REQUEST_OPERATIONAL:
         {
-            if (
-                !ethercat_master_wait_for_safe_op()
-            )
-            {
-                return boot_fail(
-                    boot,
-                    BOOT_ERROR_SAFE_OP,
-                    0
-                );
-            }
-
-
-            boot_advance(
-                boot,
-                BOOT_PHASE_INITIAL_PDO_EXCHANGE
-            );
-
-            return
-                STATE_STEP_RUNNING;
-        }
-
-
-        /* ====================================================================
-         * INITIAL PDO EXCHANGE
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_INITIAL_PDO_EXCHANGE:
-        {
-            /*
-             * Same initial process-data exchange used by the currently
-             * tested main.c before requesting OPERATIONAL.
-             *
-             * Expected WKC has not yet been established, so this phase does
-             * not validate WKC yet.
-             */
-            ethercat_master_exchange();
-
-
-            boot_advance(
-                boot,
-                BOOT_PHASE_OPERATIONAL
-            );
-
-            return
-                STATE_STEP_RUNNING;
-        }
-
-
-        /* ====================================================================
-         * REQUEST ETHERCAT OPERATIONAL
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_OPERATIONAL:
-        {
-            if (
-                !ethercat_master_request_operational()
-            )
+            if (!canopen_master_send_nmt_all(
+                    master,
+                    CANOPEN_NMT_START))
             {
                 return boot_fail(
                     boot,
@@ -662,820 +632,427 @@ StateStepResult state_boot_step(
                 );
             }
 
-
             boot_advance(
                 boot,
-                BOOT_PHASE_VERIFY_WKC
+                BOOT_PHASE_WAIT_OPERATIONAL_HEARTBEAT,
+                now_ms
             );
 
-            return
-                STATE_STEP_RUNNING;
+            return STATE_STEP_RUNNING;
         }
 
-
-        /* ====================================================================
-         * VERIFY EXPECTED WKC
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_VERIFY_WKC:
+        case BOOT_PHASE_WAIT_OPERATIONAL_HEARTBEAT:
         {
-            int expectedWkc =
-                ethercat_master_expected_wkc();
+            if (all_nodes_report_state(
+                    master,
+                    AVATAR_M_HEARTBEAT_STATE_OPERATIONAL))
+            {
+                boot_advance(
+                    boot,
+                    BOOT_PHASE_ENABLE_DRIVES,
+                    now_ms
+                );
 
+                boot->enableStage =
+                    BOOT_ENABLE_READ_STATUS;
 
-            if (expectedWkc <= 0)
+                boot->driveEnableAttempts =
+                    0U;
+
+                return STATE_STEP_RUNNING;
+            }
+
+            if (phase_timed_out(boot, now_ms))
             {
                 return boot_fail(
                     boot,
-                    BOOT_ERROR_WKC,
+                    BOOT_ERROR_HEARTBEAT_TIMEOUT,
                     0
                 );
             }
 
-
-            int actualWkc =
-                ethercat_master_exchange();
-
-
-if (
-    actualWkc <
-    expectedWkc
-)
-{
-    printf(
-        "BOOT: WKC mismatch. Expected=%d Actual=%d\n",
-        expectedWkc,
-        actualWkc
-    );
-
-
-    if (
-        !boot_attempt_ethercat_recovery(
-            boot,
-            ethercatConfig->expectedSlaveCount
-        )
-    )
-    {
-        return boot_fail(
-            boot,
-            BOOT_ERROR_WKC,
-            0
-        );
-    }
-
-
-    return
-        STATE_STEP_RUNNING;
-}
-
-int failedSlave =
-    0;
-
-
-if (
-    !ethercat_master_all_slaves_operational(
-        ethercatConfig->expectedSlaveCount,
-        &failedSlave
-    )
-)
-{
-    printf(
-        "BOOT: EtherCAT slave %d is not OPERATIONAL\n",
-        failedSlave
-    );
-
-
-    if (
-        !boot_attempt_ethercat_recovery(
-            boot,
-            ethercatConfig->expectedSlaveCount
-        )
-    )
-    {
-        return boot_fail(
-            boot,
-            BOOT_ERROR_OPERATIONAL,
-            failedSlave
-        );
-    }
-
-
-    return
-        STATE_STEP_RUNNING;
-}
-            boot_advance(
-                boot,
-                BOOT_PHASE_VERIFY_CYCLIC_COMMUNICATION
-            );
-
-            return
-                STATE_STEP_RUNNING;
+            return STATE_STEP_RUNNING;
         }
 
-
-        /* ====================================================================
-         * VERIFY CYCLIC PDO COMMUNICATION
-         * ====================================================================
-         */
-
-      case BOOT_PHASE_VERIFY_CYCLIC_COMMUNICATION:
-{
-    int expectedWkc =
-        ethercat_master_expected_wkc();
-
-
-    int actualWkc =
-        ethercat_master_exchange();
-
-
-    /*
-     * First requirement:
-     * PDO communication must have the expected WKC.
-     */
-    if (
-        actualWkc <
-        expectedWkc
-    )
-    {
-        printf(
-            "BOOT: Cyclic WKC mismatch. Expected=%d Actual=%d\n",
-            expectedWkc,
-            actualWkc
-        );
-
-
-        /*
-         * Stability requires consecutive healthy cycles.
-         */
-        boot->stableCycles =
-            0U;
-
-
-        if (
-            !boot_attempt_ethercat_recovery(
-                boot,
-                ethercatConfig->expectedSlaveCount
-            )
-        )
+        case BOOT_PHASE_ENABLE_DRIVES:
         {
-            return boot_fail(
-                boot,
-                BOOT_ERROR_CYCLIC_COMMUNICATION,
-                0
-            );
-        }
-
-
-        return
-            STATE_STEP_RUNNING;
-    }
-
-
-    /*
-     * Second requirement:
-     * Every EtherCAT slave must still be OPERATIONAL.
-     *
-     * WKC alone is not sufficient because a slave may
-     * leave OP while communication still appears healthy.
-     */
-    int failedSlave =
-        0;
-
-
-    if (
-        !ethercat_master_all_slaves_operational(
-            ethercatConfig->expectedSlaveCount,
-            &failedSlave
-        )
-    )
-    {
-        printf(
-            "BOOT: EtherCAT slave %d left OPERATIONAL\n",
-            failedSlave
-        );
-
-
-        boot->stableCycles =
-            0U;
-
-
-        if (
-            !boot_attempt_ethercat_recovery(
-                boot,
-                ethercatConfig->expectedSlaveCount
-            )
-        )
-        {
-            return boot_fail(
-                boot,
-                BOOT_ERROR_OPERATIONAL,
-                failedSlave
-            );
-        }
-
-
-        return
-            STATE_STEP_RUNNING;
-    }
-
-
-    /*
-     * This cycle was completely healthy:
-     *
-     *      WKC valid
-     *      AND
-     *      all slaves OPERATIONAL
-     */
-    boot->stableCycles++;
-
-
-    if (
-        boot->stableCycles >=
-        BOOT_STABILITY_REQUIRED_CYCLES
-    )
-    {
-        boot_advance(
-            boot,
-            BOOT_PHASE_ENABLE_DRIVES
-        );
-    }
-
-
-    return
-        STATE_STEP_RUNNING;
-}
-
-        /* ====================================================================
-         * ENABLE ALL SIX CiA-402 DRIVES
-         * ====================================================================
-         */
-case BOOT_PHASE_ENABLE_DRIVES:
-{
-
-bool allOperationEnabled =
-        true;
-
-
-    int failedSlave =
-        0;
-
-
-    if (
-        !ethercat_master_all_slaves_operational(
-            ethercatConfig->expectedSlaveCount,
-            &failedSlave
-        )
-    )
-    {
-        printf(
-            "BOOT: EtherCAT slave %d left OPERATIONAL while enabling drives\n",
-            failedSlave
-        );
-
-
-        if (
-            !boot_attempt_ethercat_recovery(
-                boot,
-                ethercatConfig->expectedSlaveCount
-            )
-        )
-        {
-            return boot_fail(
-                boot,
-                BOOT_ERROR_OPERATIONAL,
-                failedSlave
-            );
-        }
-
-
-        return
-            STATE_STEP_RUNNING;
-    }
-
-
-    /*
-     * Read the current state of every drive...
-     */
-    for (
-        int slave = 1;
-        slave <= ethercatConfig->expectedSlaveCount;
-        slave++
-    )
+            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
             {
-                A6ECPDOFeedback feedback;
-
-
-                a6ec_read_feedback(
-                    slave,
-                    &feedback
+                boot_advance(
+                    boot,
+                    BOOT_PHASE_READ_POSITION_FEEDBACK,
+                    now_ms
                 );
 
+                return STATE_STEP_RUNNING;
+            }
 
-                uint16_t driveState =
-                    cia402_get_state(
-                        feedback.statusword
-                    );
-
-                if (
-    driveState ==
-    CIA402_STATE_FAULT
-)
-{
-    uint16_t errorCode =
-        0U;
-
-
-    bool errorCodeReadable =
-        a6ec_read_error_code(
-            slave,
-            &errorCode
-        );
-
-
-    printf(
-        "BOOT: Slave %d drive FAULT\n"
-        "      CiA-402 state : %s\n"
-        "      Statusword    : 0x%04X\n",
-        slave,
-        cia402_state_name(
-            driveState
-        ),
-        feedback.statusword
-    );
-
-
-    if (errorCodeReadable)
-    {
-        printf(
-            "      Error Code    : 0x%04X\n",
-            errorCode
-        );
-    }
-    else
-    {
-        printf(
-            "      Error Code    : unreadable\n"
-        );
-    }
-
-
-    return boot_fail(
-        boot,
-        BOOT_ERROR_DRIVE_FAULT,
-        slave
-    );
-}
-
-if (
-    driveState ==
-    CIA402_STATE_FAULT_REACTION_ACTIVE
-)
-{
-    printf(
-        "BOOT: Slave %d is in FAULT_REACTION_ACTIVE\n"
-        "      CiA-402 state : %s\n"
-        "      Statusword    : 0x%04X\n",
-        slave,
-        cia402_state_name(
-            driveState
-        ),
-        feedback.statusword
-    );
-
-
-    return boot_fail(
-        boot,
-        BOOT_ERROR_DRIVE_FAULT,
-        slave
-    );
-}
-
-if (
-    driveState ==
-    CIA402_STATE_QUICK_STOP_ACTIVE
-)
-{
-    printf(
-        "BOOT: Slave %d is in QUICK_STOP_ACTIVE\n"
-        "      CiA-402 state : %s\n"
-        "      Statusword    : 0x%04X\n",
-        slave,
-        cia402_state_name(
-            driveState
-        ),
-        feedback.statusword
-    );
-
-
-    return boot_fail(
-        boot,
-        BOOT_ERROR_DRIVE_QUICK_STOP,
-        slave
-    );
-}
-
-if (
-    driveState ==
-    CIA402_STATE_UNKNOWN
-)
-{
-    printf(
-        "BOOT: Slave %d reported an UNKNOWN CiA-402 state\n"
-        "      Statusword : 0x%04X\n",
-        slave,
-        feedback.statusword
-    );
-
-
-    return boot_fail(
-        boot,
-        BOOT_ERROR_DRIVE_STATE,
-        slave
-    );
-}
-
-
-                if (
-                    driveState !=
-                    CIA402_STATE_OPERATION_ENABLED
-                )
+            if (boot->enableStage == BOOT_ENABLE_READ_STATUS)
+            {
+                if (!boot->transactionStarted)
                 {
-                    allOperationEnabled =
-                        false;
+                    if (!canopen_master_begin_read_statusword(
+                            master,
+                            boot->axisIndex,
+                            now_ms))
+                    {
+                        return boot_fail(
+                            boot,
+                            BOOT_ERROR_DRIVE_ENABLE,
+                            (int)boot->axisIndex + 1
+                        );
+                    }
+
+                    boot->transactionStarted = true;
+                    return STATE_STEP_RUNNING;
                 }
 
+                uint32_t raw_statusword = 0U;
 
-                /*
-                 * Existing CiA-402 module decides the appropriate next
-                 * Controlword:
-                 *
-                 * Switch On Disabled -> Shutdown
-                 * Ready To Switch On -> Switch On
-                 * Switched On -> Enable Operation
-                 */
-uint16_t controlword =
-    CIA402_CONTROLWORD_DISABLE_VOLTAGE;
+                const BootSdoPollResult sdo =
+                    collect_sdo(
+                        boot,
+                        master,
+                        true,
+                        2U,
+                        &raw_statusword
+                    );
 
-
-if (
-    !cia402_get_enable_controlword(
-        driveState,
-        &controlword
-    )
-)
-{
-    printf(
-        "BOOT: Slave %d cannot be automatically enabled\n"
-        "      CiA-402 state: %s\n"
-        "      Statusword   : 0x%04X\n",
-        slave,
-        cia402_state_name(
-            driveState
-        ),
-        feedback.statusword
-    );
-
-
-    return boot_fail(
-    boot,
-    BOOT_ERROR_DRIVE_STATE,
-    slave
-);
-}
-
-                /*
-                 * While enabling CSP, command the drive to HOLD its current
-                 * measured position.
-                 *
-                 * This prevents BOOT from intentionally commanding motion.
-                 */
-                A6ECPDOCommand command =
+                if (sdo == BOOT_SDO_WAITING)
                 {
-                    .controlword =
-                        controlword,
+                    return STATE_STEP_RUNNING;
+                }
 
-                    .targetPosition =
-                        feedback.actualPosition
-                };
+                if (sdo == BOOT_SDO_FAILED)
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_DRIVE_ENABLE,
+                        (int)boot->axisIndex + 1
+                    );
+                }
 
+                const uint16_t drive_state =
+                    cia402_get_state(
+                        (uint16_t)raw_statusword
+                    );
 
-                a6ec_write_command(
-                    slave,
-                    &command
+                if (cia402_is_fault(drive_state))
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_DRIVE_FAULT,
+                        (int)boot->axisIndex + 1
+                    );
+                }
+
+                if (cia402_is_quick_stop(drive_state))
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_DRIVE_QUICK_STOP,
+                        (int)boot->axisIndex + 1
+                    );
+                }
+
+                if (drive_state == CIA402_STATE_OPERATION_ENABLED)
+                {
+                    boot->axisIndex++;
+                    boot->driveEnableAttempts = 0U;
+                    return STATE_STEP_RUNNING;
+                }
+
+                if (!cia402_get_enable_controlword(
+                        drive_state,
+                        &boot->pendingControlword))
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_DRIVE_STATE,
+                        (int)boot->axisIndex + 1
+                    );
+                }
+
+                boot->enableStage =
+                    BOOT_ENABLE_WRITE_CONTROLWORD;
+
+                return STATE_STEP_RUNNING;
+            }
+
+            if (!boot->transactionStarted)
+            {
+                if (!canopen_master_begin_write_controlword(
+                        master,
+                        boot->axisIndex,
+                        boot->pendingControlword,
+                        now_ms))
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_DRIVE_ENABLE,
+                        (int)boot->axisIndex + 1
+                    );
+                }
+
+                boot->transactionStarted = true;
+                return STATE_STEP_RUNNING;
+            }
+
+            const BootSdoPollResult sdo =
+                collect_sdo(
+                    boot,
+                    master,
+                    false,
+                    0U,
+                    NULL
+                );
+
+            if (sdo == BOOT_SDO_WAITING)
+            {
+                return STATE_STEP_RUNNING;
+            }
+
+            if (sdo == BOOT_SDO_FAILED)
+            {
+                return boot_fail(
+                    boot,
+                    BOOT_ERROR_DRIVE_ENABLE,
+                    (int)boot->axisIndex + 1
                 );
             }
 
-
-            /*
-             * Send the Controlwords and receive the resulting Statuswords.
-             */
-            int actualWkc =
-                ethercat_master_exchange();
-
-
-            int expectedWkc =
-                ethercat_master_expected_wkc();
-
-if (
-    actualWkc <
-    expectedWkc
-)
-{
-    printf(
-        "BOOT: WKC mismatch while enabling drives. "
-        "Expected=%d Actual=%d\n",
-        expectedWkc,
-        actualWkc
-    );
-
-
-    if (
-        !boot_attempt_ethercat_recovery(
-            boot,
-            ethercatConfig->expectedSlaveCount
-        )
-    )
-    {
-        return boot_fail(
-            boot,
-            BOOT_ERROR_CYCLIC_COMMUNICATION,
-            0
-        );
-    }
-
-
-    return
-        STATE_STEP_RUNNING;
-}
-
-            /*
-             * If all six were already Operation Enabled when this phase
-             * started, the condition is satisfied.
-             */
-            if (allOperationEnabled)
-{
-    boot_advance(
-        boot,
-        BOOT_PHASE_VERIFY_CSP_MODE
-    );
-
-    return
-        STATE_STEP_RUNNING;
-}
-
-/*
- * Timeout protection for drives that remain in a valid startup state
- * but fail to reach Operation Enabled within the allowed time.
- */
-            boot->stableCycles++;
-
+            boot->driveEnableAttempts++;
 
             if (
-                boot->stableCycles >=
-                BOOT_DRIVE_ENABLE_TIMEOUT_CYCLES
+                boot->driveEnableAttempts >
+                BOOT_DRIVE_ENABLE_MAX_ATTEMPTS
             )
             {
                 return boot_fail(
                     boot,
                     BOOT_ERROR_DRIVE_ENABLE,
-                    0
+                    (int)boot->axisIndex + 1
                 );
             }
 
+            boot->enableStage =
+                BOOT_ENABLE_READ_STATUS;
 
-            return
-                STATE_STEP_RUNNING;
-        }
-        /* ============================================================================
- * VERIFY ACTIVE CSP MODE
- * ============================================================================
- */
-
-case BOOT_PHASE_VERIFY_CSP_MODE:
-{
-    for (
-        int slave = 1;
-        slave <= ethercatConfig->expectedSlaveCount;
-        slave++
-    )
-    {
-        int8_t modeDisplay =
-            0;
-
-
-        /*
-         * 0x6061 - Modes of Operation Display
-         *
-         * 0x6060 contains the requested mode.
-         * 0x6061 reports the mode actually active in the drive.
-         */
-        if (
-            !a6ec_read_mode_display(
-                slave,
-                &modeDisplay
-            )
-        )
-        {
-            printf(
-                "BOOT: Slave %d could not read "
-                "Modes of Operation Display (0x6061)\n",
-                slave
-            );
-
-
-            return boot_fail(
-                boot,
-                BOOT_ERROR_CSP_MODE,
-                slave
-            );
+            return STATE_STEP_RUNNING;
         }
 
-
-        printf(
-            "BOOT: Slave %d active mode display = %d\n",
-            slave,
-            modeDisplay
-        );
-
-
-        /*
-         * CiA-402 CSP mode = 8.
-         */
-        if (
-            modeDisplay !=
-            A6EC_MODE_CSP
-        )
+        case BOOT_PHASE_READ_POSITION_FEEDBACK:
         {
-            printf(
-                "BOOT: Slave %d is not actually in CSP\n"
-                "      Expected 0x6061 : %d\n"
-                "      Actual   0x6061 : %d\n",
-                slave,
-                A6EC_MODE_CSP,
-                modeDisplay
-            );
-
-
-            return boot_fail(
-                boot,
-                BOOT_ERROR_CSP_MODE,
-                slave
-            );
-        }
-    }
-
-
-    /*
-     * All drives report CSP as the active mode.
-     */
-    boot_advance(
-        boot,
-        BOOT_PHASE_VERIFY_POSITION_FEEDBACK
-    );
-
-
-    return
-        STATE_STEP_RUNNING;
-}
-
-
-        /* ====================================================================
-         * VERIFY POSITION FEEDBACK
-         * ====================================================================
-         */
-
-        case BOOT_PHASE_VERIFY_POSITION_FEEDBACK:
-        {
-            for (
-                int slave = 1;
-                slave <= ethercatConfig->expectedSlaveCount;
-                slave++
-            )
+            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
             {
-                /*
-                 * At the moment a6ec_read_feedback() does not return a status.
-                 *
-                 * Therefore first confirm that this slave actually owns a
-                 * mapped input PDO area.
-                 */
-                if (
-                    ethercat_master_slave_inputs(
-                        slave
-                    ) == NULL
-                )
+                boot_advance(
+                    boot,
+                    BOOT_PHASE_INITIAL_PDO_EXCHANGE,
+                    now_ms
+                );
+
+                return STATE_STEP_RUNNING;
+            }
+
+            if (!boot->transactionStarted)
+            {
+                if (!canopen_master_begin_read_actual_position(
+                        master,
+                        boot->axisIndex,
+                        now_ms))
                 {
                     return boot_fail(
                         boot,
                         BOOT_ERROR_POSITION_FEEDBACK,
-                        slave
+                        (int)boot->axisIndex + 1
                     );
                 }
 
-
-                A6ECPDOFeedback feedback;
-
-
-                a6ec_read_feedback(
-                    slave,
-                    &feedback
-                );
-
-
-                /*
-                 * Simply reading actualPosition here is intentional.
-                 *
-                 * A value of zero is perfectly valid and must NOT be treated
-                 * as communication failure.
-                 *
-                 * Communication validity is established by the PDO mapping
-                 * and WKC checks performed above.
-                 */
-                (void)feedback.actualPosition;
+                boot->transactionStarted = true;
+                return STATE_STEP_RUNNING;
             }
 
+            uint32_t raw_position = 0U;
+
+            const BootSdoPollResult sdo =
+                collect_sdo(
+                    boot,
+                    master,
+                    true,
+                    4U,
+                    &raw_position
+                );
+
+            if (sdo == BOOT_SDO_WAITING)
+            {
+                return STATE_STEP_RUNNING;
+            }
+
+            if (sdo == BOOT_SDO_FAILED)
+            {
+                return boot_fail(
+                    boot,
+                    BOOT_ERROR_POSITION_FEEDBACK,
+                    (int)boot->axisIndex + 1
+                );
+            }
+
+            memcpy(
+                &boot->holdPosition[boot->axisIndex],
+                &raw_position,
+                sizeof(raw_position)
+            );
+
+            boot->axisIndex++;
+            return STATE_STEP_RUNNING;
+        }
+
+        case BOOT_PHASE_INITIAL_PDO_EXCHANGE:
+        {
+            for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
+            {
+                boot->lastTpdoCount[i] =
+                    canopen_master_tpdo_rx_count(master, i);
+            }
+
+            if (!canopen_master_send_target_cycle(
+                    master,
+                    boot->holdPosition,
+                    BOOT_EXPECTED_NODE_COUNT))
+            {
+                return boot_fail(
+                    boot,
+                    BOOT_ERROR_CYCLIC_COMMUNICATION,
+                    0
+                );
+            }
 
             boot_advance(
                 boot,
-                BOOT_PHASE_VERIFY_SAFETY
+                BOOT_PHASE_VERIFY_CYCLIC_COMMUNICATION,
+                now_ms
             );
 
-            return
-                STATE_STEP_RUNNING;
+            boot->cycleStartedMs = now_ms;
+
+            return STATE_STEP_RUNNING;
         }
 
+        case BOOT_PHASE_VERIFY_CYCLIC_COMMUNICATION:
+        {
+            bool all_fresh = true;
 
-        /* ====================================================================
-         * VERIFY SAFETY FEEDBACK
-         * ====================================================================
-         */
+            for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
+            {
+                if (
+                    canopen_master_tpdo_rx_count(master, i) <=
+                    boot->lastTpdoCount[i]
+                )
+                {
+                    all_fresh = false;
+                    break;
+                }
+            }
+
+            if (!all_fresh)
+            {
+                if (
+                    (uint32_t)(now_ms - boot->cycleStartedMs) >=
+                    BOOT_CYCLIC_RESPONSE_TIMEOUT_MS
+                )
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_CYCLIC_COMMUNICATION,
+                        0
+                    );
+                }
+
+                return STATE_STEP_RUNNING;
+            }
+
+            if (
+                !canopen_master_all_feedback_valid(master) ||
+                !canopen_master_all_drives_operation_enabled(master)
+            )
+            {
+                return boot_fail(
+                    boot,
+                    BOOT_ERROR_DRIVE_STATE,
+                    0
+                );
+            }
+
+            boot->stableCycles++;
+
+            if (
+                boot->stableCycles >=
+                BOOT_STABILITY_REQUIRED_CYCLES
+            )
+            {
+                if (!canopen_master_ready_for_motion(
+                        master,
+                        now_ms))
+                {
+                    return boot_fail(
+                        boot,
+                        BOOT_ERROR_CYCLIC_COMMUNICATION,
+                        0
+                    );
+                }
+
+                boot_advance(
+                    boot,
+                    BOOT_PHASE_VERIFY_SAFETY,
+                    now_ms
+                );
+
+                return STATE_STEP_RUNNING;
+            }
+
+            for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
+            {
+                boot->lastTpdoCount[i] =
+                    canopen_master_tpdo_rx_count(master, i);
+            }
+
+            if (!canopen_master_send_target_cycle(
+                    master,
+                    boot->holdPosition,
+                    BOOT_EXPECTED_NODE_COUNT))
+            {
+                return boot_fail(
+                    boot,
+                    BOOT_ERROR_CYCLIC_COMMUNICATION,
+                    0
+                );
+            }
+
+            boot->cycleStartedMs = now_ms;
+
+            return STATE_STEP_RUNNING;
+        }
 
         case BOOT_PHASE_VERIFY_SAFETY:
         {
             /*
-             * TODO:
-             *
-             * Replace this phase when the electrical safety-feedback
-             * interface exists.
-             *
-             * Eventually:
-             *
-             *      E-Stop released
-             *      AND
-             *      safety relay healthy
-             *      AND
-             *      safety chain closed
-             *
-             * For the current PC/KickCAT simulation there is no physical
-             * safety feedback, so this condition temporarily passes.
+             * Physical E-stop/safety-relay feedback remains a Supervisor
+             * responsibility, exactly as in the previous BOOT implementation.
              */
-
             boot_advance(
                 boot,
-                BOOT_PHASE_COMPLETE
+                BOOT_PHASE_COMPLETE,
+                now_ms
             );
 
-            return
-                STATE_STEP_RUNNING;
+            return STATE_STEP_RUNNING;
         }
-
-
-        /* ====================================================================
-         * BOOT COMPLETE
-         * ====================================================================
-         */
 
         case BOOT_PHASE_COMPLETE:
-        {
-            return
-                STATE_STEP_COMPLETE;
-        }
-
-
-        /* ====================================================================
-         * BOOT FAILED
-         * ====================================================================
-         */
+            return STATE_STEP_COMPLETE;
 
         case BOOT_PHASE_FAILED:
-        {
-            return
-                STATE_STEP_FAILED;
-        }
-
-
-        /* ====================================================================
-         * INVALID STATE
-         * ====================================================================
-         */
-
         default:
-        {
-            return boot_fail(
-                boot,
-                BOOT_ERROR_MASTER_INIT,
-                0
-            );
-        }
+            return STATE_STEP_FAILED;
     }
 }

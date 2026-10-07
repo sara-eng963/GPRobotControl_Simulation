@@ -1,165 +1,101 @@
 #ifndef STATE_BOOT_H
 #define STATE_BOOT_H
 
-
 #include "../state_machine_types.h"
+#include "../../CANComm/CANopen/canopen_master.h"
 
-#include "../../EtherCATComm/ethercat_types.h"
-
+#include <stdbool.h>
 #include <stdint.h>
 
-
-/* ============================================================================
- * BOOT PHASES
- * ============================================================================
- */
+#define BOOT_EXPECTED_NODE_COUNT 6U
 
 typedef enum
 {
     BOOT_PHASE_INIT = 0,
-
-    BOOT_PHASE_OPEN_BUS,
-
-    BOOT_PHASE_DISCOVER_SLAVES,
-
-    BOOT_PHASE_VERIFY_SLAVE_IDENTITIES,
-
-    BOOT_PHASE_CONFIGURE_DRIVES,
-
-    BOOT_PHASE_MAP_PDOS,
-
-    BOOT_PHASE_CONFIGURE_DC,
-
-    BOOT_PHASE_SAFE_OP,
-
-    BOOT_PHASE_INITIAL_PDO_EXCHANGE,
-
-    BOOT_PHASE_OPERATIONAL,
-
-    BOOT_PHASE_VERIFY_WKC,
-
-    BOOT_PHASE_VERIFY_CYCLIC_COMMUNICATION,
-
+    BOOT_PHASE_RESET_COMMUNICATION,
+    BOOT_PHASE_WAIT_BOOTUP,
+    BOOT_PHASE_VERIFY_IDENTITIES,
+    BOOT_PHASE_CONFIGURE_HEARTBEAT,
+    BOOT_PHASE_CONFIGURE_INTERPOLATION_MODE,
+    BOOT_PHASE_VERIFY_INTERPOLATION_MODE,
+    BOOT_PHASE_REQUEST_OPERATIONAL,
+    BOOT_PHASE_WAIT_OPERATIONAL_HEARTBEAT,
     BOOT_PHASE_ENABLE_DRIVES,
-    BOOT_PHASE_VERIFY_CSP_MODE,
-    BOOT_PHASE_VERIFY_POSITION_FEEDBACK,
+    BOOT_PHASE_READ_POSITION_FEEDBACK,
+    BOOT_PHASE_INITIAL_PDO_EXCHANGE,
+    BOOT_PHASE_VERIFY_CYCLIC_COMMUNICATION,
     BOOT_PHASE_VERIFY_SAFETY,
-
     BOOT_PHASE_COMPLETE,
-
     BOOT_PHASE_FAILED
-
 } BootPhase;
-
-
-/* ============================================================================
- * BOOT FAILURE REASONS
- * ============================================================================
- */
 
 typedef enum
 {
     BOOT_ERROR_NONE = 0,
-
     BOOT_ERROR_MASTER_INIT,
-
-    BOOT_ERROR_OPEN_BUS,
-
-    BOOT_ERROR_SLAVE_COUNT,
-
-    BOOT_ERROR_SLAVE_IDENTITY,
-
-    BOOT_ERROR_DRIVE_CONFIGURATION,
-
-    BOOT_ERROR_PDO_MAPPING,
-
-    BOOT_ERROR_DC_CONFIGURATION,
-
-    BOOT_ERROR_SAFE_OP,
-
+    BOOT_ERROR_NODE_COUNT,
+    BOOT_ERROR_RESET_COMMUNICATION,
+    BOOT_ERROR_BOOTUP_TIMEOUT,
+    BOOT_ERROR_NODE_IDENTITY,
+    BOOT_ERROR_SDO,
+    BOOT_ERROR_HEARTBEAT_CONFIGURATION,
+    BOOT_ERROR_MODE_CONFIGURATION,
+    BOOT_ERROR_MODE_VERIFICATION,
     BOOT_ERROR_OPERATIONAL,
-
-    BOOT_ERROR_WKC,
-
-    BOOT_ERROR_CYCLIC_COMMUNICATION,
-
+    BOOT_ERROR_HEARTBEAT_TIMEOUT,
     BOOT_ERROR_DRIVE_FAULT,
-
     BOOT_ERROR_DRIVE_QUICK_STOP,
-
     BOOT_ERROR_DRIVE_STATE,
-
     BOOT_ERROR_DRIVE_ENABLE,
-    BOOT_ERROR_CSP_MODE,
-
     BOOT_ERROR_POSITION_FEEDBACK,
-
+    BOOT_ERROR_CYCLIC_COMMUNICATION,
     BOOT_ERROR_SAFETY
-
 } BootError;
 
-
-/* ============================================================================
- * BOOT STATE DATA
- * ============================================================================
- */
+typedef enum
+{
+    BOOT_ENABLE_READ_STATUS = 0,
+    BOOT_ENABLE_WRITE_CONTROLWORD
+} BootEnableStage;
 
 typedef struct
 {
     BootPhase phase;
-
     BootError error;
-
-    /*
-     * 0 = failure is not axis-specific.
-     * 1..6 = axis that caused the failure.
-     */
     int failedAxis;
 
-    /*
-     * Used when verifying several consecutive
-     * healthy PDO cycles.
-     */
+    uint8_t axisIndex;
+    uint8_t identitySubindex;
+    bool transactionStarted;
+
+    BootEnableStage enableStage;
+    uint16_t pendingControlword;
+    uint32_t driveEnableAttempts;
+
+    int32_t holdPosition[BOOT_EXPECTED_NODE_COUNT];
+
     uint32_t stableCycles;
+    uint32_t lastTpdoCount[BOOT_EXPECTED_NODE_COUNT];
 
-    /*
- * Number of EtherCAT recovery attempts made
- * during the current BOOT phase.
- */
-uint32_t recoveryAttempts;
-
+    uint32_t phaseStartedMs;
+    uint32_t cycleStartedMs;
 } BootState;
 
-
-/* ============================================================================
- * PUBLIC API
- * ============================================================================
- */
-
-/*
- * Called whenever the robot enters BOOT.
- */
 void state_boot_enter(
     BootState *boot
 );
 
-
 /*
- * Execute one step of the BOOT state.
+ * Execute one non-blocking CANopen BOOT step.
  *
- * This function will eventually call:
- *
- *      EtherCATComm
- *      A6EC
- *      CiA402
- *      Safety interface
- *
- * but does not implement their low-level behavior itself.
+ * Platform-specific CAN setup happens before BOOT. The caller supplies an
+ * initialized CanopenMaster backed by STM32 FDCAN, SIL Kit, or a test backend.
+ * BOOT then performs CANopen/AVATAR commissioning only.
  */
 StateStepResult state_boot_step(
     BootState *boot,
-    const EtherCATMasterConfig *ethercatConfig
+    CanopenMaster *master,
+    uint32_t now_ms
 );
-
 
 #endif /* STATE_BOOT_H */
