@@ -62,6 +62,18 @@ static int matlab_udp=-1;
 static struct sockaddr_in matlab_status_address;
 static bool matlab_status_ready;
 static uint32_t last_sequence, status_sequence;
+
+/*
+ * Human-readable operator/debug event log.
+ * Each HMI button press gets a monotonically increasing event number.
+ * Meaningful controller outcomes are then tagged with the most recent event.
+ */
+static FILE *operator_event_log;
+static bool operator_event_log_started;
+static bool operator_event_log_failed;
+static uint32_t operator_event_counter;
+static uint32_t last_operator_event_id;
+
 /* Sequence numbers belong to each GUI sender, not globally to both windows. */
 static struct { uint32_t address, sequence; uint16_t port; bool used; } peers[8];
 static SupervisorOutputSnapshot lamps;
@@ -708,6 +720,440 @@ static void input_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
+static void operator_log_open(void)
+{
+    if (operator_event_log_started)
+    {
+        return;
+    }
+
+    operator_event_log_started = true;
+
+    const char *path =
+        getenv("SIM_EVENT_LOG");
+
+    if (path == NULL || path[0] == '\0')
+    {
+        path =
+            "operator_events.txt";
+    }
+
+    operator_event_log =
+        fopen(
+            path,
+            "w"
+        );
+
+    if (operator_event_log == NULL)
+    {
+        perror("Cannot open operator event log");
+        operator_event_log_failed = true;
+        return;
+    }
+
+    fprintf(
+        operator_event_log,
+        "# GP Robot operator/debug event log\n"
+        "# EVENT numbers are HMI/operator actions received by the controller.\n"
+        "# OUTCOME lines show meaningful changes observed after the latest EVENT.\n"
+        "# time_ms is monotonic FreeRTOS simulation time.\n\n"
+    );
+
+    fflush(
+        operator_event_log
+    );
+
+    printf(
+        "[LOGGER] operator events -> %s\n",
+        path
+    );
+    fflush(stdout);
+}
+
+static const char *operator_button_name(
+    uint32_t command,
+    RobotStateId state
+)
+{
+    switch (command)
+    {
+        case HMI_EVENT_SELECT_LINE:
+            return "LINE";
+
+        case HMI_EVENT_SELECT_ARC:
+            return "CIRCULAR_ARC";
+
+        case HMI_EVENT_SELECT_CIRCLE:
+            return "CIRCLE";
+
+        case HMI_EVENT_RECORD:
+            return "RECORD";
+
+        case HMI_EVENT_VALIDATE_PREVIEW:
+            if (state == ROBOT_STATE_TEACHING)
+            {
+                return "VALIDATE";
+            }
+
+            if (state == ROBOT_STATE_IDLE)
+            {
+                return "PREVIEW";
+            }
+
+            return "VALIDATE/PREVIEW";
+
+        case HMI_EVENT_SPEED_INCREASE:
+            return "SPEED_PLUS";
+
+        case HMI_EVENT_SPEED_DECREASE:
+            return "SPEED_MINUS";
+
+        case HMI_EVENT_SPEED_DEFAULT:
+            return "DEFAULT_MODE";
+
+        case HMI_EVENT_START:
+            return "START";
+
+        case HMI_EVENT_PAUSE:
+            return "PAUSE";
+
+        case HMI_EVENT_RESUME:
+            return "RESUME";
+
+        case HMI_EVENT_RESET:
+            return "RESET";
+
+        case HMI_EVENT_HOME:
+            return "HOME";
+
+        case HMI_PROTOCOL_SIM_ESTOP_TOGGLE:
+            return "E_STOP";
+
+        case 0x80000003U:
+            return "SIM_FAULT";
+
+        case 0x80000004U:
+            return "PROTECTIVE_STOP";
+
+        case 0x80000005U:
+            return "COMMUNICATION_FAILURE";
+
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static void operator_log_press(
+    uint32_t command,
+    uint32_t hmi_sequence
+)
+{
+    if (command == HMI_PROTOCOL_SIM_GUIDANCE_POSE)
+    {
+        /*
+         * Teaching guidance packets can arrive continuously while dragging.
+         * Do not flood the human-readable button/event log with them.
+         */
+        return;
+    }
+
+    operator_log_open();
+
+    if (
+        operator_event_log == NULL ||
+        operator_event_log_failed
+    )
+    {
+        return;
+    }
+
+    StateMachine machine;
+    const bool have_state =
+        supervisor_task_get_state(
+            &machine
+        );
+
+    const RobotStateId state =
+        have_state
+            ? machine.activeState
+            : ROBOT_STATE_COUNT;
+
+    last_operator_event_id =
+        ++operator_event_counter;
+
+    fprintf(
+        operator_event_log,
+        "EVENT %03u | time_ms=%u | hmi_seq=%u | button=%s | state_before=%s\n",
+        last_operator_event_id,
+        (unsigned)(
+            xTaskGetTickCount() *
+            1000 /
+            configTICK_RATE_HZ
+        ),
+        hmi_sequence,
+        operator_button_name(
+            command,
+            state
+        ),
+        state_machine_state_name(
+            state
+        )
+    );
+
+    fflush(
+        operator_event_log
+    );
+}
+
+static void operator_log_outcomes(
+    const SupervisorDiagnostics *s
+)
+{
+    static bool snapshot_valid;
+    static RobotStateId previous_state;
+    static unsigned previous_geometry;
+    static unsigned previous_points;
+    static unsigned previous_validation_result;
+    static unsigned previous_rejections;
+    static unsigned previous_fault_code;
+    static bool previous_preview_accepted;
+    static bool previous_estop;
+    static bool previous_wire_feed;
+    static float previous_speed;
+
+    if (s == NULL)
+    {
+        return;
+    }
+
+    operator_log_open();
+
+    if (
+        operator_event_log == NULL ||
+        operator_event_log_failed
+    )
+    {
+        return;
+    }
+
+    const uint32_t now =
+        (uint32_t)(
+            xTaskGetTickCount() *
+            1000 /
+            configTICK_RATE_HZ
+        );
+
+    if (!snapshot_valid)
+    {
+        snapshot_valid = true;
+        previous_state = s->machine.activeState;
+        previous_geometry = s->selected_geometry;
+        previous_points = s->captured_points;
+        previous_validation_result =
+            s->validation.report.result;
+        previous_rejections =
+            s->machine.rejectedEventCount;
+        previous_fault_code =
+            s->machine.activeFaultCode;
+        previous_preview_accepted =
+            s->machine.previewAccepted;
+        previous_estop = estop;
+        previous_wire_feed = wire_feed;
+        previous_speed =
+            s->teaching.displayed_speed_mps;
+
+        fprintf(
+            operator_event_log,
+            "STATUS    | time_ms=%u | startup_state=%s | CAN=%u/%u\n",
+            now,
+            state_machine_state_name(
+                s->machine.activeState
+            ),
+            sim_can_drives_ready()
+                ? SIM_NUM_AXES
+                : 0U,
+            SIM_NUM_AXES
+        );
+
+        fflush(
+            operator_event_log
+        );
+
+        return;
+    }
+
+#define LOG_OUTCOME(...)                                                     \
+    do                                                                       \
+    {                                                                        \
+        fprintf(                                                             \
+            operator_event_log,                                              \
+            "OUTCOME   | time_ms=%u | after_event=%03u | ",                 \
+            now,                                                             \
+            last_operator_event_id                                           \
+        );                                                                   \
+        fprintf(                                                             \
+            operator_event_log,                                              \
+            __VA_ARGS__                                                      \
+        );                                                                   \
+        fputc(                                                               \
+            '\n',                                                            \
+            operator_event_log                                               \
+        );                                                                   \
+        fflush(                                                              \
+            operator_event_log                                               \
+        );                                                                   \
+    } while (0)
+
+    if (s->machine.activeState != previous_state)
+    {
+        LOG_OUTCOME(
+            "state=%s -> %s",
+            state_machine_state_name(
+                previous_state
+            ),
+            state_machine_state_name(
+                s->machine.activeState
+            )
+        );
+
+        previous_state =
+            s->machine.activeState;
+    }
+
+    if (s->selected_geometry != previous_geometry)
+    {
+        LOG_OUTCOME(
+            "program_selection=%u -> %u",
+            previous_geometry,
+            s->selected_geometry
+        );
+
+        previous_geometry =
+            s->selected_geometry;
+    }
+
+    if (s->captured_points != previous_points)
+    {
+        LOG_OUTCOME(
+            "recorded_points=%u -> %u",
+            previous_points,
+            s->captured_points
+        );
+
+        previous_points =
+            s->captured_points;
+    }
+
+    if (
+        s->validation.report.result !=
+        previous_validation_result
+    )
+    {
+        LOG_OUTCOME(
+            "validation_result=%u -> %u error=%s(%u)",
+            previous_validation_result,
+            s->validation.report.result,
+            state_path_validation_error_name(
+                s->validation.report.error
+            ),
+            s->validation.report.error
+        );
+
+        previous_validation_result =
+            s->validation.report.result;
+    }
+
+    if (
+        s->machine.previewAccepted &&
+        !previous_preview_accepted
+    )
+    {
+        LOG_OUTCOME(
+            "preview_complete=YES"
+        );
+    }
+
+    previous_preview_accepted =
+        s->machine.previewAccepted;
+
+    if (
+        s->machine.rejectedEventCount !=
+        previous_rejections
+    )
+    {
+        LOG_OUTCOME(
+            "command_rejected total=%u last_event=%s",
+            s->machine.rejectedEventCount,
+            state_machine_event_name(
+                s->machine.lastEvent
+            )
+        );
+
+        previous_rejections =
+            s->machine.rejectedEventCount;
+    }
+
+    if (
+        s->machine.activeFaultCode !=
+        previous_fault_code
+    )
+    {
+        LOG_OUTCOME(
+            "fault_code=0x%04X -> 0x%04X",
+            previous_fault_code,
+            s->machine.activeFaultCode
+        );
+
+        previous_fault_code =
+            s->machine.activeFaultCode;
+    }
+
+    if (estop != previous_estop)
+    {
+        LOG_OUTCOME(
+            "estop=%s",
+            estop
+                ? "ACTIVE"
+                : "RELEASED"
+        );
+
+        previous_estop =
+            estop;
+    }
+
+    if (wire_feed != previous_wire_feed)
+    {
+        LOG_OUTCOME(
+            "wire_feed=%s",
+            wire_feed
+                ? "ON"
+                : "OFF"
+        );
+
+        previous_wire_feed =
+            wire_feed;
+    }
+
+    if (
+        fabsf(
+            s->teaching.displayed_speed_mps -
+            previous_speed
+        ) > 1.0e-7F
+    )
+    {
+        LOG_OUTCOME(
+            "teaching_speed=%.4f -> %.4f m/s",
+            previous_speed,
+            s->teaching.displayed_speed_mps
+        );
+
+        previous_speed =
+            s->teaching.displayed_speed_mps;
+    }
+
+#undef LOG_OUTCOME
+}
+
 static float word_float(uint32_t w) { float f;memcpy(&f,&w,4);return f; }
 static uint32_t float_word(float f) { uint32_t w;memcpy(&w,&f,4);return w; }
 static bool udp_event(void *ctx,HmiEvent *event)
@@ -727,6 +1173,12 @@ static bool udp_event(void *ctx,HmiEvent *event)
     if(peers[slot].used && (int32_t)(words[3]-peers[slot].sequence)<=0)return false;
     peers[slot].used=true;peers[slot].address=peer.sin_addr.s_addr;peers[slot].port=peer.sin_port;peers[slot].sequence=words[3];
     last_sequence=words[3];
+
+    operator_log_press(
+        words[2],
+        words[3]
+    );
+
     if(words[2]!=HMI_PROTOCOL_SIM_GUIDANCE_POSE)
         printf("[HMI RX] time_ms=%u command=%u sequence=%u (received, not yet acknowledged)\n",
             (unsigned)(xTaskGetTickCount()*1000/configTICK_RATE_HZ),words[2],words[3]);
@@ -746,6 +1198,8 @@ static bool udp_event(void *ctx,HmiEvent *event)
  */
 static void trace_state(const SupervisorDiagnostics *s)
 {
+    operator_log_outcomes(s);
+
     static bool started, file_failed;
     static FILE *csv;
     static uint32_t previous_ms;
