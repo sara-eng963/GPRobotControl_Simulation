@@ -33,8 +33,8 @@ static EtherCATMasterConfig ethercat_config;
 
 /*
  * Transitional simulation split:
- *   BOOT   -> CANopen / AVATAR
- *   HOMING -> legacy EtherCAT / A6EC until the next migration step.
+ *   BOOT / HOMING / IDLE -> CANopen / AVATAR
+ *   later motion states  -> legacy EtherCAT / A6EC until migrated.
  */
 static AvatarMSimBus can_boot_bus;
 static CanBackend can_boot_backend;
