@@ -1569,23 +1569,54 @@ static void draw_plot(
             (size_t)node
         );
 
+    char active_text[32];
+    char tpdo_text[32];
+
+    if (sim->active_target_valid)
+    {
+        snprintf(
+            active_text,
+            sizeof(active_text),
+            "%d",
+            sim->active_target_position
+        );
+    }
+    else
+    {
+        snprintf(
+            active_text,
+            sizeof(active_text),
+            "--"
+        );
+    }
+
+    if (
+        drive != NULL &&
+        drive->feedback_valid
+    )
+    {
+        snprintf(
+            tpdo_text,
+            sizeof(tpdo_text),
+            "%d",
+            drive->feedback.actual_position
+        );
+    }
+    else
+    {
+        snprintf(
+            tpdo_text,
+            sizeof(tpdo_text),
+            "--"
+        );
+    }
+
     DrawText(
         TextFormat(
             "Active: %s    Sim actual: %d    Last TPDO: %s",
-            sim->active_target_valid
-                ? TextFormat(
-                    "%d",
-                    sim->active_target_position)
-                : "--",
+            active_text,
             sim->actual_position,
-            (
-                drive != NULL &&
-                drive->feedback_valid
-            )
-                ? TextFormat(
-                    "%d",
-                    drive->feedback.actual_position)
-                : "--"
+            tpdo_text
         ),
         (int)panel.x + 18,
         (int)(panel.y + panel.height - 42),
