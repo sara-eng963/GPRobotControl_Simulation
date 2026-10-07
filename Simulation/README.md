@@ -96,6 +96,13 @@ MATLAB UDP telemetry on port 5005. Keep
 Press Ctrl-C in the launcher terminal to stop all processes. Runtime logs are
 written to `.simulation-logs/`.
 
+A human-readable debug timeline is written to
+`.simulation-logs/operator-events.txt`. Every received HMI button gets an
+`EVENT` number and timestamp. Meaningful controller changes such as state
+transitions, recorded-point count, validation result, preview completion,
+rejections, E-stop state, wire feed, faults and teaching speed are written as
+`OUTCOME` lines tagged with the most recent event number.
+
 Use `--no-build` to reuse an existing build or `--no-gui` to start only
 the CAN/controller processes.
 
