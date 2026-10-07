@@ -1,11 +1,8 @@
 #include "../StateMachine/supervisor_task.h"
 #include "../HMI/hmi_task.h"
 #include "../HMI/hmi_protocol.h"
-#include "MockHardware/mock_backend.h"
 #include "AvatarM_CAN_GUI/sim_can_bus.h"
 #include "../CANComm/CANopen/canopen_master.h"
-#include "../EtherCATComm/ethercat_master.h"
-#include "../ServoDrive/A6EC/a6ec_drive.h"
 #include "../ServoDrive/CiA402/cia402.h"
 #include "../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../ControlCore/Kinematics/control_fk.h"
@@ -18,7 +15,6 @@
 #include <string.h>
 #include <math.h>
 #define SIM_NUM_AXES 6
-#define SIM_CYCLE_TIME_NS 1000000
 #define SIM_PV_GEOMETRY_CAPACITY 512
 #define SIM_PV_STORAGE_CAPACITY 100000
 #define DEG2RAD(x) ((x)*0.017453292519943295)
@@ -29,12 +25,10 @@ typedef struct {
     ValidatedTrajectory metadata;
 } RamValidatedStorage;
 static RobotConfig robot;
-static EtherCATMasterConfig ethercat_config;
-
 /*
- * Transitional simulation split:
- *   BOOT / HOMING / IDLE -> CANopen / AVATAR
- *   later motion states  -> legacy EtherCAT / A6EC until migrated.
+ * Active Supervisor simulation uses the CANopen / AVATAR stack end-to-end.
+ * Legacy EtherCAT/A6EC modules remain in the repository only for historical
+ * tests and the old simulator target.
  */
 static AvatarMSimBus can_boot_bus;
 static CanBackend can_boot_backend;
@@ -69,6 +63,183 @@ static uint32_t last_sequence, status_sequence;
 /* Sequence numbers belong to each GUI sender, not globally to both windows. */
 static struct { uint32_t address, sequence; uint16_t port; bool used; } peers[8];
 static SupervisorOutputSnapshot lamps;
+
+static uint32_t sim_now_ms(void)
+{
+    return (uint32_t)(
+        ((uint64_t)xTaskGetTickCount() * 1000ULL) /
+        (uint64_t)configTICK_RATE_HZ
+    );
+}
+
+static bool sim_can_communication_healthy(void)
+{
+    return
+        !communication_failure &&
+        canopen_master_all_heartbeats_operational(
+            &can_boot_master
+        );
+}
+
+static bool sim_can_drives_ready(void)
+{
+    return
+        !communication_failure &&
+        canopen_master_all_feedback_valid(
+            &can_boot_master
+        ) &&
+        canopen_master_all_drives_operation_enabled(
+            &can_boot_master
+        );
+}
+
+static bool sim_read_joint(
+    size_t axis,
+    double *joint_rad
+)
+{
+    if (
+        joint_rad == NULL ||
+        axis >= SIM_NUM_AXES
+    )
+    {
+        return false;
+    }
+
+    const AvatarMDrive *drive =
+        canopen_master_drive(
+            &can_boot_master,
+            axis
+        );
+
+    if (
+        drive == NULL ||
+        !drive->feedback_valid
+    )
+    {
+        return false;
+    }
+
+    return avatar_m_position_units_to_joint_rad(
+        &avatar_position_scales[axis],
+        drive->feedback.actual_position,
+        joint_rad
+    );
+}
+
+static bool sim_read_joint_vector(
+    double q[SIM_NUM_AXES]
+)
+{
+    if (q == NULL)
+    {
+        return false;
+    }
+
+    for (size_t axis = 0U;
+         axis < SIM_NUM_AXES;
+         ++axis)
+    {
+        if (!sim_read_joint(
+                axis,
+                &q[axis]))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool sim_hold_current(void)
+{
+    int32_t targets[SIM_NUM_AXES];
+
+    for (size_t axis = 0U;
+         axis < SIM_NUM_AXES;
+         ++axis)
+    {
+        const AvatarMDrive *drive =
+            canopen_master_drive(
+                &can_boot_master,
+                axis
+            );
+
+        if (
+            drive == NULL ||
+            !drive->feedback_valid
+        )
+        {
+            return false;
+        }
+
+        targets[axis] =
+            drive->feedback.actual_position;
+    }
+
+    return canopen_master_send_target_cycle(
+        &can_boot_master,
+        targets,
+        SIM_NUM_AXES
+    );
+}
+
+static bool sim_apply_guided_joint_vector(
+    const double q[SIM_NUM_AXES]
+)
+{
+    if (q == NULL)
+    {
+        return false;
+    }
+
+    int32_t targets[SIM_NUM_AXES];
+
+    for (size_t axis = 0U;
+         axis < SIM_NUM_AXES;
+         ++axis)
+    {
+        if (!avatar_m_joint_rad_to_position_units(
+                &avatar_position_scales[axis],
+                q[axis],
+                &targets[axis]))
+        {
+            return false;
+        }
+    }
+
+    /*
+     * This is the PC-only manual-guidance stand-in. TEACHING itself still
+     * only reads feedback; the external guidance simulator changes the
+     * measured joints and publishes a normal RPDO4/SYNC/TPDO4 exchange.
+     */
+    avatar_sim_bus_set_demo_motion(
+        &can_boot_bus,
+        false
+    );
+
+    for (size_t axis = 0U;
+         axis < SIM_NUM_AXES;
+         ++axis)
+    {
+        avatar_m_node_set_actual_position(
+            &can_boot_bus.nodes[axis],
+            targets[axis]
+        );
+    }
+
+    avatar_sim_bus_set_demo_motion(
+        &can_boot_bus,
+        true
+    );
+
+    return canopen_master_send_target_cycle(
+        &can_boot_master,
+        targets,
+        SIM_NUM_AXES
+    );
+}
+
 static bool ram_storage_begin(
     void *context
 )
@@ -251,14 +422,6 @@ static void configure_robot(void)
 
 static void configure_state_dependencies(void)
 {
-    ethercat_config =
-        (EtherCATMasterConfig)
-        {
-            .interfaceName = "mock-only",
-            .expectedSlaveCount = SIM_NUM_AXES,
-            .cycleTimeNs = SIM_CYCLE_TIME_NS
-        };
-
     homing_config =
         (HomingConfig)
         {
@@ -441,8 +604,13 @@ static void configure_state_dependencies(void)
 
 static bool relay(bool enable,void *ctx) { (void)ctx;wire_feed=enable;return true; }
 static bool off(void *ctx) { return relay(false,ctx); }
-static bool safe(void *ctx) { mock_backend_hold();return off(ctx); }
-static bool hold(bool *stopped,void *ctx) { safe(ctx);*stopped=true;return true; }
+static bool safe(void *ctx) { (void)ctx;return off(NULL); }
+static bool hold(bool *stopped,void *ctx) {
+    (void)ctx;
+    if(stopped==NULL || !sim_hold_current())return false;
+    *stopped=true;
+    return true;
+}
 static bool retract_prepare(void *ctx) { (void)ctx;state_homing_enter(&retraction);return true; }
 static StateStepResult retract_step(void *ctx) {
     (void)ctx;
@@ -457,15 +625,26 @@ static StateStepResult retract_step(void *ctx) {
 }
 static bool clearance(void *ctx) {
     (void)ctx;
-    for(int i=0;i<6;i++)if(fabs(mock_backend_get_joint(i)-robot.configuration.home[i])>homing_config.positionTolerance)return false;
+    double q[SIM_NUM_AXES];
+    if(!sim_read_joint_vector(q))return false;
+    for(int i=0;i<SIM_NUM_AXES;i++)
+        if(fabs(q[i]-robot.configuration.home[i])>homing_config.positionTolerance)
+            return false;
     /* Simulation home tolerance, NOT a collision or cell-clearance proof. */
     return true;
 }
 static bool read_inputs(void *ctx,SupervisorInputSnapshot *out) {
-    (void)ctx;memset(out,0,sizeof(*out));out->valid=true;
-    out->timestamp_ms=(uint32_t)(xTaskGetTickCount()*1000/configTICK_RATE_HZ);
-    out->asserted[SUP_IO_ESTOP]=estop;out->asserted[SUP_IO_PROTECTIVE_STOP]=protective;
-    for(int i=0;i<6;i++)out->asserted[SUP_IO_HOME_J1+i]=fabs(mock_backend_get_joint(i)-robot.configuration.home[i])<homing_config.positionTolerance;
+    (void)ctx;
+    memset(out,0,sizeof(*out));
+    out->valid=true;
+    out->timestamp_ms=sim_now_ms();
+    out->asserted[SUP_IO_ESTOP]=estop;
+    out->asserted[SUP_IO_PROTECTIVE_STOP]=protective;
+    double q[SIM_NUM_AXES];
+    if(sim_read_joint_vector(q))
+        for(int i=0;i<SIM_NUM_AXES;i++)
+            out->asserted[SUP_IO_HOME_J1+i]=
+                fabs(q[i]-robot.configuration.home[i])<homing_config.positionTolerance;
     return true;
 }
 static bool write_outputs(void *ctx,const SupervisorOutputSnapshot *out) { (void)ctx;lamps=*out;return true; }
@@ -498,33 +677,37 @@ static void input_task(void *arg)
         supervisor_task_get_state(&machine);
         if(machine.activeState==ROBOT_STATE_IDLE && machine.previousState==ROBOT_STATE_HOMING)homed=true;
         if(estop||protective||injected_fault||communication_failure) {homed=false;safe(NULL);}
-        /* General external fault injection is not a fabricated drive fault. */
-        mock_backend_set_communication_failure(communication_failure);
+        const bool drives_ready=sim_can_drives_ready();
+        const bool communication_healthy=sim_can_communication_healthy();
+        const bool motion_permitted=
+            drives_ready&&communication_healthy&&!estop&&!protective&&!injected_fault;
+
         if(guidance_pending) {
             guidance_pending=false;guidance_error=2;
-            if(machine.activeState==ROBOT_STATE_TEACHING && !estop && !protective && mock_backend_ready()) {
-                double q[6],target[4][4],solution[6];
-                for(int j=0;j<6;j++)q[j]=mock_backend_get_joint(j);
-                control_fk(&robot,q,target);
-                for(int j=0;j<3;j++)target[j][3]=guidance_xyz[j];
-                ADLSParameters params;adls_default_parameters(&params);
-                if(adls_ik(&robot,target,q,&params,solution,&guidance_info)) {
-                    for(int j=0;j<6;j++)mock_backend_set_joint(j,solution[j]);
-                    guidance_error=0;
-                } else {
-                    guidance_error=1;
-                    fprintf(stderr,"[GUIDANCE] IK failed: target=[%.6f %.6f %.6f] m iterations=%d pos_error=%.6g m ori_error=%.6g rad\n", guidance_xyz[0],guidance_xyz[1],guidance_xyz[2],guidance_info.iterations,guidance_info.positionError,guidance_info.orientationError);
+            if(machine.activeState==ROBOT_STATE_TEACHING && !estop && !protective && drives_ready) {
+                double q[SIM_NUM_AXES],target[4][4],solution[SIM_NUM_AXES];
+                if(sim_read_joint_vector(q)) {
+                    control_fk(&robot,q,target);
+                    for(int j=0;j<3;j++)target[j][3]=guidance_xyz[j];
+                    ADLSParameters params;adls_default_parameters(&params);
+                    if(adls_ik(&robot,target,q,&params,solution,&guidance_info) &&
+                       sim_apply_guided_joint_vector(solution)) {
+                        guidance_error=0;
+                    } else {
+                        guidance_error=1;
+                        fprintf(stderr,"[GUIDANCE] IK/apply failed: target=[%.6f %.6f %.6f] m iterations=%d pos_error=%.6g m ori_error=%.6g rad\n", guidance_xyz[0],guidance_xyz[1],guidance_xyz[2],guidance_info.iterations,guidance_info.positionError,guidance_info.orientationError);
+                    }
                 }
             }
         }
         SupervisorMessage m={0};m.type=SUPERVISOR_MESSAGE_SAFETY;
         m.data.safety.statusValid=true;
-        m.data.safety.drivesReady=mock_backend_ready();
-        m.data.safety.ethercatHealthy=!communication_failure;
+        m.data.safety.drivesReady=drives_ready;
+        m.data.safety.communicationHealthy=communication_healthy;
         m.data.safety.estopActive=estop;m.data.safety.protectiveStopActive=protective;
         m.data.safety.globalFaultActive=injected_fault||communication_failure;
-        m.data.safety.motionPermitted=mock_backend_ready()&&!estop&&!protective&&!injected_fault;
-        m.data.safety.timestampMs=(uint32_t)(xTaskGetTickCount()*1000/configTICK_RATE_HZ);
+        m.data.safety.motionPermitted=motion_permitted;
+        m.data.safety.timestampMs=sim_now_ms();
         post_required(&m);
         SupervisorMessage event={0};event.type=SUPERVISOR_MESSAGE_EVENT;
         if(estop!=old_estop){event.data.event.type=estop?SUPERVISOR_EVENT_ESTOP_ASSERTED:SUPERVISOR_EVENT_ESTOP_RELEASED;post_required(&event);old_estop=estop;}
@@ -540,13 +723,13 @@ static void input_task(void *arg)
         m.data.teaching_runtime.robot_homed=homed;
         m.data.teaching_runtime.manual_guidance_active=machine.activeState==ROBOT_STATE_TEACHING && !guidance_pending;
         m.data.teaching_runtime.robot_motion_settled=!guidance_pending;
-        m.data.teaching_runtime.motion_permitted=mock_backend_ready()&&!estop&&!protective&&!injected_fault;
+        m.data.teaching_runtime.motion_permitted=motion_permitted;
         m.data.teaching_runtime.estop_active=estop;
         m.data.teaching_runtime.protective_stop_active=protective;
         m.data.teaching_runtime.global_fault_active=injected_fault||communication_failure;
         post_required(&m);
         m.type=SUPERVISOR_MESSAGE_APPROACH_CONTROL;memset(&m.data,0,sizeof(m.data));
-        m.data.approach_control.motion_permission=mock_backend_ready()&&!estop&&!protective&&!injected_fault;
+        m.data.approach_control.motion_permission=motion_permitted;
         m.data.approach_control.estop_active=estop;m.data.approach_control.protective_stop_active=protective;
         m.data.approach_control.external_fault_active=injected_fault||communication_failure;
         post_required(&m);
@@ -610,6 +793,8 @@ static void trace_state(const SupervisorDiagnostics *s)
     if (s->machine.activeState==previous_state && (uint32_t)(now-previous_ms)<100U) return;
     previous_state=s->machine.activeState;previous_ms=now;
     unsigned phase=0,error=0;
+    double q[SIM_NUM_AXES]={0};
+    (void)sim_read_joint_vector(q);
     const char *phase_name="SUPERVISORY",*error_name="NONE";
     switch(s->machine.activeState) {
     case ROBOT_STATE_BOOT: phase=s->boot.phase;error=s->boot.error;phase_name="BOOT_PHASE";break;
@@ -651,8 +836,7 @@ static void trace_state(const SupervisorDiagnostics *s)
             s->execution.sample_count,wire_feed,guidance_error,s->machine.safety.motionPermitted,
             s->machine.safety.drivesReady,estop,protective,s->machine.activeFaultCode,
             s->machine.emergencyResetAcknowledged,s->machine.previewAccepted,s->machine.rejectedEventCount,
-            mock_backend_get_joint(0),mock_backend_get_joint(1),mock_backend_get_joint(2),
-            mock_backend_get_joint(3),mock_backend_get_joint(4),mock_backend_get_joint(5));
+            q[0],q[1],q[2],q[3],q[4],q[5]);
         if(result<0 || fflush(csv)!=0) { perror("Simulation trace write failed");file_failed=true; }
     }
 }
@@ -675,9 +859,11 @@ static void udp_status(void *ctx,const SupervisorDiagnostics *s)
     w[30]=s->machine.executionMode==ROBOT_EXECUTION_PREVIEW && s->machine.activeState==ROBOT_STATE_PATH_EXECUTION;
     w[31]=s->machine.previewAccepted;w[32]=s->execution.error;
     w[33]=float_word(s->execution.sample_count?(float)s->execution.sample_index/s->execution.sample_count:0);
-    double q[6],T[4][4];for(int i=0;i<6;i++){q[i]=mock_backend_get_joint(i);w[37+i]=float_word((float)q[i]);}
+    double q[SIM_NUM_AXES]={0},T[4][4];
+    (void)sim_read_joint_vector(q);
+    for(int i=0;i<SIM_NUM_AXES;i++)w[37+i]=float_word((float)q[i]);
     control_fk(&robot,q,T);for(int i=0;i<3;i++)w[34+i]=float_word((float)T[i][3]);
-    w[43]=communication_failure?0:18;w[44]=18;w[45]=s->captured_points;
+    w[43]=sim_can_drives_ready()?SIM_NUM_AXES:0;w[44]=SIM_NUM_AXES;w[45]=s->captured_points;
     for(unsigned p=0;p<s->captured_points&&p<3;p++)for(int i=0;i<3;i++)w[46+p*3+i]=float_word(s->working_segment.points[p].position_m[i]);
     w[55]=last_sequence;w[56]=guidance_error;
     for(unsigned i=0;i<HMI_STATUS_WORD_COUNT;i++)w[i]=htonl(w[i]);
@@ -762,15 +948,13 @@ static bool configure_can_boot_sim(void)
 
 static bool start_system(void)
 {
-    configure_robot();configure_state_dependencies();mock_backend_reset();
+    configure_robot();configure_state_dependencies();
 
     if (!configure_can_boot_sim())
     {
         fprintf(stderr, "Could not initialize CANopen BOOT simulation.\n");
         return false;
     }
-    /* Simulated initial pose near home; the real Homing module still moves it. */
-    for(int i=0;i<6;i++)mock_backend_set_joint(i,robot.configuration.home[i]+0.01);
     execution_services=(PathExecutionServices){approach_read_validated_sample,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
     paused_services=(PausedServices){hold,off,NULL};fault_services=(FaultServices){safe,NULL};emergency_services=(EmergencyStopServices){safe,NULL};
     SupervisorTaskConfig c={0};
@@ -793,6 +977,6 @@ int main(void)
     struct sockaddr_in addr={0};addr.sin_family=AF_INET;addr.sin_port=htons(HMI_CONTROLLER_PORT);addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
     if(udp<0 || bind(udp,(struct sockaddr*)&addr,sizeof(addr))<0){perror("GUI command port 5010");return 1;}
     if(fcntl(udp,F_SETFL,O_NONBLOCK)<0 || !start_system()){fprintf(stderr,"Startup failed\n");return 1;}
-    puts("REAL state modules + HMI task + ideal mock drive backend. No physical bus.\nGUI UDP ports: commands 5010, panel 5011, teaching 5012.");
+    puts("REAL state modules + HMI task + AVATAR CANopen simulator. No physical bus.\nGUI UDP ports: commands 5010, panel 5011, teaching 5012.");
     vTaskStartScheduler();return 1;
 }
