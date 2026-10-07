@@ -439,15 +439,6 @@ static void configure_state_dependencies(void)
 
 }
 
-static bool targets(const PvExecutionSample *sample, void *ctx)
-{
-    (void)ctx;
-    for(int j=0;j<6;j++) {
-        A6ECPDOCommand cmd={0x000f, sample->target_position_units[j]};
-        a6ec_write_command(j+1,&cmd);
-    }
-    return ethercat_master_exchange()>=ethercat_master_expected_wkc();
-}
 static bool relay(bool enable,void *ctx) { (void)ctx;wire_feed=enable;return true; }
 static bool off(void *ctx) { return relay(false,ctx); }
 static bool safe(void *ctx) { mock_backend_hold();return off(ctx); }
@@ -780,7 +771,7 @@ static bool start_system(void)
     }
     /* Simulated initial pose near home; the real Homing module still moves it. */
     for(int i=0;i<6;i++)mock_backend_set_joint(i,robot.configuration.home[i]+0.01);
-    execution_services=(PathExecutionServices){approach_read_validated_sample,targets,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
+    execution_services=(PathExecutionServices){approach_read_validated_sample,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
     paused_services=(PausedServices){hold,off,NULL};fault_services=(FaultServices){safe,NULL};emergency_services=(EmergencyStopServices){safe,NULL};
     SupervisorTaskConfig c={0};
     c.canopen_master=&can_boot_master;c.avatar_position_scales=avatar_position_scales;c.robot=&robot;c.homing_config=&homing_config;c.teaching_config=&teaching_config;
