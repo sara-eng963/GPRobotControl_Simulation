@@ -3,6 +3,7 @@
 
 #include "../state_machine_types.h"
 #include "state_path_validation.h"
+#include "../../CANComm/CANopen/canopen_master.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -32,7 +33,10 @@ typedef enum
     PATH_EXEC_ERR_TRAJECTORY_NOT_READY,
     PATH_EXEC_ERR_TRAJECTORY_MISMATCH,
     PATH_EXEC_ERR_STORAGE_READ,
-    PATH_EXEC_ERR_COMMAND_WRITE,
+
+    /* Numeric slot formerly used by the generic command-write callback. */
+    PATH_EXEC_ERR_COMMUNICATION,
+
     PATH_EXEC_ERR_WIRE_FEED_RELAY,
     PATH_EXEC_ERR_MOTION_PERMISSION,
     PATH_EXEC_ERR_FOLLOWING_ERROR,
@@ -42,7 +46,9 @@ typedef enum
     PATH_EXEC_ERR_EXTERNAL_FAULT,
     PATH_EXEC_ERR_ESTOP,
     PATH_EXEC_ERR_RESET_REQUESTED,
-    PATH_EXEC_ERR_HOME_REQUESTED
+    PATH_EXEC_ERR_HOME_REQUESTED,
+
+    PATH_EXEC_ERR_CYCLIC_FEEDBACK
 } PathExecutionError;
 
 typedef enum
@@ -74,8 +80,6 @@ typedef struct
 typedef struct
 {
     bool motion_permission;
-    bool drives_ready;
-    bool ethercat_healthy;
     bool following_error;
     bool pause_requested;
     bool reset_requested;
@@ -98,11 +102,6 @@ typedef bool (*PathExecReadSampleFn)(
     void *context
 );
 
-typedef bool (*PathExecWriteTargetsFn)(
-    const PvExecutionSample *sample,
-    void *context
-);
-
 typedef bool (*PathExecSetWireFeedFn)(bool enable, void *context);
 typedef bool (*PathExecPrepareRetractionFn)(void *context);
 typedef StateStepResult (*PathExecRetractionStepFn)(void *context);
@@ -112,11 +111,11 @@ typedef bool (*PathExecControlledStopFn)(bool *stopped, void *context);
 typedef struct
 {
     PathExecReadSampleFn read_sample;
-    PathExecWriteTargetsFn write_targets;
+
     /*
-     * Commands the wire-feed relay only. It must not start or control the
-     * welding arc. Returning true confirms that the command was issued, not
-     * that wire motion was physically measured.
+     * Non-drive services remain callbacks. Six-axis motion targets are sent
+     * directly through CanopenMaster so PATH EXECUTION owns the same RPDO4 /
+     * SYNC / fresh-TPDO4 contract as APPROACH.
      */
     PathExecSetWireFeedFn set_wire_feed_enabled;
     PathExecPrepareRetractionFn prepare_retraction;
@@ -136,6 +135,7 @@ typedef struct
     uint32_t sample_count;
     uint32_t phase_started_ms;
     uint32_t clearance_stable_cycles;
+    uint32_t command_period_ms;
     bool wire_feed_commanded;
 } PathExecutionOutputs;
 
@@ -145,18 +145,30 @@ typedef struct
     PathExecutionResult result;
     PathExecutionError error;
     PathExecutionAbortReason abort_reason;
+
+    CanopenMaster *master;
+
     PathExecutionRequest request;
     PathExecutionConfig config;
     PathExecutionServices services;
+
     uint32_t sample_index;
     uint32_t phase_started_ms;
     uint32_t clearance_stable_cycles;
+
+    uint32_t command_period_ms;
+    uint32_t last_command_ms;
+    bool command_clock_started;
+    bool awaiting_feedback;
+    uint32_t command_tpdo_count[CANOPEN_MASTER_MAX_NODES];
+
     bool wire_feed_commanded;
     bool initialized;
 } PathExecutionState;
 
 void state_path_execution_enter(
     PathExecutionState *state,
+    CanopenMaster *master,
     const PathExecutionRequest *request,
     const PathExecutionConfig *config,
     const PathExecutionServices *services
