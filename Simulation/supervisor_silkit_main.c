@@ -455,11 +455,17 @@ static void configure_state_dependencies(void)
         sizeof(path_validation_config)
     );
 
+    /*
+     * Keep validation limits bit-for-bit aligned with Teaching's float
+     * settings. A literal double 0.100 can be slightly smaller than the
+     * promoted float 0.100F, which made the HMI's legal maximum speed get
+     * rejected as PV_ERR_INVALID_PARAMETER.
+     */
     path_validation_config.default_tcp_speed_mps =
-        0.010;
+        (real_t)teaching_config.default_speed_mps;
 
     path_validation_config.max_tcp_speed_mps =
-        0.100;
+        (real_t)teaching_config.maximum_speed_mps;
 
     path_validation_config.max_tcp_acceleration_mps2 =
         0.250;
