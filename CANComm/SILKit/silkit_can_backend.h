@@ -48,6 +48,20 @@ bool silkit_can_backend_wait_ready(
     uint32_t timeout_ms
 );
 
+/*
+ * SIL Kit-specific observer receive helper.
+ *
+ * rx_time_ns is captured inside the SIL Kit frame callback using
+ * std::chrono::steady_clock. This is intended for PC diagnostics such as the
+ * live CAN monitor. The generic CanBackend API remains unchanged for
+ * controller code.
+ */
+bool silkit_can_backend_receive_timestamped(
+    CanBackend *backend,
+    CanFrame *frame,
+    uint64_t *rx_time_ns
+);
+
 #ifdef __cplusplus
 }
 #endif
