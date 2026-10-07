@@ -843,6 +843,55 @@ static const char *operator_button_name(
     }
 }
 
+static const char *operator_program_name(
+    unsigned program
+)
+{
+    switch (program)
+    {
+        case HMI_PROGRAM_NONE:
+            return "NONE";
+
+        case HMI_PROGRAM_LINE:
+            return "LINE";
+
+        case HMI_PROGRAM_ARC:
+            return "CIRCULAR_ARC";
+
+        case HMI_PROGRAM_CIRCLE:
+            return "CIRCLE";
+
+        default:
+            return "UNKNOWN_PROGRAM";
+    }
+}
+
+static const char *operator_validation_result_name(
+    unsigned result
+)
+{
+    switch (result)
+    {
+        case PV_RESULT_NONE:
+            return "NONE";
+
+        case PV_RESULT_RUNNING:
+            return "RUNNING";
+
+        case PV_RESULT_VALID:
+            return "VALID";
+
+        case PV_RESULT_INVALID:
+            return "INVALID";
+
+        case PV_RESULT_CANCELLED:
+            return "CANCELLED";
+
+        default:
+            return "UNKNOWN_RESULT";
+    }
+}
+
 static void operator_log_press(
     uint32_t command,
     uint32_t hmi_sequence
@@ -1023,9 +1072,13 @@ static void operator_log_outcomes(
     if (s->selected_geometry != previous_geometry)
     {
         LOG_OUTCOME(
-            "program_selection=%u -> %u",
-            previous_geometry,
-            s->selected_geometry
+            "program_selection=%s -> %s",
+            operator_program_name(
+                previous_geometry
+            ),
+            operator_program_name(
+                (unsigned)s->selected_geometry
+            )
         );
 
         previous_geometry =
@@ -1050,13 +1103,17 @@ static void operator_log_outcomes(
     )
     {
         LOG_OUTCOME(
-            "validation_result=%u -> %u error=%s(%u)",
-            previous_validation_result,
-            s->validation.report.result,
+            "validation_result=%s -> %s error=%s(%u)",
+            operator_validation_result_name(
+                previous_validation_result
+            ),
+            operator_validation_result_name(
+                (unsigned)s->validation.report.result
+            ),
             state_path_validation_error_name(
                 s->validation.report.error
             ),
-            s->validation.report.error
+            (unsigned)s->validation.report.error
         );
 
         previous_validation_result =
