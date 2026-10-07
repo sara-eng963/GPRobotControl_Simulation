@@ -17,6 +17,7 @@
 #define SIM_NUM_AXES 6
 #define SIM_PV_GEOMETRY_CAPACITY 512
 #define SIM_PV_STORAGE_CAPACITY 100000
+#define MATLAB_STATUS_PORT 5005
 #define DEG2RAD(x) ((x)*0.017453292519943295)
 typedef struct {
     PvExecutionSample samples[SIM_PV_STORAGE_CAPACITY];
@@ -58,6 +59,8 @@ static float guidance_xyz[3];
 static unsigned guidance_error;
 static bool homed;
 static int udp=-1;
+static struct sockaddr_in matlab_status_address;
+static bool matlab_status_ready;
 static uint32_t last_sequence, status_sequence;
 /* Sequence numbers belong to each GUI sender, not globally to both windows. */
 static struct { uint32_t address, sequence; uint16_t port; bool used; } peers[8];
@@ -840,6 +843,61 @@ static void trace_state(const SupervisorDiagnostics *s)
     }
 }
 
+static bool configure_matlab_status_destination(void)
+{
+    const char *ip =
+        getenv("MATLAB_IP");
+
+    if (ip == NULL || ip[0] == '\0')
+    {
+        ip = "127.0.0.1";
+    }
+
+    memset(
+        &matlab_status_address,
+        0,
+        sizeof(matlab_status_address)
+    );
+
+    matlab_status_address.sin_family =
+        AF_INET;
+
+    matlab_status_address.sin_port =
+        htons(MATLAB_STATUS_PORT);
+
+    if (
+        inet_pton(
+            AF_INET,
+            ip,
+            &matlab_status_address.sin_addr
+        ) != 1
+    )
+    {
+        fprintf(
+            stderr,
+            "[MATLAB] invalid MATLAB_IP: %s\n",
+            ip
+        );
+
+        matlab_status_ready =
+            false;
+
+        return false;
+    }
+
+    matlab_status_ready =
+        true;
+
+    printf(
+        "[MATLAB] live status -> %s:%u\n",
+        ip,
+        (unsigned)MATLAB_STATUS_PORT
+    );
+
+    return true;
+}
+
+
 static void udp_status(void *ctx,const SupervisorDiagnostics *s)
 {
     (void)ctx;
@@ -869,6 +927,24 @@ static void udp_status(void *ctx,const SupervisorDiagnostics *s)
     struct sockaddr_in dst={0};dst.sin_family=AF_INET;dst.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
     dst.sin_port=htons(HMI_PANEL_STATUS_PORT);(void)sendto(udp,w,sizeof(w),MSG_DONTWAIT,(struct sockaddr*)&dst,sizeof(dst));
     dst.sin_port=htons(HMI_TEACH_STATUS_PORT);(void)sendto(udp,w,sizeof(w),MSG_DONTWAIT,(struct sockaddr*)&dst,sizeof(dst));
+
+    /*
+     * MATLAB receives the same versioned status packet on its own port.
+     * This keeps the visualizer synchronized with the exact Supervisor/HMI
+     * state instead of maintaining a second telemetry data model.
+     */
+    if (matlab_status_ready)
+    {
+        (void)sendto(
+            udp,
+            w,
+            sizeof(w),
+            MSG_DONTWAIT,
+            (struct sockaddr *)&matlab_status_address,
+            sizeof(matlab_status_address)
+        );
+    }
+
     static RobotStateId old=ROBOT_STATE_COUNT;static bool old_relay;
     if(old!=s->machine.activeState || old_relay!=wire_feed) {
         printf("[SIM] state=%s wire_feed=%s PV=%s transitions=%u\n",state_machine_state_name(s->machine.activeState),wire_feed?"ON":"OFF",state_path_validation_error_name(s->validation.report.error),s->machine.transitionCount);
@@ -975,7 +1051,8 @@ int main(void)
     udp=socket(AF_INET,SOCK_DGRAM,0);
     struct sockaddr_in addr={0};addr.sin_family=AF_INET;addr.sin_port=htons(HMI_CONTROLLER_PORT);addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
     if(udp<0 || bind(udp,(struct sockaddr*)&addr,sizeof(addr))<0){perror("GUI command port 5010");return 1;}
+    (void)configure_matlab_status_destination();
     if(fcntl(udp,F_SETFL,O_NONBLOCK)<0 || !start_system()){fprintf(stderr,"Startup failed\n");return 1;}
-    puts("REAL state modules + HMI task + AVATAR CANopen simulator. No physical bus.\nGUI UDP ports: commands 5010, panel 5011, teaching 5012.");
+    puts("REAL state modules + HMI task + AVATAR CANopen simulator. No physical bus.\nGUI UDP ports: commands 5010, panel 5011, teaching 5012. MATLAB status: 5005.");
     vTaskStartScheduler();return 1;
 }
