@@ -461,7 +461,12 @@ static void run_active_state(SupervisorTaskContext *context)
             break;
 
         case ROBOT_STATE_IDLE:
-            step = state_idle_step(&context->idle, IDLE_COMMAND_NONE);
+            step = state_idle_step(
+                &context->idle,
+                IDLE_COMMAND_NONE,
+                context->config.canopen_master,
+                supervisor_now_ms()
+            );
             if (step == STATE_STEP_FAILED)
                 emit_step_failure(context, (uint32_t)context->idle.error);
             break;
