@@ -8,6 +8,8 @@
 #include "../../ControlCore/Config/robot_config.h"
 #include "../../ControlCore/Math/control_types.h"
 #include "../../ControlCore/Trajectory/joint_trajectory.h"
+#include "../../CANComm/CANopen/canopen_master.h"
+#include "../../ServoDrive/AvatarM/avatar_m_position.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,10 +20,11 @@
  * ============================================================================
  *
  * Approach moves the robot from its CURRENT measured joint position to
- * sample 0 of an already validated 1 ms CSP trajectory.
+ * sample 0 of an already validated 2 ms / 500 Hz AVATAR trajectory.
  *
- * The final command uses the exact int32_t target-position values stored by
- * Path Validation so Preview / Welding can start without a position jump.
+ * The final command uses the exact int32_t AVATAR target-position values
+ * stored by Path Validation so Preview / Welding can start without a
+ * position jump.
  * ============================================================================
  */
 
@@ -90,7 +93,8 @@ typedef enum
     APPROACH_ERR_POSITION_CONVERSION,
     APPROACH_ERR_TARGET_LIMIT,
 
-    APPROACH_ERR_PDO_UNAVAILABLE,
+    /* Numeric slot preserved from the old EtherCAT PDO error. */
+    APPROACH_ERR_COMMUNICATION,
     APPROACH_ERR_FEEDBACK,
     APPROACH_ERR_DRIVE_NOT_READY,
 
@@ -100,7 +104,8 @@ typedef enum
 
     APPROACH_ERR_VERIFY_TIMEOUT,
     APPROACH_ERR_FOLLOWING_ERROR,
-    APPROACH_ERR_WKC,
+    /* Numeric slot preserved from the old EtherCAT WKC error. */
+    APPROACH_ERR_CYCLIC_FEEDBACK,
 
     APPROACH_ERR_EXTERNAL_FAULT,
     APPROACH_ERR_ESTOP,
@@ -244,8 +249,8 @@ typedef struct
  * SERVICES NOT YET OWNED BY A COMMON PROJECT MODULE
  * ============================================================================
  *
- * A6-EC position conversion, PDO feedback/targets, CiA-402 readiness and
- * EtherCAT exchange are used DIRECTLY by state_approach.c.
+ * AVATAR position conversion, TPDO4 feedback, RPDO4 targets, CiA-402
+ * readiness and CANopen SYNC are used DIRECTLY by state_approach.c.
  *
  * Therefore we do NOT carry over the teammate's approach_project_adapter.
  *
@@ -337,6 +342,9 @@ typedef struct
 
     const RobotConfig *robot;
 
+    CanopenMaster *master;
+    const AvatarMPositionScale *position_scales;
+
     ApproachRequest request;
     ApproachConfig config;
     ApproachServices services;
@@ -384,6 +392,17 @@ typedef struct
 
     int32_t final_target_units[ROBOT_DOF];
 
+    /*
+     * CANopen cyclic synchronization bookkeeping.
+     * Every command is six RPDO4 targets followed by one SYNC, and the next
+     * motion command is not issued until fresh TPDO4 feedback arrives.
+     */
+    uint32_t command_period_ms;
+    uint32_t last_command_ms;
+    bool command_clock_started;
+    bool awaiting_feedback;
+    uint32_t command_tpdo_count[ROBOT_DOF];
+
     bool paused_during_verification;
 
 } ApproachState;
@@ -402,6 +421,8 @@ typedef struct
 void state_approach_enter(
     ApproachState *state,
     const RobotConfig *robot,
+    CanopenMaster *master,
+    const AvatarMPositionScale position_scales[ROBOT_DOF],
     const ApproachRequest *request,
     const ApproachConfig *config,
     const ApproachServices *services
@@ -412,7 +433,7 @@ void state_approach_enter(
  * Execute one nonblocking Approach state step.
  *
  * The surrounding control task should call this once per supervisory/control
- * cycle. During trajectory execution the intended cycle is 1 ms.
+ * cycle. During trajectory execution targets are paced at 2 ms / 500 Hz.
  *
  * Mapping:
  *
@@ -428,6 +449,7 @@ void state_approach_enter(
 StateStepResult state_approach_step(
     ApproachState *state,
     const ApproachControlInputs *inputs,
+    uint32_t now_ms,
     ApproachOutputs *outputs
 );
 
