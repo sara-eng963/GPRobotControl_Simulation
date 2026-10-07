@@ -4,7 +4,9 @@
 
 #include "../state_machine_types.h"
 
+#include "../../CANComm/CANopen/canopen_master.h"
 #include "../../ControlCore/Config/robot_config.h"
+#include "../../ServoDrive/AvatarM/avatar_m_position.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -212,9 +214,9 @@ typedef struct
  *
  * In this integrated version, state_teaching.c builds this snapshot using:
  *
- *      A6-EC feedback       -> actual_joint_position_rad
- *      CiA-402 status       -> drives_ready
- *      ControlCore FK       -> actual_position_m + actual_orientation_quat
+ *      AVATAR TPDO4 feedback -> actual_joint_position_rad
+ *      CiA-402 status         -> drives_ready
+ *      ControlCore FK         -> actual_position_m + actual_orientation_quat
  *
  * The remaining supervisory flags are supplied through TeachingRuntimeInputs.
  */
@@ -389,11 +391,12 @@ void state_teaching_enter(
  *
  * The function:
  *
- *      1. reads all six A6-EC joint positions,
- *      2. checks all six CiA-402 drives,
- *      3. computes TCP pose using our ControlCore FK,
- *      4. builds the preserved TeachingInputs snapshot,
- *      5. runs the preserved Teaching event logic.
+ *      1. polls the shared CANopen master,
+ *      2. reads all six AVATAR TPDO4 joint positions,
+ *      3. checks all six CiA-402 drives,
+ *      4. converts raw AVATAR counts to joint radians,
+ *      5. computes TCP pose using our ControlCore FK,
+ *      6. runs the preserved Teaching event logic.
  *
  * Returns:
  *
@@ -414,6 +417,9 @@ StateStepResult state_teaching_step(
     TeachingState *state,
     const RobotConfig *robot,
     const TeachingRuntimeInputs *runtime,
+    CanopenMaster *master,
+    const AvatarMPositionScale position_scales[ROBOT_DOF],
+    uint32_t now_ms,
     TeachingEvent event,
     TeachingOutputs *outputs
 );
