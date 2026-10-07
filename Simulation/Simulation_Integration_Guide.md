@@ -1,123 +1,117 @@
-# CANopen Supervisor + HMI PC integration
+# SIL Kit Supervisor + HMI integration
 
-This guide describes the active integration on `sara/can-replacement`.
+This is the active PC integration on `sara/can-replacement`.
 
-## Architecture
-
-The PC simulation executes the real robot state modules under the FreeRTOS
-POSIX port. The physical CAN controller and motors are replaced by the
-in-memory AVATAR CANopen bus/node simulator.
+## Data path
 
 ```
-HMI / automated test
-        |
-        v
-HMI RTOS task
-        |
-        v
-Supervisor task
-        |
-        v
-StateMachine + real state modules
-        |
-        v
-CanopenMaster
-        |
-        +-- NMT
-        +-- heartbeat
-        +-- expedited SDO
-        +-- RPDO4 x 6
-        +-- SYNC
-        +-- TPDO4 x 6
-        |
-        v
-AVATAR M simulated nodes
+Operator HMI / Teaching window
+            |
+            v
+        HMI RTOS task
+            |
+            v
+        Supervisor
+            |
+            v
+      CanopenMaster
+            |
+            v
+   SIL Kit CAN backend
+            |
+       CAN1 @ 1 Mbit/s
+   +---+---+---+---+---+---+
+   |   |   |   |   |   |
+  N1  N2  N3  N4  N5  N6
+   \___ six AVATAR SIL Kit participants ___/
+            |
+         TPDO4
+            |
+            v
+        Supervisor
+        /        \
+      HMI       MATLAB
 ```
 
-The test driver never forces `activeState` and does not manufacture state
-completion events. State transitions occur through the real Supervisor policy.
+The controller and motor processes communicate only through SIL Kit CAN.
+The Supervisor does not directly modify a virtual motor's protocol state.
 
-## Main files
+## Main components
 
 | File | Responsibility |
 |---|---|
-| `StateMachine/state_machine.c` | Pure transition policy, program lifecycle and recovery guards. |
-| `StateMachine/supervisor_task.c` | FreeRTOS queue/task integration and real state dispatch. |
-| `StateMachine/States/state_boot.c` | CANopen startup, identity, heartbeat, mode and CiA-402 commissioning. |
-| `StateMachine/States/state_homing.c` | 500 Hz homing commands through RPDO4 + SYNC with TPDO4 feedback. |
-| `StateMachine/States/state_idle.c` | Holds captured AVATAR raw positions on the CAN cyclic path. |
-| `StateMachine/States/state_teaching.c` | Reads AVATAR feedback, converts to joint radians and records FK poses. |
-| `StateMachine/States/state_path_validation.c` | Creates immutable 2 ms AVATAR raw-position execution artifacts. |
-| `StateMachine/States/state_approach.c` | Executes the approach trajectory over CANopen at 500 Hz. |
-| `StateMachine/States/state_path_execution.c` | Executes validated Preview/Production samples over CANopen at 500 Hz. |
-| `CANComm/CANopen/canopen_master.c` | Six-axis CANopen master used by the state layer. |
-| `ServoDrive/AvatarM/` | AVATAR protocol, drive and position conversion layer. |
-| `Simulation/AvatarM_CAN_GUI/sim_can_bus.c` | In-memory CAN backend and six AVATAR simulated nodes. |
-| `Simulation/supervisor_mock_main.c` | PC integration wiring, simulated guidance, RAM storage and HMI transport. |
-| `Simulation/Tests/test_supervisor_mock_sequence.py` | End-to-end operator/recovery sequence. |
+| `CANComm/SILKit/silkit_can_backend.cpp` | Generic `CanBackend` implementation over SIL Kit CAN. |
+| `Simulation/AvatarM_CAN/avatar_m_silkit_node.cpp` | One AVATAR CANopen node attached to SIL Kit. |
+| `Simulation/AvatarM_CAN/avatar_m_silkit_motor_bank.cpp` | Six AVATAR SIL Kit participants and demo-only motion follower. |
+| `Simulation/supervisor_silkit_main.c` | FreeRTOS Supervisor integration, HMI transport and MATLAB status output. |
+| `CANComm/CANopen/canopen_master.c` | NMT, heartbeat, SDO, RPDO4/SYNC and TPDO4 coordination. |
+| `ServoDrive/AvatarM/` | AVATAR object/PDO/position conversion layer. |
+| `Simulation/Tests/test_supervisor_silkit_sequence.py` | Whole-pipeline automated sequence over SIL Kit CAN1. |
 
 ## Build
 
 ```bash
-cmake -S . -B build-can-supervisor
+SILKIT_ROOT="$HOME/silkit_test/SilKit-5.0.7-ubuntu-24.04-x86_64-gcc/SilKit"
 
-cmake --build build-can-supervisor \
-  --target supervisor_mock_sim supervisor_panel teaching_sim \
+cmake -S . -B build-can-silkit \
+  -DENABLE_SILKIT=ON \
+  -DSILKIT_ROOT="$SILKIT_ROOT"
+
+cmake --build build-can-silkit \
+  --target supervisor_silkit_sim avatar_m_silkit_motor_bank supervisor_panel teaching_sim \
   -j "$(nproc)"
 ```
 
-The active Supervisor simulator has no SOEM, KickCAT, EtherCAT or A6EC build
-dependency.
+## Manual run order
 
-## Run interactively
-
-Controller:
+Start the SIL Kit registry first:
 
 ```bash
-./build-can-supervisor/supervisor_mock_sim
+"$SILKIT_ROOT/bin/sil-kit-registry" \
+  --listen-uri silkit://localhost:8500
 ```
 
-Operational panel:
+Then start the six AVATAR participants:
 
 ```bash
-./build-can-supervisor/supervisor_panel
+./build-can-silkit/avatar_m_silkit_motor_bank
 ```
 
-Teaching window:
+Then start the Supervisor:
 
 ```bash
-./build-can-supervisor/teaching_sim
+MATLAB_IP="<Windows-host-IP>" \
+  ./build-can-silkit/supervisor_silkit_sim
 ```
 
-UDP ports are 5010 for commands, 5011 for the operational panel status and
-5012 for teaching status.
-
-## Automated end-to-end test
+Finally start:
 
 ```bash
-ctest --test-dir build-can-supervisor \
-  -R '^supervisor_mock_sequence$' \
+./build-can-silkit/supervisor_panel
+./build-can-silkit/teaching_sim
+```
+
+Run `MATLAB/can_robot_visualizer.m` on Windows before or after the
+Supervisor starts.
+
+## Automated run
+
+```bash
+ctest --test-dir build-can-silkit \
+  -R '^supervisor_silkit_sequence$' \
   --output-on-failure -V
 ```
 
-The demonstrated sequence covers startup, Teaching, guided movement, recording,
-Path Validation, Preview, Production, Pause/Resume, E-stop recovery and
-external-fault recovery without forced state completions.
+This launches the registry, six virtual motors and Supervisor automatically.
 
-## What the PC test establishes
+## Interpretation
 
-It establishes the software architecture and integration contract: six-node
-CANopen commissioning, CiA-402 readiness, heartbeat monitoring, synchronized
-RPDO4/SYNC commands, TPDO4 feedback freshness and the complete supervisory
-workflow on a 2 ms application grid.
+A passing test establishes that the full software path works over SIL Kit CAN:
+the real Supervisor performs CANopen commissioning and coordinated cyclic
+motion against six separate AVATAR participants.
 
-It does **not** prove a physical 1 Mbit/s CAN bus or the real AVATAR actuators
-meet the 500 Hz requirement. Physical validation still has to measure bus
-utilization, arbitration latency, jitter, missed frames and real actuator
-response.
+It does not establish physical CAN timing on STM32 hardware. The simple motor
+follower is visualization/integration behavior only, not AVATAR dynamics.
 
-## Archived EtherCAT implementation
-
-The removed EtherCAT/A6EC implementation remains available in Git history and
-on branch `sara/can-system-integration`. It is not part of the active
-`sara/can-replacement` build.
+The previous EtherCAT/A6EC implementation remains on
+`sara/can-system-integration`.
