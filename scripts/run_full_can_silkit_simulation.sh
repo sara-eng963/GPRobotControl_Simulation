@@ -78,6 +78,7 @@ MOTOR_BIN="$BUILD_DIR/avatar_m_silkit_motor_bank"
 SUPERVISOR_BIN="$BUILD_DIR/supervisor_silkit_sim"
 PANEL_BIN="$BUILD_DIR/supervisor_panel"
 TEACH_BIN="$BUILD_DIR/teaching_sim"
+CAN_MONITOR_BIN="$BUILD_DIR/can_live_monitor"
 
 LOG_DIR="$REPO_ROOT/.simulation-logs"
 mkdir -p "$LOG_DIR"
@@ -89,6 +90,9 @@ EVENT_LOG="$LOG_DIR/operator-events.txt"
 TRACE_LOG="$LOG_DIR/simulation-trace.csv"
 PANEL_LOG="$LOG_DIR/supervisor-panel.log"
 TEACH_LOG="$LOG_DIR/teaching-sim.log"
+CAN_MONITOR_LOG="$LOG_DIR/can-monitor.log"
+CAN_FRAME_LOG="$LOG_DIR/can-frames.csv"
+CAN_METRICS_LOG="$LOG_DIR/can-metrics.csv"
 
 PIDS=()
 
@@ -169,8 +173,15 @@ if ((DO_BUILD)); then
     cmake -S "$REPO_ROOT" -B "$BUILD_DIR"         -DENABLE_SILKIT=ON         -DSILKIT_ROOT="$SILKIT_ROOT"
 
     echo
-    echo "[2/5] Building controller, motors and GUIs..."
-    cmake --build "$BUILD_DIR"         --target             supervisor_silkit_sim             avatar_m_silkit_motor_bank             supervisor_panel             teaching_sim         -j "$(nproc)"
+    echo "[2/5] Building controller, motors, CAN dashboard and GUIs..."
+    cmake --build "$BUILD_DIR" \
+        --target \
+            supervisor_silkit_sim \
+            avatar_m_silkit_motor_bank \
+            can_live_monitor \
+            supervisor_panel \
+            teaching_sim \
+        -j "$(nproc)"
 else
     echo "[1/5] Configure/build skipped."
     echo "[2/5] Build skipped."
@@ -188,6 +199,9 @@ done
 : > "$SUPERVISOR_LOG"
 : > "$PANEL_LOG"
 : > "$TEACH_LOG"
+: > "$CAN_MONITOR_LOG"
+: > "$CAN_FRAME_LOG"
+: > "$CAN_METRICS_LOG"
 
 echo
 echo "[3/5] Starting SIL Kit CAN network..."
@@ -197,6 +211,28 @@ REGISTRY_PID=$!
 PIDS+=("$REGISTRY_PID")
 
 wait_for_log     "$REGISTRY_LOG"     "SIL Kit Registry listening"     8     "$REGISTRY_PID"     "SIL Kit registry"
+
+if ((START_GUI)); then
+    if [[ ! -x "$CAN_MONITOR_BIN" ]]; then
+        echo "[FAIL] CAN live monitor executable is missing." >&2
+        exit 1
+    fi
+
+    SILKIT_REGISTRY_URI="$REGISTRY_URI" \
+    CAN_FRAME_LOG="$CAN_FRAME_LOG" \
+    CAN_METRICS_LOG="$CAN_METRICS_LOG" \
+        "$CAN_MONITOR_BIN" \
+        >"$CAN_MONITOR_LOG" 2>&1 &
+    CAN_MONITOR_PID=$!
+    PIDS+=("$CAN_MONITOR_PID")
+
+    wait_for_log \
+        "$CAN_MONITOR_LOG" \
+        "[CAN MONITOR] ready:" \
+        10 \
+        "$CAN_MONITOR_PID" \
+        "CAN live monitor"
+fi
 
 SILKIT_REGISTRY_URI="$REGISTRY_URI"     "$MOTOR_BIN"     >"$MOTOR_LOG" 2>&1 &
 MOTOR_PID=$!
@@ -218,6 +254,9 @@ wait_for_log     "$SUPERVISOR_LOG"     "[SILKIT] Controller connected:"     10  
 echo
 echo "[4/5] SIL Kit participants are running."
 echo "      Registry + RobotControllerSupervisor + AVATAR nodes 1..6"
+if ((START_GUI)); then
+    echo "      + CanLiveMonitor passive CAN1 observer"
+fi
 
 if ((START_GUI)); then
     if [[ ! -x "$PANEL_BIN" || ! -x "$TEACH_BIN" ]]; then
@@ -261,6 +300,13 @@ echo "   $EVENT_LOG"
 echo
 echo " Detailed state trace:"
 echo "   $TRACE_LOG"
+echo
+echo " CAN frame log:"
+echo "   $CAN_FRAME_LOG"
+echo " CAN metrics log:"
+echo "   $CAN_METRICS_LOG"
+echo " CAN monitor console log:"
+echo "   $CAN_MONITOR_LOG"
 echo
 echo " Full runtime logs:"
 echo "   $LOG_DIR"
