@@ -171,7 +171,7 @@ typedef struct
 
     bool motionPermitted;
     bool drivesReady;
-    bool ethercatHealthy;
+    bool communicationHealthy;
 
     uint32_t timestampMs;
 
