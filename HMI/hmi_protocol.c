@@ -431,11 +431,11 @@ void hmi_protocol_poll_status(
                 );
         }
 
-        status->wkc =
-            ntohl(packet[HMI_STATUS_WORD_WKC]);
+        status->can_ready_nodes =
+            ntohl(packet[HMI_STATUS_WORD_CAN_READY_NODES]);
 
-        status->expected_wkc =
-            ntohl(packet[HMI_STATUS_WORD_EXPECTED_WKC]);
+        status->can_expected_nodes =
+            ntohl(packet[HMI_STATUS_WORD_CAN_EXPECTED_NODES]);
 
         status->recorded_count =
             ntohl(packet[HMI_STATUS_WORD_RECORDED_COUNT]);
