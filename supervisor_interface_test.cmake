@@ -23,11 +23,7 @@ add_executable(supervisor_interface_test
     ${CMAKE_SOURCE_DIR}/StateMachine/States/state_paused.c
     ${CMAKE_SOURCE_DIR}/StateMachine/States/state_fault.c
     ${CMAKE_SOURCE_DIR}/StateMachine/States/state_emergency_stop.c
-    ${CMAKE_SOURCE_DIR}/EtherCATComm/ethercat_master.c
-    ${CMAKE_SOURCE_DIR}/EtherCATComm/SOEM/soem_backend.c
     ${CMAKE_SOURCE_DIR}/ServoDrive/CiA402/cia402.c
-    ${CMAKE_SOURCE_DIR}/ServoDrive/A6EC/a6ec_pdo.c
-    ${CMAKE_SOURCE_DIR}/ServoDrive/A6EC/a6ec_drive.c
 )
 target_compile_features(supervisor_interface_test PRIVATE c_std_11)
 target_compile_options(supervisor_interface_test PRIVATE
@@ -35,15 +31,12 @@ target_compile_options(supervisor_interface_test PRIVATE
 target_include_directories(supervisor_interface_test PRIVATE
     ${CMAKE_SOURCE_DIR}/StateMachine
     ${CMAKE_SOURCE_DIR}/StateMachine/States
-    ${CMAKE_SOURCE_DIR}/EtherCATComm
-    ${CMAKE_SOURCE_DIR}/EtherCATComm/SOEM
     ${CMAKE_SOURCE_DIR}/CANComm
     ${CMAKE_SOURCE_DIR}/CANComm/CANopen
     ${CMAKE_SOURCE_DIR}/ServoDrive/CiA402
-    ${CMAKE_SOURCE_DIR}/ServoDrive/A6EC
     ${CMAKE_SOURCE_DIR}/ServoDrive/AvatarM)
 target_link_libraries(supervisor_interface_test PRIVATE
-    freertos_kernel freertos_config control_core soem pthread m)
+    freertos_kernel freertos_config control_core pthread m)
 enable_testing()
 add_test(NAME supervisor_interface_test COMMAND supervisor_interface_test)
 set_tests_properties(supervisor_interface_test PROPERTIES TIMEOUT 15)
