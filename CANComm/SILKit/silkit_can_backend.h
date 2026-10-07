@@ -38,6 +38,16 @@ bool silkit_can_backend_create(
     const SilKitCanBackendConfig *config
 );
 
+/*
+ * Wait until SIL Kit has called CommunicationReady and the CAN controller
+ * has been started. This is required before the CANopen Supervisor begins
+ * BOOT traffic.
+ */
+bool silkit_can_backend_wait_ready(
+    CanBackend *backend,
+    uint32_t timeout_ms
+);
+
 #ifdef __cplusplus
 }
 #endif
