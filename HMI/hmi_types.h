@@ -62,8 +62,8 @@ typedef struct
     float actual_tcp_m[3];
     float actual_joint_rad[HMI_NUM_JOINTS];
 
-    uint32_t wkc;
-    uint32_t expected_wkc;
+    uint32_t can_ready_nodes;
+    uint32_t can_expected_nodes;
 
     uint32_t recorded_count;
     float recorded_tcp_m[HMI_MAX_RECORDED_POINTS][3];
