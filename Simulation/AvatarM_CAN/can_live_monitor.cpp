@@ -513,6 +513,17 @@ std::string fixed(double value, int decimals)
     return out.str();
 }
 
+uint64_t steady_now_ns()
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<
+            std::chrono::nanoseconds
+        >(
+            Clock::now().time_since_epoch()
+        ).count()
+    );
+}
+
 } /* namespace */
 
 
@@ -553,6 +564,9 @@ int main()
         metrics_log_path =
             "can-metrics.csv";
     }
+
+    const uint64_t started_ns =
+        steady_now_ns();
 
     CanBackend backend{};
 
@@ -615,7 +629,8 @@ int main()
     metrics_log
         << "time_ms,frames_per_s,nominal_load_pct,worst_case_load_pct,"
         << "sync_period_ms,sync_jitter_ms,sync_jitter_max_ms,missed_sync_cycles,"
-        << "rpdo4_per_s,tpdo4_per_s,avg_rpdo_to_tpdo_ms,max_rpdo_to_tpdo_ms\n";
+        << "rpdo4_per_s,tpdo4_per_s,observed_cycle_hz,"
+        << "avg_rpdo_to_tpdo_ms,max_rpdo_to_tpdo_ms\n";
 
     SetConfigFlags(
         FLAG_WINDOW_RESIZABLE |
@@ -629,9 +644,6 @@ int main()
     );
 
     SetTargetFPS(60);
-
-    const auto started =
-        Clock::now();
 
     uint64_t last_frame_us = 0U;
     uint64_t last_metrics_log_us = 0U;
@@ -669,15 +681,13 @@ int main()
 
     while (!WindowShouldClose())
     {
-        const auto now_clock =
-            Clock::now();
+        const uint64_t now_ns =
+            steady_now_ns();
 
         const uint64_t now_us =
-            static_cast<uint64_t>(
-                std::chrono::duration_cast<
-                    std::chrono::microseconds
-                >(now_clock - started).count()
-            );
+            now_ns >= started_ns
+                ? (now_ns - started_ns) / 1000U
+                : 0U;
 
         unsigned drained = 0U;
 
@@ -685,35 +695,20 @@ int main()
         {
             CanFrame frame{};
 
-            const CanBackendResult result =
-                can_backend_receive(
+            uint64_t rx_time_ns = 0U;
+
+            if (!silkit_can_backend_receive_timestamped(
                     &backend,
-                    &frame
-                );
-
-            if (result == CAN_BACKEND_WOULD_BLOCK)
+                    &frame,
+                    &rx_time_ns))
             {
                 break;
             }
-
-            if (result != CAN_BACKEND_OK)
-            {
-                std::fprintf(
-                    stderr,
-                    "[CAN MONITOR] receive error\n"
-                );
-                break;
-            }
-
-            const auto frame_clock =
-                Clock::now();
 
             const uint64_t frame_us =
-                static_cast<uint64_t>(
-                    std::chrono::duration_cast<
-                        std::chrono::microseconds
-                    >(frame_clock - started).count()
-                );
+                rx_time_ns >= started_ns
+                    ? (rx_time_ns - started_ns) / 1000U
+                    : 0U;
 
             const uint64_t delta_us =
                 last_frame_us == 0U
@@ -872,6 +867,12 @@ int main()
             previous_window_sample_us = now_us;
         }
 
+        const double observed_cycle_hz =
+            rpdo_per_s /
+            static_cast<double>(
+                kNodeCount
+            );
+
         const double latency_avg =
             latency_count == 0U
                 ? 0.0
@@ -896,6 +897,7 @@ int main()
                 << stats.missed_sync_cycles << ','
                 << rpdo_per_s << ','
                 << tpdo_per_s << ','
+                << observed_cycle_hz << ','
                 << latency_avg << ','
                 << latency_max
                 << '\n';
@@ -913,7 +915,7 @@ int main()
             std::printf(
                 "[CAN MON] fps=%.0f load=%.1f%% nominal / %.1f%% stuffed "
                 "SYNC=%.3f ms jitter=%.3f ms missed=%llu "
-                "RPDO4=%.0f/s TPDO4=%.0f/s latency=%.3f ms avg\n",
+                "RPDO4=%.0f/s TPDO4=%.0f/s cycle=%.1f Hz latency=%.3f ms avg\n",
                 frames_per_s,
                 nominal_load_pct,
                 worst_load_pct,
@@ -924,6 +926,7 @@ int main()
                 ),
                 rpdo_per_s,
                 tpdo_per_s,
+                observed_cycle_hz,
                 latency_avg
             );
 
@@ -964,8 +967,11 @@ int main()
             20,
             82,
             metric_width,
-            "Observed frames / s",
-            fixed(frames_per_s, 0),
+            "Frames / s | cyclic rate",
+            fixed(frames_per_s, 0) +
+                " | " +
+                fixed(observed_cycle_hz, 0) +
+                " Hz",
             text_color()
         );
 
@@ -987,7 +993,7 @@ int main()
             20 + 2 * (metric_width + gap),
             82,
             metric_width,
-            "SYNC period / jitter",
+            "Observed SYNC / jitter",
             fixed(
                 stats.sync_period_latest_ms,
                 3
@@ -1007,7 +1013,7 @@ int main()
             20 + 3 * (metric_width + gap),
             82,
             metric_width,
-            "Observed RPDO->TPDO",
+            "Observer RPDO->TPDO",
             fixed(latency_avg, 3) +
                 " ms avg",
             text_color()
@@ -1268,7 +1274,7 @@ int main()
         }
 
         const std::string footer =
-            "SYNC missed (within active bursts): " +
+            "2 ms target misses (active bursts): " +
             std::to_string(
                 stats.missed_sync_cycles
             ) +
@@ -1286,7 +1292,7 @@ int main()
         );
 
         DrawText(
-            "Load is estimated from observed frame sizes; this SIL Kit setup is not a physical CAN arbitration/bit-timing model.",
+            "Timing is observer callback timing; load is an estimate. SIL Kit here is not a physical CAN arbitration/bit-timing model.",
             20,
             GetScreenHeight() - 22,
             12,
