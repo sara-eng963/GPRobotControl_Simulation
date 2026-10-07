@@ -106,6 +106,38 @@ rejections, E-stop state, wire feed, faults and teaching speed are written as
 Use `--no-build` to reuse an existing build or `--no-gui` to start only
 the CAN/controller processes.
 
+## Live CANopen dashboard and logs
+
+The full launcher also starts `can_live_monitor`, a passive SIL Kit participant
+on `CAN1`. It does not command the robot; it only observes CAN traffic.
+
+The dashboard shows:
+
+- recent CAN frames with COB-ID, type, node, DLC and decoded values,
+- RPDO4 and TPDO4 activity for all six AVATAR nodes,
+- observed RPDO4-to-TPDO4 response latency,
+- SYNC period and jitter relative to the 2 ms target,
+- missed SYNC estimates within active cyclic bursts,
+- observed frames per second,
+- estimated Classical CAN wire load.
+
+The bus-load figures are estimates derived from observed 11-bit Classical CAN
+frame sizes. The dashboard shows both unstuffed nominal load and a conservative
+bit-stuffing estimate. This SIL Kit setup is a protocol/network integration
+simulation, not a physical CAN arbitration/bit-timing model.
+
+The launcher writes:
+
+```
+.simulation-logs/can-frames.csv
+.simulation-logs/can-metrics.csv
+.simulation-logs/can-monitor.log
+```
+
+`can-frames.csv` contains every observed CAN frame. `can-metrics.csv`
+contains time-series communication metrics suitable for later MATLAB or Python
+plots.
+
 ## Automated integration test
 
 When configured with `ENABLE_SILKIT=ON`, CTest registers:
