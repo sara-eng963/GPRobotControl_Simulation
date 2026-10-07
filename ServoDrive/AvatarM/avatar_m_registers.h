@@ -18,6 +18,11 @@
  * authoritative numeric definitions.
  */
 
+/* AVATAR identity values documented in the manufacturer CANopen manual. */
+#define AVATAR_M_EXPECTED_VENDOR_ID             0x00000331UL
+#define AVATAR_M_EXPECTED_PRODUCT_CODE          0x00000001UL
+#define AVATAR_M_EXPECTED_VERSION               0x00000100UL
+
 /* Standard CANopen communication-profile objects used by AVATAR M. */
 #define AVATAR_M_OD_DEVICE_TYPE                 CANOPEN_OD_DEVICE_TYPE
 #define AVATAR_M_OD_SYNC_COB_ID                 CANOPEN_OD_SYNC_COB_ID
