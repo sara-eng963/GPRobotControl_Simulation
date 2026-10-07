@@ -69,6 +69,9 @@ typedef struct
     uint32_t last_heartbeat_ms[CANOPEN_MASTER_MAX_NODES];
     bool heartbeat_timestamp_valid[CANOPEN_MASTER_MAX_NODES];
 
+    /* Monotonic per-node TPDO4 receive counters for cyclic freshness checks. */
+    uint32_t tpdo_rx_count[CANOPEN_MASTER_MAX_NODES];
+
     CanopenMasterSdoTransaction sdo;
 
     bool initialized;
@@ -85,6 +88,15 @@ bool canopen_master_init(
 );
 
 void canopen_master_close(
+    CanopenMaster *master
+);
+
+/*
+ * Clear feedback/heartbeat/SDO runtime state while preserving the configured
+ * backend and node IDs. Used when BOOT deliberately restarts the CANopen
+ * network with NMT Reset Communication.
+ */
+void canopen_master_clear_runtime(
     CanopenMaster *master
 );
 
@@ -127,6 +139,11 @@ bool canopen_master_send_target_cycle(
 );
 
 const AvatarMDrive *canopen_master_drive(
+    const CanopenMaster *master,
+    size_t node_index
+);
+
+uint32_t canopen_master_tpdo_rx_count(
     const CanopenMaster *master,
     size_t node_index
 );
@@ -188,6 +205,20 @@ bool canopen_master_begin_set_interpolation_mode(
 bool canopen_master_begin_read_work_mode(
     CanopenMaster *master,
     size_t node_index,
+    uint32_t now_ms
+);
+
+bool canopen_master_begin_read_mode_display(
+    CanopenMaster *master,
+    size_t node_index,
+    uint32_t now_ms
+);
+
+/* Read AVATAR identity record 0x1018 sub-index 1..4. */
+bool canopen_master_begin_read_identity(
+    CanopenMaster *master,
+    size_t node_index,
+    uint8_t subindex,
     uint32_t now_ms
 );
 
