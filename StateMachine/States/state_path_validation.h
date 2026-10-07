@@ -9,6 +9,7 @@
 #include "../../ControlCore/Kinematics/adls_ik.h"
 #include "../../ControlCore/Pipeline/single_segment_line_stream.h"
 #include "../../ControlCore/Pipeline/single_segment_circular_stream.h"
+#include "../../ServoDrive/AvatarM/avatar_m_position.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -19,8 +20,8 @@ extern "C" {
 #endif
 
 #define PATH_VALIDATION_DOF               ROBOT_DOF
-#define PATH_VALIDATION_SAMPLE_PERIOD_US  (1000UL)
-#define PATH_VALIDATION_SAMPLE_PERIOD_S   (0.001)
+#define PATH_VALIDATION_SAMPLE_PERIOD_US  (2000UL)
+#define PATH_VALIDATION_SAMPLE_PERIOD_S   (0.002)
 
 /* ============================================================================
  * PATH VALIDATION STATE / RESULT
@@ -92,8 +93,9 @@ typedef enum
  * VALIDATED EXECUTION ARTIFACT
  * ============================================================================
  *
- * One sample = one future 1 ms CSP Target Position command for all six axes.
- * The sample carries no timestamp because time is sample_index * 1 ms.
+ * One sample = one future 2 ms AVATAR RPDO4 Target Position command
+ * for all six axes. The sample carries no timestamp because time is
+ * sample_index * 2 ms.
  */
 
 typedef struct
@@ -320,6 +322,7 @@ typedef struct
     bool storage_open;
 
     const RobotConfig *robot;
+    const AvatarMPositionScale *position_scales;
     const TaughtProgram *source_program;
 
     uint32_t expected_revision;
@@ -367,14 +370,16 @@ typedef struct
 /*
  * Enter PATH VALIDATION with the immutable draft submitted by Teaching.
  *
- * The state does not read live EtherCAT feedback and does not command drives.
+ * The state does not read live CAN feedback and does not command drives.
  * It uses ControlCore to generate motion, validates the generated commands,
- * converts accepted joint values to the existing A6-EC CSP position units,
- * then writes the immutable artifact through PathValidationStorage.
+ * converts accepted joint values to AVATAR raw position units using the
+ * commissioned per-axis scales, then writes the immutable artifact through
+ * PathValidationStorage.
  */
 void state_path_validation_enter(
     PathValidationState *state,
     const RobotConfig *robot,
+    const AvatarMPositionScale position_scales[PATH_VALIDATION_DOF],
     const PathValidationConfig *config,
     const PathValidationServices *services,
     PathValidationWorkspace *workspace,
