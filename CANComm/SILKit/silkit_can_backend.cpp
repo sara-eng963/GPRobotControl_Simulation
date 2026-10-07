@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <deque>
 #include <future>
+#include <chrono>
+#include <thread>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -357,4 +359,42 @@ bool silkit_can_backend_create(
 
         return false;
     }
+}
+
+extern "C"
+bool silkit_can_backend_wait_ready(
+    CanBackend *backend,
+    uint32_t timeout_ms
+)
+{
+    if (
+        backend == nullptr ||
+        backend->context == nullptr
+    )
+    {
+        return false;
+    }
+
+    auto *context =
+        static_cast<SilKitCanContext *>(backend->context);
+
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(timeout_ms);
+
+    while (
+        std::chrono::steady_clock::now() < deadline
+    )
+    {
+        if (context->ready.load())
+        {
+            return true;
+        }
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(1)
+        );
+    }
+
+    return context->ready.load();
 }
