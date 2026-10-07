@@ -4,9 +4,6 @@
 #include "../../ControlCore/Math/control_types.h"
 #include "../../ControlCore/Math/math3d.h"
 
-#include "../../EtherCATComm/ethercat_master.h"
-
-#include "../../ServoDrive/A6EC/a6ec_drive.h"
 #include "../../ServoDrive/CiA402/cia402.h"
 
 #include <math.h>
@@ -357,7 +354,8 @@ static bool config_is_valid(
  * We only replace the old external "someone fills TeachingInputs" boundary
  * with our existing robot interfaces:
  *
- *      A6-EC feedback
+ *      AVATAR TPDO4 feedback
+ *      AVATAR position conversion
  *      CiA-402
  *      ControlCore FK
  */
@@ -365,30 +363,35 @@ static bool config_is_valid(
 static bool build_teaching_inputs(
     const RobotConfig *robot,
     const TeachingRuntimeInputs *runtime,
+    CanopenMaster *master,
+    const AvatarMPositionScale position_scales[ROBOT_DOF],
+    uint32_t now_ms,
     TeachingInputs *inputs
 )
 {
     if (
         robot == NULL ||
         runtime == NULL ||
-        inputs == NULL
+        master == NULL ||
+        position_scales == NULL ||
+        inputs == NULL ||
+        !master->initialized ||
+        master->node_count != ROBOT_DOF
     )
     {
         return false;
     }
 
+    if (!canopen_master_poll(master, now_ms))
+    {
+        return false;
+    }
 
     memset(
         inputs,
         0,
         sizeof(*inputs)
     );
-
-
-    /* ------------------------------------------------------------------------
-     * SUPERVISORY VALUES
-     * ------------------------------------------------------------------------
-     */
 
     inputs->timestamp_ms =
         runtime->timestamp_ms;
@@ -423,18 +426,14 @@ static bool build_teaching_inputs(
     inputs->robot_homed =
         runtime->robot_homed;
 
-
-    /* ------------------------------------------------------------------------
-     * A6-EC JOINT FEEDBACK + CiA-402 DRIVE READINESS
-     * ------------------------------------------------------------------------
+    /*
+     * TEACHING is a measurement/recording state. Motion belongs to the
+     * manual-guidance/admittance controller, so this state only consumes
+     * the latest AVATAR feedback already present in the shared master.
      */
-
-    inputs->measurement_valid =
-        true;
-
+    inputs->measurement_valid = true;
     inputs->drives_ready =
-        true;
-
+        canopen_master_healthy(master, now_ms);
 
     double q[ROBOT_DOF] =
     {
@@ -442,79 +441,50 @@ static bool build_teaching_inputs(
         0.0, 0.0, 0.0
     };
 
-
-    for (
-        int slave = 1;
-        slave <= ROBOT_DOF;
-        ++slave
-    )
+    for (size_t axis = 0U; axis < ROBOT_DOF; ++axis)
     {
-        /*
-         * If no mapped input PDO exists, the measurement is not valid.
-         */
+        const AvatarMDrive *drive =
+            canopen_master_drive(master, axis);
+
         if (
-            ethercat_master_slave_inputs(
-                slave
-            ) == NULL
+            drive == NULL ||
+            !drive->feedback_valid ||
+            !avatar_m_position_scale_valid(
+                &position_scales[axis])
         )
         {
-            inputs->measurement_valid =
-                false;
-
-            inputs->drives_ready =
-                false;
-
+            inputs->measurement_valid = false;
+            inputs->drives_ready = false;
             continue;
         }
 
+        double joint_rad = 0.0;
 
-        A6ECPDOFeedback feedback =
+        if (!avatar_m_position_units_to_joint_rad(
+                &position_scales[axis],
+                drive->feedback.actual_position,
+                &joint_rad))
         {
-            0
-        };
-
-
-        a6ec_read_feedback(
-            slave,
-            &feedback
-        );
-
-
-        const double jointRad =
-            a6ec_position_units_to_joint_rad(
-                feedback.actualPosition
-            );
-
-
-        q[slave - 1] =
-            jointRad;
-
-        inputs->actual_joint_position_rad[
-            slave - 1
-        ] =
-            (float)jointRad;
-
-
-        if (!isfinite(jointRad))
-        {
-            inputs->measurement_valid =
-                false;
+            inputs->measurement_valid = false;
+            continue;
         }
 
+        q[axis] = joint_rad;
 
-        const uint16_t driveState =
-            cia402_get_state(
-                feedback.statusword
-            );
+        inputs->actual_joint_position_rad[axis] =
+            (float)joint_rad;
 
+        if (!isfinite(joint_rad))
+        {
+            inputs->measurement_valid = false;
+        }
 
         if (
-            driveState !=
+            drive->cia402_state !=
             CIA402_STATE_OPERATION_ENABLED
         )
         {
-            inputs->drives_ready =
-                false;
+            inputs->drives_ready = false;
         }
     }
 
@@ -1554,6 +1524,9 @@ StateStepResult state_teaching_step(
     TeachingState *state,
     const RobotConfig *robot,
     const TeachingRuntimeInputs *runtime,
+    CanopenMaster *master,
+    const AvatarMPositionScale position_scales[ROBOT_DOF],
+    uint32_t now_ms,
     TeachingEvent event,
     TeachingOutputs *outputs
 )
@@ -1562,6 +1535,8 @@ StateStepResult state_teaching_step(
         state == NULL ||
         robot == NULL ||
         runtime == NULL ||
+        master == NULL ||
+        position_scales == NULL ||
         outputs == NULL
     )
     {
@@ -1584,6 +1559,9 @@ StateStepResult state_teaching_step(
         !build_teaching_inputs(
             robot,
             runtime,
+            master,
+            position_scales,
+            now_ms,
             &inputs
         )
     )
