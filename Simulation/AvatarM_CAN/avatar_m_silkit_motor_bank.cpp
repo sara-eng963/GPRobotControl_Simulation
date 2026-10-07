@@ -266,6 +266,7 @@ int main()
         kNetworkName,
         kBitrate
     );
+    std::fflush(stdout);
 
     auto previous =
         std::chrono::steady_clock::now();
