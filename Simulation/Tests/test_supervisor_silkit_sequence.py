@@ -217,16 +217,27 @@ try:
 
     xyz[0] += 0.01
 
-    send(
-        0x80000001,
-        *xyz,
-    )
+    guidance_deadline = time.time() + 10.0
 
-    words = wait_for(
-        lambda w:
-            abs(as_float(w[34]) - xyz[0]) < 0.0003,
-        10,
-    )
+    while True:
+        send(
+            0x80000001,
+            *xyz,
+        )
+
+        try:
+            words = wait_for(
+                lambda w:
+                    abs(as_float(w[34]) - xyz[0]) < 0.0003,
+                0.25,
+            )
+            break
+        except RuntimeError:
+            if time.time() >= guidance_deadline:
+                raise
+            # Re-send the same teaching request so TPDO4 feedback continues
+            # to update while the virtual actuator follower converges.
+
     print("GUIDED", flush=True)
 
     send(4)
