@@ -180,6 +180,8 @@ static void enter_active_state(SupervisorTaskContext *context)
             state_approach_enter(
                 &context->approach,
                 context->config.robot,
+                context->config.canopen_master,
+                context->config.avatar_position_scales,
                 &request,
                 context->config.approach_config,
                 context->config.approach_services
@@ -530,6 +532,7 @@ static void run_active_state(SupervisorTaskContext *context)
             step = state_approach_step(
                 &context->approach,
                 &context->approach_control,
+                supervisor_now_ms(),
                 &context->approach_outputs
             );
 
