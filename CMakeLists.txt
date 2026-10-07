@@ -571,6 +571,64 @@ target_link_libraries(
 )
 
 # ============================================================================
+# APPROACH STATE TEST - CANOPEN / AVATAR
+# ============================================================================
+
+add_executable(
+    approach_test
+
+    StateMachine/Tests/test_approach.c
+
+    StateMachine/States/state_boot.c
+    StateMachine/States/state_approach.c
+
+    Simulation/AvatarM_CAN_GUI/sim_can_bus.c
+
+    CANComm/CANopen/canopen_master.c
+    CANComm/CANopen/canopen_nmt.c
+    CANComm/CANopen/canopen_sdo.c
+    CANComm/CANopen/canopen_heartbeat.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/AvatarM/avatar_m_pdo.c
+    ServoDrive/AvatarM/avatar_m_drive.c
+    ServoDrive/AvatarM/avatar_m_position.c
+    ServoDrive/AvatarM/Sim/avatar_m_node_sim.c
+)
+
+target_compile_features(
+    approach_test
+    PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    approach_test
+    PRIVATE
+
+    StateMachine
+    StateMachine/States
+
+    CANComm
+    CANComm/CANopen
+
+    ServoDrive/CiA402
+    ServoDrive/AvatarM
+    ServoDrive/AvatarM/Sim
+
+    Simulation/AvatarM_CAN_GUI
+)
+
+target_link_libraries(
+    approach_test
+    PRIVATE
+
+    control_core
+    m
+)
+
+# ============================================================================
 # GLOBAL STATE MACHINE UNIT TEST
 # ============================================================================
 
