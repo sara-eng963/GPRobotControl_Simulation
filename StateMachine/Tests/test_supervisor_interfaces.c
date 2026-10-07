@@ -1,5 +1,5 @@
 /* PC-only integration test: real FreeRTOS queue and scheduler, mock board I/O.
- * This does not test physical stopping, CAN, EtherCAT, or 1 ms deadlines.
+ * This does not test physical stopping, a physical CAN bus, or hard real-time deadlines.
  * Zero-valued motion configurations are placeholders and are never executed:
  * an E-stop is queued before the supervisor gets its first scheduler turn.
  */
