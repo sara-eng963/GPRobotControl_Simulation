@@ -981,6 +981,7 @@ static bool configure_silkit_can(void)
         "[SILKIT] Controller connected: %s, CAN1 @ 1 Mbit/s\n",
         registry_uri
     );
+    fflush(stdout);
 
     return canopen_master_init(
         &can_boot_master,
