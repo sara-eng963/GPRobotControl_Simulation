@@ -12,6 +12,7 @@ add_executable(supervisor_interface_test
     ${CMAKE_SOURCE_DIR}/CANComm/CANopen/canopen_heartbeat.c
     ${CMAKE_SOURCE_DIR}/ServoDrive/AvatarM/avatar_m_pdo.c
     ${CMAKE_SOURCE_DIR}/ServoDrive/AvatarM/avatar_m_drive.c
+    ${CMAKE_SOURCE_DIR}/ServoDrive/AvatarM/avatar_m_position.c
 
     ${CMAKE_SOURCE_DIR}/StateMachine/States/state_homing.c
     ${CMAKE_SOURCE_DIR}/StateMachine/States/state_idle.c

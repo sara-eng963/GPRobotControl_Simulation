@@ -55,6 +55,7 @@ typedef struct
      * The platform creates and initializes this before SupervisorTask starts.
      */
     CanopenMaster *canopen_master;
+    const AvatarMPositionScale *avatar_position_scales;
 
     const RobotConfig *robot;
     const HomingConfig *homing_config;

@@ -132,6 +132,7 @@ int main(void)
     check(!supervisor_task_post_hmi(SUP_HMI_LINE, 0), "Posting before queue creation fails");
 
     static CanopenMaster canopen_master;
+    static AvatarMPositionScale position_scales[ROBOT_DOF];
     static RobotConfig robot;
     static HomingConfig homing;
     static TeachingConfig teaching;
@@ -149,6 +150,7 @@ int main(void)
     SupervisorTaskConfig config = {0};
     check(!supervisor_task_init(&config), "Missing required configuration is rejected");
     config.canopen_master = &canopen_master;
+    config.avatar_position_scales = position_scales;
     config.robot = &robot;
     config.homing_config = &homing;
     config.teaching_config = &teaching;

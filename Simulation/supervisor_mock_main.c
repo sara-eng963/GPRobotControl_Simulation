@@ -7,6 +7,7 @@
 #include "../EtherCATComm/ethercat_master.h"
 #include "../ServoDrive/A6EC/a6ec_drive.h"
 #include "../ServoDrive/CiA402/cia402.h"
+#include "../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../ControlCore/Kinematics/control_fk.h"
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -38,6 +39,7 @@ static EtherCATMasterConfig ethercat_config;
 static AvatarMSimBus can_boot_bus;
 static CanBackend can_boot_backend;
 static CanopenMaster can_boot_master;
+static AvatarMPositionScale avatar_position_scales[SIM_NUM_AXES];
 
 static HomingConfig homing_config;
 static TeachingConfig teaching_config;
@@ -261,11 +263,22 @@ static void configure_state_dependencies(void)
         (HomingConfig)
         {
             .duration = 5.0,
-            .dt = 0.001,
+            .dt = 0.002,
             .positionTolerance = DEG2RAD(0.5),
             .requiredStableCycles = 20U,
             .maxVerificationCycles = 2000U
         };
+
+    for (int i = 0; i < SIM_NUM_AXES; ++i)
+    {
+        if (!avatar_m_position_scale_default(
+                &avatar_position_scales[i],
+                50.0))
+        {
+            fprintf(stderr, "Invalid AVATAR simulation position scale.\n");
+            exit(1);
+        }
+    }
 
     teaching_config =
         (TeachingConfig)
@@ -440,7 +453,17 @@ static bool off(void *ctx) { return relay(false,ctx); }
 static bool safe(void *ctx) { mock_backend_hold();return off(ctx); }
 static bool hold(bool *stopped,void *ctx) { safe(ctx);*stopped=true;return true; }
 static bool retract_prepare(void *ctx) { (void)ctx;state_homing_enter(&retraction);return true; }
-static StateStepResult retract_step(void *ctx) { (void)ctx;return state_homing_step(&retraction,&homing_config,&robot); }
+static StateStepResult retract_step(void *ctx) {
+    (void)ctx;
+    return state_homing_step(
+        &retraction,
+        &homing_config,
+        &robot,
+        &can_boot_master,
+        avatar_position_scales,
+        (uint32_t)(xTaskGetTickCount()*1000/configTICK_RATE_HZ)
+    );
+}
 static bool clearance(void *ctx) {
     (void)ctx;
     for(int i=0;i<6;i++)if(fabs(mock_backend_get_joint(i)-robot.configuration.home[i])>homing_config.positionTolerance)return false;
@@ -702,11 +725,34 @@ static bool configure_can_boot_sim(void)
             CIA402_STATE_SWITCH_ON_DISABLED
         );
 
+        const double initial_joint =
+            robot.configuration.home[i] +
+            DEG2RAD(5.0);
+
+        int32_t initial_position = 0;
+
+        if (!avatar_m_joint_rad_to_position_units(
+                &avatar_position_scales[i],
+                initial_joint,
+                &initial_position))
+        {
+            return false;
+        }
+
         avatar_m_node_set_actual_position(
             &can_boot_bus.nodes[i],
-            (int32_t)((i + 1U) * 1000U)
+            initial_position
         );
     }
+
+    avatar_sim_bus_set_demo_rate(
+        &can_boot_bus,
+        1000000.0
+    );
+    avatar_sim_bus_set_demo_motion(
+        &can_boot_bus,
+        true
+    );
 
     const CanopenMasterConfig config =
     {
@@ -737,7 +783,7 @@ static bool start_system(void)
     execution_services=(PathExecutionServices){approach_read_validated_sample,targets,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
     paused_services=(PausedServices){hold,off,NULL};fault_services=(FaultServices){safe,NULL};emergency_services=(EmergencyStopServices){safe,NULL};
     SupervisorTaskConfig c={0};
-    c.canopen_master=&can_boot_master;c.robot=&robot;c.homing_config=&homing_config;c.teaching_config=&teaching_config;
+    c.canopen_master=&can_boot_master;c.avatar_position_scales=avatar_position_scales;c.robot=&robot;c.homing_config=&homing_config;c.teaching_config=&teaching_config;
     c.validation_config=&path_validation_config;c.validation_services=&path_validation_services;
     c.validation_workspace=&path_validation_workspace;c.validation_storage=&path_validation_storage;c.validated_trajectory=&validated_trajectory;
     c.approach_config=&approach_config;c.approach_services=&approach_services;

@@ -449,7 +449,10 @@ static void run_active_state(SupervisorTaskContext *context)
             step = state_homing_step(
                 &context->homing,
                 context->config.homing_config,
-                context->config.robot
+                context->config.robot,
+                context->config.canopen_master,
+                context->config.avatar_position_scales,
+                supervisor_now_ms()
             );
             if (step == STATE_STEP_FAILED)
                 emit_step_failure(context, (uint32_t)context->homing.error);
@@ -718,6 +721,7 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
 {
     if ((config == NULL) ||
         (config->canopen_master == NULL) ||
+        (config->avatar_position_scales == NULL) ||
         (config->robot == NULL) ||
         (config->homing_config == NULL) ||
         (config->teaching_config == NULL) ||
