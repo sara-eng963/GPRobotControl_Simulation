@@ -85,6 +85,7 @@ mkdir -p "$LOG_DIR"
 REGISTRY_LOG="$LOG_DIR/silkit-registry.log"
 MOTOR_LOG="$LOG_DIR/avatar-m-motors.log"
 SUPERVISOR_LOG="$LOG_DIR/supervisor.log"
+EVENT_LOG="$LOG_DIR/operator-events.txt"
 PANEL_LOG="$LOG_DIR/supervisor-panel.log"
 TEACH_LOG="$LOG_DIR/teaching-sim.log"
 
@@ -202,7 +203,11 @@ PIDS+=("$MOTOR_PID")
 
 wait_for_log     "$MOTOR_LOG"     "AVATAR SIL Kit motor bank ready."     10     "$MOTOR_PID"     "AVATAR motor bank"
 
-SILKIT_REGISTRY_URI="$REGISTRY_URI" MATLAB_IP="$MATLAB_IP"     "$SUPERVISOR_BIN"     >"$SUPERVISOR_LOG" 2>&1 &
+SILKIT_REGISTRY_URI="$REGISTRY_URI" \
+MATLAB_IP="$MATLAB_IP" \
+SIM_EVENT_LOG="$EVENT_LOG" \
+    "$SUPERVISOR_BIN" \
+    >"$SUPERVISOR_LOG" 2>&1 &
 SUPERVISOR_PID=$!
 PIDS+=("$SUPERVISOR_PID")
 
@@ -249,7 +254,10 @@ echo " MATLAB:"
 echo "   Keep MATLAB/can_robot_visualizer.m running on Windows."
 echo "   Telemetry destination: $MATLAB_IP:5005"
 echo
-echo " Logs:"
+echo " Operator event log:"
+echo "   $EVENT_LOG"
+echo
+echo " Full runtime logs:"
 echo "   $LOG_DIR"
 echo
 echo " Press Ctrl-C here to stop the complete simulation."
