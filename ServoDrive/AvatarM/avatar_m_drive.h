@@ -75,8 +75,14 @@ bool avatar_m_drive_build_set_interpolation_mode(
     CanFrame *frame
 );
 
-/* Read back 0x6060:00 (work/mode selection object). */
+/* Read back 0x6060:00 (requested work/mode selection object). */
 bool avatar_m_drive_build_read_work_mode(
+    const AvatarMDrive *drive,
+    CanFrame *frame
+);
+
+/* Read 0x6061:00, the CiA-402 active Modes of Operation Display. */
+bool avatar_m_drive_build_read_mode_display(
     const AvatarMDrive *drive,
     CanFrame *frame
 );
