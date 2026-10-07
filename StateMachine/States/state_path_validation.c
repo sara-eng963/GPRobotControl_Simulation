@@ -2,7 +2,7 @@
 
 #include "../../ControlCore/Kinematics/control_fk.h"
 #include "../../ControlCore/Math/math3d.h"
-#include "../../ServoDrive/A6EC/a6ec_drive.h"
+#include "../../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../../ControlCore/Analysis/singularity.h"
 #include "../../ControlCore/Kinematics/control_jacobian.h"
 
@@ -393,6 +393,7 @@ static JointVector taught_joints_to_joint_vector(
 
 static bool config_and_dependencies_valid(
     const RobotConfig *robot,
+    const AvatarMPositionScale position_scales[PATH_VALIDATION_DOF],
     const PathValidationConfig *config,
     const PathValidationServices *services,
     const PathValidationWorkspace *workspace,
@@ -403,6 +404,7 @@ static bool config_and_dependencies_valid(
 {
     if (
         robot == NULL ||
+        position_scales == NULL ||
         config == NULL ||
         workspace == NULL ||
         storage == NULL ||
@@ -480,6 +482,11 @@ static bool config_and_dependencies_valid(
 
     for (uint8_t j = 0U; j < PATH_VALIDATION_DOF; ++j)
     {
+        if (!avatar_m_position_scale_valid(&position_scales[j]))
+        {
+            return false;
+        }
+
         if (
             !isfinite(robot->limits.qMin[j]) ||
             !isfinite(robot->limits.qMax[j]) ||
@@ -710,7 +717,7 @@ static bool prepare_segment(
         /*
          * The first sample of every later segment is the previous segment's
          * endpoint. The teammate validator intentionally skipped it so the
-         * stored artifact stays on one global 1 ms time grid without a
+         * stored artifact stays on one global 2 ms time grid without a
          * duplicated zero-dt boundary sample.
          *
          * The stream structure is public and incremental, so advancing the
@@ -1037,15 +1044,29 @@ static bool validate_and_store_sample(
             return false;
         }
 
-        const int32_t units =
-            a6ec_joint_rad_to_position_units(
-                generated->q.q[j]
-            );
+        int32_t units = 0;
+        double represented_q_double = 0.0;
+
+        if (
+            !avatar_m_joint_rad_to_position_units(
+                &state->position_scales[j],
+                generated->q.q[j],
+                &units
+            ) ||
+            !avatar_m_position_units_to_joint_rad(
+                &state->position_scales[j],
+                units,
+                &represented_q_double
+            )
+        )
+        {
+            state->report.failed_joint = j;
+            set_error(state, PV_ERR_POSITION_CONVERSION);
+            return false;
+        }
 
         const real_t represented_q =
-            (real_t)a6ec_position_units_to_joint_rad(
-                units
-            );
+            (real_t)represented_q_double;
 
         if (
             !finite_real(represented_q) ||
@@ -1410,6 +1431,7 @@ if (
 void state_path_validation_enter(
     PathValidationState *state,
     const RobotConfig *robot,
+    const AvatarMPositionScale position_scales[PATH_VALIDATION_DOF],
     const PathValidationConfig *config,
     const PathValidationServices *services,
     PathValidationWorkspace *workspace,
@@ -1452,6 +1474,7 @@ void state_path_validation_enter(
 
     if (
         robot == NULL ||
+        position_scales == NULL ||
         config == NULL ||
         workspace == NULL ||
         storage == NULL ||
@@ -1475,6 +1498,7 @@ void state_path_validation_enter(
     if (
         !config_and_dependencies_valid(
             robot,
+            position_scales,
             config,
             services,
             workspace,
@@ -1491,6 +1515,9 @@ void state_path_validation_enter(
 
     state->robot =
         robot;
+
+    state->position_scales =
+        position_scales;
 
     state->config =
         *config;
