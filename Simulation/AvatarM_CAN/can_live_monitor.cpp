@@ -23,7 +23,7 @@ namespace
 
 constexpr uint32_t kBitrate = 1000000U;
 constexpr uint32_t kExpectedSyncUs = 2000U;
-constexpr uint32_t kBurstResetUs = 50000U;
+constexpr uint32_t kBurstResetUs = 20000U;
 constexpr std::size_t kNodeCount = 6U;
 constexpr double kStatsWindowSeconds = 1.0;
 constexpr const char *kDefaultRegistryUri = "silkit://localhost:8500";
@@ -254,6 +254,15 @@ FrameInfo classify_frame(
                             intervals - 1U;
                     }
                 }
+            }
+            else
+            {
+                /*
+                 * Treat a long no-SYNC interval as the boundary between
+                 * motion bursts/states, not as hundreds of missed 2 ms cycles.
+                 */
+                stats.sync_period_latest_ms = 0.0;
+                stats.sync_jitter_latest_ms = 0.0;
             }
         }
 
@@ -651,12 +660,16 @@ int main()
     MonitorStats stats;
     std::deque<WireSample> wire_window;
 
-    uint64_t previous_window_rpdo =
-        0U;
-    uint64_t previous_window_tpdo =
-        0U;
-    uint64_t previous_window_sample_us =
-        0U;
+    /*
+     * Rolling 1-second timestamp windows.
+     *
+     * These are based on SIL Kit receive-callback timestamps, not on when the
+     * GUI thread happens to drain its queue. That prevents a temporary GUI
+     * stall/backlog from producing impossible rates such as 8000 Hz.
+     */
+    std::deque<uint64_t> rpdo4_window;
+    std::deque<uint64_t> tpdo4_window;
+    std::deque<uint64_t> sync_window;
 
     double rpdo_per_s = 0.0;
     double tpdo_per_s = 0.0;
@@ -738,6 +751,25 @@ int main()
                     stats
                 );
 
+            if (info.type == "RPDO4")
+            {
+                rpdo4_window.push_back(
+                    frame_us
+                );
+            }
+            else if (info.type == "TPDO4")
+            {
+                tpdo4_window.push_back(
+                    frame_us
+                );
+            }
+            else if (info.type == "SYNC")
+            {
+                sync_window.push_back(
+                    frame_us
+                );
+            }
+
             stats.total_frames++;
             stats.last_frame_us = frame_us;
 
@@ -787,6 +819,33 @@ int main()
             wire_window.pop_front();
         }
 
+        auto trim_timestamp_window =
+            [window_start](
+                std::deque<uint64_t> &window
+            )
+            {
+                while (
+                    !window.empty() &&
+                    window.front() <
+                        window_start
+                )
+                {
+                    window.pop_front();
+                }
+            };
+
+        trim_timestamp_window(
+            rpdo4_window
+        );
+
+        trim_timestamp_window(
+            tpdo4_window
+        );
+
+        trim_timestamp_window(
+            sync_window
+        );
+
         uint64_t nominal_bits_window = 0U;
         uint64_t worst_bits_window = 0U;
 
@@ -822,16 +881,12 @@ int main()
                 kBitrate
             );
 
-        uint64_t rpdo_total = 0U;
-        uint64_t tpdo_total = 0U;
         double latency_sum = 0.0;
         uint64_t latency_count = 0U;
         double latency_max = 0.0;
 
         for (const NodeStats &node : stats.nodes)
         {
-            rpdo_total += node.rpdo4_count;
-            tpdo_total += node.tpdo4_count;
             latency_sum += node.latency_sum_ms;
             latency_count += node.latency_count;
             latency_max =
@@ -841,42 +896,24 @@ int main()
                 );
         }
 
-        if (
-            previous_window_sample_us == 0U ||
-            now_us - previous_window_sample_us >= 1000000U
-        )
-        {
-            const double elapsed_s =
-                previous_window_sample_us == 0U
-                    ? 1.0
-                    : static_cast<double>(
-                        now_us -
-                        previous_window_sample_us
-                    ) / 1000000.0;
-
-            rpdo_per_s =
-                static_cast<double>(
-                    rpdo_total -
-                    previous_window_rpdo
-                ) /
-                elapsed_s;
-
-            tpdo_per_s =
-                static_cast<double>(
-                    tpdo_total -
-                    previous_window_tpdo
-                ) /
-                elapsed_s;
-
-            previous_window_rpdo = rpdo_total;
-            previous_window_tpdo = tpdo_total;
-            previous_window_sample_us = now_us;
-        }
-
-        const double observed_cycle_hz =
-            rpdo_per_s /
+        rpdo_per_s =
             static_cast<double>(
-                kNodeCount
+                rpdo4_window.size()
+            );
+
+        tpdo_per_s =
+            static_cast<double>(
+                tpdo4_window.size()
+            );
+
+        /*
+         * The controller emits exactly one SYNC for each six-axis target
+         * cycle. Using the timestamped SYNC window is therefore the cleanest
+         * achieved cyclic-rate measurement.
+         */
+        const double observed_cycle_hz =
+            static_cast<double>(
+                sync_window.size()
             );
 
         const double latency_avg =
@@ -982,7 +1019,10 @@ int main()
             GetScreenWidth();
 
         const bool cyclic_active =
-            display_cycle_hz > 10.0;
+            display_cycle_hz > 10.0 &&
+            !sync_window.empty() &&
+            now_us >= sync_window.back() &&
+            (now_us - sync_window.back()) < 100000U;
 
         const bool cycle_good =
             display_cycle_hz >= 450.0;
