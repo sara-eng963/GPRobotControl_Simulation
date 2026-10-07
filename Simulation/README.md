@@ -78,6 +78,27 @@ The complete PC pipeline uses four Linux-side processes plus MATLAB:
 The registry URI is `silkit://localhost:8500`. Both the controller and six
 motor participants use SIL Kit network `CAN1` at 1 Mbit/s.
 
+
+## One-command full simulation
+
+To configure/build and start the complete Linux-side pipeline in one command:
+
+```bash
+bash scripts/run_full_can_silkit_simulation.sh
+```
+
+The launcher starts the SIL Kit registry, six AVATAR virtual motors, the
+FreeRTOS Supervisor, Supervisor Panel and Teaching Simulator. It also
+auto-detects the WSL Windows-host IP and passes it to the Supervisor for
+MATLAB UDP telemetry on port 5005. Keep
+`MATLAB/can_robot_visualizer.m` running in MATLAB on Windows.
+
+Press Ctrl-C in the launcher terminal to stop all processes. Runtime logs are
+written to `.simulation-logs/`.
+
+Use `--no-build` to reuse an existing build or `--no-gui` to start only
+the CAN/controller processes.
+
 ## Automated integration test
 
 When configured with `ENABLE_SILKIT=ON`, CTest registers:
