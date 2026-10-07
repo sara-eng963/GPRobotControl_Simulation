@@ -1,8 +1,7 @@
 # Include once from the end of the project's top-level CMakeLists.txt.
-# The real SOEM backend and old simulator main MUST NOT be linked into this target.
+# The active Supervisor simulator is CANopen/AVATAR-only.
 add_executable(supervisor_mock_sim
     ${CMAKE_SOURCE_DIR}/Simulation/supervisor_mock_main.c
-    ${CMAKE_SOURCE_DIR}/Simulation/MockHardware/mock_backend.c
     ${CMAKE_SOURCE_DIR}/HMI/hmi_task.c
     ${CMAKE_SOURCE_DIR}/StateMachine/supervisor_task.c
     ${CMAKE_SOURCE_DIR}/StateMachine/supervisor_io.c
@@ -28,22 +27,19 @@ add_executable(supervisor_mock_sim
     ${CMAKE_SOURCE_DIR}/StateMachine/States/state_paused.c
     ${CMAKE_SOURCE_DIR}/StateMachine/States/state_fault.c
     ${CMAKE_SOURCE_DIR}/StateMachine/States/state_emergency_stop.c
-    ${CMAKE_SOURCE_DIR}/EtherCATComm/ethercat_master.c
     ${CMAKE_SOURCE_DIR}/ServoDrive/CiA402/cia402.c
-    ${CMAKE_SOURCE_DIR}/ServoDrive/A6EC/a6ec_pdo.c
-    ${CMAKE_SOURCE_DIR}/ServoDrive/A6EC/a6ec_drive.c)
+)
 target_compile_features(supervisor_mock_sim PRIVATE c_std_11)
 target_compile_options(supervisor_mock_sim PRIVATE -Wall -Wextra -Werror=implicit-function-declaration)
 target_include_directories(supervisor_mock_sim PRIVATE
     ${CMAKE_SOURCE_DIR}/StateMachine ${CMAKE_SOURCE_DIR}/HMI
-    ${CMAKE_SOURCE_DIR}/EtherCATComm ${CMAKE_SOURCE_DIR}/ServoDrive/A6EC
     ${CMAKE_SOURCE_DIR}/CANComm ${CMAKE_SOURCE_DIR}/CANComm/CANopen
     ${CMAKE_SOURCE_DIR}/ServoDrive/CiA402
     ${CMAKE_SOURCE_DIR}/ServoDrive/AvatarM
     ${CMAKE_SOURCE_DIR}/ServoDrive/AvatarM/Sim
     ${CMAKE_SOURCE_DIR}/Simulation/AvatarM_CAN_GUI)
 target_link_libraries(supervisor_mock_sim PRIVATE
-    freertos_kernel freertos_config control_core soem pthread m)
+    freertos_kernel freertos_config control_core pthread m)
 
 # Optional panel derived from the current project GUI; original panel unchanged.
 if(TARGET raylib)
