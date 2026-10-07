@@ -677,6 +677,51 @@ target_include_directories(
     ServoDrive/AvatarM
 )
 
+# ============================================================================
+# SIX-AXIS CANOPEN MASTER INTEGRATION TEST
+# ============================================================================
+
+add_executable(
+    canopen_master_test
+
+    CANComm/Tests/test_canopen_master.c
+
+    CANComm/CANopen/canopen_master.c
+    CANComm/CANopen/canopen_nmt.c
+    CANComm/CANopen/canopen_sdo.c
+    CANComm/CANopen/canopen_heartbeat.c
+
+    ServoDrive/CiA402/cia402.c
+
+    ServoDrive/AvatarM/avatar_m_pdo.c
+    ServoDrive/AvatarM/avatar_m_drive.c
+    ServoDrive/AvatarM/avatar_m_position.c
+)
+
+target_compile_features(
+    canopen_master_test
+    PRIVATE
+    c_std_11
+)
+
+target_include_directories(
+    canopen_master_test
+    PRIVATE
+
+    CANComm
+    CANComm/CANopen
+
+    ServoDrive/CiA402
+    ServoDrive/AvatarM
+)
+
+target_link_libraries(
+    canopen_master_test
+    PRIVATE
+    m
+)
+
+
 add_executable(
     can_backend_test
     CANComm/Tests/test_can_backend.c
