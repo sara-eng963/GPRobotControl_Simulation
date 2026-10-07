@@ -68,8 +68,10 @@ static const char *homing_error_name(
         case 5U: return "DRIVE_NOT_ENABLED";
         case 6U: return "TRAJECTORY";
         case 7U: return "TRAJECTORY_LIMIT";
-        case 8U: return "WKC";
+        case 8U: return "COMMUNICATION";
         case 9U: return "HOME_TIMEOUT";
+        case 10U: return "POSITION_CONVERSION";
+        case 11U: return "CYCLIC_FEEDBACK";
         default: return "UNKNOWN";
     }
 }
@@ -583,10 +585,10 @@ int hmi_app_run(void)
             snprintf(
                 detail,
                 sizeof(detail),
-                "FSM: %s   Mode: PREVIEW (SIM)   WKC: %u/%u   TCP: [%.3f %.3f %.3f] m",
+                "FSM: %s   Mode: PREVIEW (SIM)   CAN: %u/%u nodes   TCP: [%.3f %.3f %.3f] m",
                 robot_state_name(status->robot_state),
-                status->wkc,
-                status->expected_wkc,
+                status->can_ready_nodes,
+                status->can_expected_nodes,
                 status->actual_tcp_m[0],
                 status->actual_tcp_m[1],
                 status->actual_tcp_m[2]
@@ -597,15 +599,15 @@ int hmi_app_run(void)
             snprintf(
                 detail,
                 sizeof(detail),
-                "State: %s   Program: %s   WKC: %u/%u   TCP: [%.3f %.3f %.3f] m",
+                "State: %s   Program: %s   CAN: %u/%u nodes   TCP: [%.3f %.3f %.3f] m",
                 online
                     ? robot_state_name(status->robot_state)
                     : "---",
                 online
                     ? program_name(status->selected_program)
                     : "---",
-                status->wkc,
-                status->expected_wkc,
+                status->can_ready_nodes,
+                status->can_expected_nodes,
                 status->actual_tcp_m[0],
                 status->actual_tcp_m[1],
                 status->actual_tcp_m[2]
