@@ -29,6 +29,45 @@ if(ENABLE_SILKIT)
         )
     endif()
 
+    find_package(
+        SilKit
+        REQUIRED
+        CONFIG
+        PATHS "${SILKIT_ROOT}"
+        NO_DEFAULT_PATH
+    )
+
+    find_package(Threads REQUIRED)
+
+    add_library(
+        silkit_can_backend
+
+        CANComm/SILKit/silkit_can_backend.cpp
+    )
+
+    target_include_directories(
+        silkit_can_backend
+        PUBLIC
+        CANComm
+        CANComm/SILKit
+    )
+
+    target_link_libraries(
+        silkit_can_backend
+        PUBLIC
+
+        SilKit::SilKit
+        Threads::Threads
+    )
+
+    target_compile_features(
+        silkit_can_backend
+        PRIVATE
+        cxx_std_17
+    )
+
+endif()
+
 set(CMAKE_C_STANDARD 11)
 
 # ----------------------------
