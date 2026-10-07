@@ -41,7 +41,7 @@ A physical E-stop belongs to the independent hardware safety chain.
 cmake -S . -B build-can-supervisor
 
 cmake --build build-can-supervisor \
-  --target supervisor_mock_sim supervisor_panel teaching_sim \
+  --target supervisor_silkit_sim supervisor_panel teaching_sim \
   -j "$(nproc)"
 ```
 
@@ -50,18 +50,19 @@ cmake --build build-can-supervisor \
 In separate terminals:
 
 ```bash
-./build-can-supervisor/supervisor_mock_sim
+./build-can-supervisor/supervisor_silkit_sim
 ./build-can-supervisor/supervisor_panel
 ./build-can-supervisor/teaching_sim
 ```
 
-No virtual Ethernet pair, SOEM or external EtherCAT slave simulator is
-required.
+The controller communicates with six AVATAR virtual nodes over SIL Kit CAN1.
+Start the SIL Kit registry and `avatar_m_silkit_motor_bank` before the
+Supervisor when running manually.
 
 For the automated full sequence, run:
 
 ```bash
 ctest --test-dir build-can-supervisor \
-  -R '^supervisor_mock_sequence$' \
+  -R '^supervisor_silkit_sequence$' \
   --output-on-failure -V
 ```
