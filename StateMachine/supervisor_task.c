@@ -476,6 +476,9 @@ static void run_active_state(SupervisorTaskContext *context)
                 &context->teaching,
                 context->config.robot,
                 &context->teaching_runtime,
+                context->config.canopen_master,
+                context->config.avatar_position_scales,
+                supervisor_now_ms(),
                 context->pending_teaching_event,
                 &context->teaching_outputs
             );
