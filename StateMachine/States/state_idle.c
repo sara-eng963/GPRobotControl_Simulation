@@ -1,52 +1,158 @@
 #include "state_idle.h"
 
-#include "../../EtherCATComm/ethercat_master.h"
-
-#include "../../ServoDrive/A6EC/a6ec_drive.h"
 #include "../../ServoDrive/CiA402/cia402.h"
 
 #include <stddef.h>
+#include <string.h>
 
-
-/* ============================================================================
- * INTERNAL HELPERS
- * ============================================================================
- */
-
-static void idle_advance(
-    IdleState *idle,
-    IdlePhase nextPhase
-)
-{
-    idle->phase =
-        nextPhase;
-}
-
+#define IDLE_COMMAND_PERIOD_MS          2U
+#define IDLE_CYCLIC_FEEDBACK_TIMEOUT_MS 100U
 
 static StateStepResult idle_fail(
     IdleState *idle,
     IdleError error,
-    int failedAxis
+    int failed_axis
 )
 {
-    idle->error =
-        error;
-
-    idle->failedAxis =
-        failedAxis;
-
-    idle->phase =
-        IDLE_PHASE_FAILED;
-
-    return
-        STATE_STEP_FAILED;
+    idle->error = error;
+    idle->failedAxis = failed_axis;
+    idle->phase = IDLE_PHASE_FAILED;
+    return STATE_STEP_FAILED;
 }
 
+static bool master_layout_valid(
+    const CanopenMaster *master
+)
+{
+    return
+        master != NULL &&
+        master->initialized &&
+        master->node_count == ROBOT_DOF;
+}
 
-/* ============================================================================
- * ENTER IDLE
- * ============================================================================
- */
+static int first_disabled_axis(
+    const CanopenMaster *master
+)
+{
+    for (size_t i = 0U; i < ROBOT_DOF; ++i)
+    {
+        const AvatarMDrive *drive =
+            canopen_master_drive(master, i);
+
+        if (
+            drive == NULL ||
+            drive->cia402_state !=
+                CIA402_STATE_OPERATION_ENABLED
+        )
+        {
+            return (int)i + 1;
+        }
+    }
+
+    return 0;
+}
+
+static IdleError idle_network_status(
+    const CanopenMaster *master,
+    uint32_t now_ms,
+    int *failed_axis
+)
+{
+    *failed_axis = 0;
+
+    if (
+        !master_layout_valid(master) ||
+        !canopen_master_healthy(master, now_ms)
+    )
+    {
+        return IDLE_ERROR_COMMUNICATION;
+    }
+
+    if (!canopen_master_all_feedback_valid(master))
+    {
+        return IDLE_ERROR_POSITION_FEEDBACK;
+    }
+
+    const int disabled_axis =
+        first_disabled_axis(master);
+
+    if (disabled_axis != 0)
+    {
+        *failed_axis = disabled_axis;
+        return IDLE_ERROR_DRIVE_NOT_ENABLED;
+    }
+
+    return IDLE_ERROR_NONE;
+}
+
+static void capture_tpdo_counts(
+    IdleState *idle,
+    const CanopenMaster *master
+)
+{
+    for (size_t i = 0U; i < ROBOT_DOF; ++i)
+    {
+        idle->commandTpdoCount[i] =
+            canopen_master_tpdo_rx_count(master, i);
+    }
+}
+
+static bool all_command_feedback_arrived(
+    const IdleState *idle,
+    const CanopenMaster *master
+)
+{
+    for (size_t i = 0U; i < ROBOT_DOF; ++i)
+    {
+        if (
+            canopen_master_tpdo_rx_count(master, i) <=
+            idle->commandTpdoCount[i]
+        )
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool command_due(
+    const IdleState *idle,
+    uint32_t now_ms
+)
+{
+    return
+        !idle->commandClockStarted ||
+        (uint32_t)(now_ms - idle->lastCommandMs) >=
+            idle->commandPeriodMs;
+}
+
+static StateStepResult send_hold_cycle(
+    IdleState *idle,
+    CanopenMaster *master,
+    uint32_t now_ms
+)
+{
+    capture_tpdo_counts(idle, master);
+
+    if (!canopen_master_send_target_cycle(
+            master,
+            idle->holdPositionUnits,
+            ROBOT_DOF))
+    {
+        return idle_fail(
+            idle,
+            IDLE_ERROR_COMMUNICATION,
+            0
+        );
+    }
+
+    idle->lastCommandMs = now_ms;
+    idle->commandClockStarted = true;
+    idle->awaitingFeedback = true;
+
+    return STATE_STEP_RUNNING;
+}
 
 void state_idle_enter(
     IdleState *idle
@@ -57,402 +163,187 @@ void state_idle_enter(
         return;
     }
 
+    memset(idle, 0, sizeof(*idle));
 
-    idle->phase =
-        IDLE_PHASE_INIT;
-
-    idle->error =
-        IDLE_ERROR_NONE;
-
-    idle->failedAxis =
-        0;
-
-    idle->exitCommand =
-        IDLE_COMMAND_NONE;
-
-    idle->cyclesHeld =
-        0U;
-
-
-    for (
-        int joint = 0;
-        joint < ROBOT_DOF;
-        joint++
-    )
-    {
-        idle->holdPositionUnits[joint] =
-            0;
-    }
+    idle->phase = IDLE_PHASE_INIT;
+    idle->error = IDLE_ERROR_NONE;
+    idle->exitCommand = IDLE_COMMAND_NONE;
+    idle->commandPeriodMs = IDLE_COMMAND_PERIOD_MS;
 }
-
-
-/* ============================================================================
- * IDLE STATE
- * ============================================================================
- */
 
 StateStepResult state_idle_step(
     IdleState *idle,
-    IdleCommand command
+    IdleCommand command,
+    CanopenMaster *master,
+    uint32_t now_ms
 )
 {
-    if (idle == NULL)
+    if (
+        idle == NULL ||
+        master == NULL
+    )
     {
-        return
-            STATE_STEP_FAILED;
+        if (idle != NULL)
+        {
+            return idle_fail(
+                idle,
+                IDLE_ERROR_COMMUNICATION,
+                0
+            );
+        }
+
+        return STATE_STEP_FAILED;
     }
 
+    if (!canopen_master_poll(master, now_ms))
+    {
+        return idle_fail(
+            idle,
+            IDLE_ERROR_COMMUNICATION,
+            0
+        );
+    }
 
     switch (idle->phase)
     {
-        /* ====================================================================
-         * INITIALIZE IDLE
-         * ====================================================================
-         *
-         * Capture the exact current encoder positions.
-         *
-         * These become the stationary CSP targets used while IDLE is active.
-         */
-
         case IDLE_PHASE_INIT:
         {
-            for (
-                int slave = 1;
-                slave <= ROBOT_DOF;
-                slave++
-            )
-            {
-                /*
-                 * IDLE requires both mapped input and output PDO areas.
-                 */
-                if (
-                    ethercat_master_slave_inputs(
-                        slave
-                    ) == NULL
-                    ||
-                    ethercat_master_slave_outputs(
-                        slave
-                    ) == NULL
-                )
-                {
-                    return idle_fail(
-                        idle,
-                        IDLE_ERROR_PDO_UNAVAILABLE,
-                        slave
-                    );
-                }
+            int failed_axis = 0;
 
-
-                A6ECPDOFeedback feedback;
-
-
-                a6ec_read_feedback(
-                    slave,
-                    &feedback
+            const IdleError status =
+                idle_network_status(
+                    master,
+                    now_ms,
+                    &failed_axis
                 );
 
-
-                uint16_t driveState =
-                    cia402_get_state(
-                        feedback.statusword
-                    );
-
-
-                /*
-                 * BOOT and HOMING should already have left every drive
-                 * Operation Enabled.
-                 */
-                if (
-                    driveState !=
-                    CIA402_STATE_OPERATION_ENABLED
-                )
-                {
-                    return idle_fail(
-                        idle,
-                        IDLE_ERROR_DRIVE_NOT_ENABLED,
-                        slave
-                    );
-                }
-
-
-                /*
-                 * Capture exact measured position as the IDLE hold target.
-                 */
-                idle->holdPositionUnits[
-                    slave - 1
-                ] =
-                    feedback.actualPosition;
-            }
-
-
-            /*
-             * BOOT should already have established a valid expected WKC.
-             */
-            if (
-                ethercat_master_expected_wkc()
-                <=
-                0
-            )
+            if (status != IDLE_ERROR_NONE)
             {
                 return idle_fail(
                     idle,
-                    IDLE_ERROR_WKC,
-                    0
+                    status,
+                    failed_axis
                 );
             }
 
+            for (size_t i = 0U; i < ROBOT_DOF; ++i)
+            {
+                const AvatarMDrive *drive =
+                    canopen_master_drive(master, i);
 
-            idle_advance(
-                idle,
-                IDLE_PHASE_HOLDING
-            );
+                if (
+                    drive == NULL ||
+                    !drive->feedback_valid
+                )
+                {
+                    return idle_fail(
+                        idle,
+                        IDLE_ERROR_POSITION_FEEDBACK,
+                        (int)i + 1
+                    );
+                }
 
+                idle->holdPositionUnits[i] =
+                    drive->feedback.actual_position;
+            }
 
-            return
-                STATE_STEP_RUNNING;
+            idle->phase = IDLE_PHASE_HOLDING;
+
+            return STATE_STEP_RUNNING;
         }
-
-
-        /* ====================================================================
-         * HOLD POSITION
-         * ====================================================================
-         *
-         * This is where IDLE normally remains indefinitely.
-         *
-         * Every cycle:
-         *
-         *      read drive state
-         *      command q_hold
-         *      exchange PDOs
-         *      verify WKC
-         *      check safety
-         *      check operator command
-         */
 
         case IDLE_PHASE_HOLDING:
         {
-            for (
-                int slave = 1;
-                slave <= ROBOT_DOF;
-                slave++
-            )
-            {
-                if (
-                    ethercat_master_slave_inputs(
-                        slave
-                    ) == NULL
-                    ||
-                    ethercat_master_slave_outputs(
-                        slave
-                    ) == NULL
-                )
-                {
-                    return idle_fail(
-                        idle,
-                        IDLE_ERROR_PDO_UNAVAILABLE,
-                        slave
-                    );
-                }
+            int failed_axis = 0;
 
-
-                A6ECPDOFeedback feedback;
-
-
-                a6ec_read_feedback(
-                    slave,
-                    &feedback
+            const IdleError status =
+                idle_network_status(
+                    master,
+                    now_ms,
+                    &failed_axis
                 );
 
-
-                uint16_t driveState =
-                    cia402_get_state(
-                        feedback.statusword
-                    );
-
-
-                /*
-                 * A drive leaving Operation Enabled while IDLE is
-                 * considered an IDLE failure.
-                 */
-                if (
-                    driveState !=
-                    CIA402_STATE_OPERATION_ENABLED
-                )
-                {
-                    return idle_fail(
-                        idle,
-                        IDLE_ERROR_DRIVE_NOT_ENABLED,
-                        slave
-                    );
-                }
-
-
-                /*
-                 * Keep each A6-EC servo in CSP and continuously command
-                 * the exact position captured when IDLE began.
-                 */
-                A6ECPDOCommand holdCommand =
-                {
-                    .controlword =
-                        CIA402_CONTROLWORD_ENABLE_OPERATION,
-
-                    .targetPosition =
-                        idle->holdPositionUnits[
-                            slave - 1
-                        ]
-                };
-
-
-                a6ec_write_command(
-                    slave,
-                    &holdCommand
-                );
-            }
-
-
-            /* ---------------------------------------------------------------
-             * SEND / RECEIVE ONE ETHERCAT CYCLE
-             * ---------------------------------------------------------------
-             */
-
-            int actualWkc =
-                ethercat_master_exchange();
-
-
-            int expectedWkc =
-                ethercat_master_expected_wkc();
-
-
-            if (
-                expectedWkc <= 0 ||
-                actualWkc < expectedWkc
-            )
+            if (status != IDLE_ERROR_NONE)
             {
                 return idle_fail(
                     idle,
-                    IDLE_ERROR_WKC,
-                    0
+                    status,
+                    failed_axis
                 );
             }
 
+            if (idle->awaitingFeedback)
+            {
+                if (all_command_feedback_arrived(
+                        idle,
+                        master))
+                {
+                    idle->awaitingFeedback = false;
+                    idle->cyclesHeld++;
+                }
+                else
+                {
+                    if (
+                        (uint32_t)(
+                            now_ms -
+                            idle->lastCommandMs
+                        ) >=
+                        IDLE_CYCLIC_FEEDBACK_TIMEOUT_MS
+                    )
+                    {
+                        return idle_fail(
+                            idle,
+                            IDLE_ERROR_CYCLIC_FEEDBACK,
+                            0
+                        );
+                    }
 
-            idle->cyclesHeld++;
-
-
-            /* ---------------------------------------------------------------
-             * SAFETY CHECK
-             * ---------------------------------------------------------------
-             *
-             * TODO:
-             *
-             * Replace this temporary pass when the real electrical safety
-             * feedback interface exists.
-             *
-             * Eventually IDLE should monitor:
-             *
-             *      E-Stop
-             *      safety relay
-             *      safety chain
-             *      zone / protective-stop feedback
-             *
-             * For the current KickCAT simulation there is no physical
-             * safety input.
-             */
-
-
-            /* ---------------------------------------------------------------
-             * OPERATOR COMMAND
-             * ---------------------------------------------------------------
-             */
+                    return STATE_STEP_RUNNING;
+                }
+            }
 
             switch (command)
             {
                 case IDLE_COMMAND_NONE:
-                {
-                    /*
-                     * No command.
-                     *
-                     * Stay in IDLE and continue holding.
-                     */
-                    return
-                        STATE_STEP_RUNNING;
-                }
-
+                    break;
 
                 case IDLE_COMMAND_TEACH:
                 case IDLE_COMMAND_REPLAY:
-                {
-                    idle->exitCommand =
-                        command;
-
-
-                    idle_advance(
-                        idle,
-                        IDLE_PHASE_COMPLETE
-                    );
-
-
-                    return
-                        STATE_STEP_RUNNING;
-                }
-
+                    idle->exitCommand = command;
+                    idle->phase = IDLE_PHASE_COMPLETE;
+                    return STATE_STEP_RUNNING;
 
                 default:
-                {
                     return idle_fail(
                         idle,
                         IDLE_ERROR_INVALID_COMMAND,
                         0
                     );
-                }
             }
+
+            if (!command_due(idle, now_ms))
+            {
+                return STATE_STEP_RUNNING;
+            }
+
+            return send_hold_cycle(
+                idle,
+                master,
+                now_ms
+            );
         }
-
-
-        /* ====================================================================
-         * IDLE COMPLETE
-         * ====================================================================
-         *
-         * A valid operator command was received.
-         *
-         * The outer robot FSM will later inspect:
-         *
-         *      idle->exitCommand
-         *
-         * and decide which state comes next.
-         */
 
         case IDLE_PHASE_COMPLETE:
-        {
-            return
-                STATE_STEP_COMPLETE;
-        }
-
-
-        /* ====================================================================
-         * IDLE FAILED
-         * ====================================================================
-         */
+            return STATE_STEP_COMPLETE;
 
         case IDLE_PHASE_FAILED:
-        {
-            return
-                STATE_STEP_FAILED;
-        }
-
-
-        /* ====================================================================
-         * INVALID PHASE
-         * ====================================================================
-         */
+            return STATE_STEP_FAILED;
 
         default:
-        {
             return idle_fail(
                 idle,
                 IDLE_ERROR_INVALID_COMMAND,
                 0
             );
-        }
     }
 }
