@@ -126,6 +126,36 @@ if(ENABLE_SILKIT)
         m
     )
 
+
+    find_package(
+        Python3
+        COMPONENTS Interpreter
+        QUIET
+    )
+
+    if(Python3_Interpreter_FOUND)
+
+        enable_testing()
+
+        add_test(
+            NAME supervisor_silkit_sequence
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_supervisor_silkit_sequence.py
+                ${SILKIT_ROOT}/bin/sil-kit-registry
+                $<TARGET_FILE:avatar_m_silkit_motor_bank>
+                $<TARGET_FILE:supervisor_silkit_sim>
+        )
+
+        set_tests_properties(
+            supervisor_silkit_sequence
+            PROPERTIES
+            TIMEOUT 120
+            RUN_SERIAL TRUE
+        )
+
+    endif()
+
 endif()
 
 
