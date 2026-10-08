@@ -12,6 +12,19 @@
 
 #define CANOPEN_MASTER_MAX_NODES 6U
 
+/*
+ * AVATAR manual, section 11.2: consumer 0x1016:01 defaults to monitoring
+ * producer Node-ID 0x7F, with a 2000 ms timeout (0x007F07D0).
+ * The controller must have a distinct CANopen Node-ID.
+ */
+#define CANOPEN_CONTROLLER_NODE_ID         127U
+#define CANOPEN_CONTROLLER_HEARTBEAT_MS    100U
+#define CANOPEN_DRIVE_CONSUMER_TIMEOUT_MS  2000U
+#define CANOPEN_DRIVE_CONSUMER_SUBINDEX    1U
+#define CANOPEN_DRIVE_CONSUMER_VALUE \
+    (((uint32_t)CANOPEN_CONTROLLER_NODE_ID << 16) | \
+     (uint32_t)CANOPEN_DRIVE_CONSUMER_TIMEOUT_MS)
+
 typedef enum
 {
     CANOPEN_MASTER_SDO_IDLE = 0,
@@ -66,6 +79,10 @@ typedef struct
     uint32_t heartbeat_timeout_ms;
     uint32_t sdo_timeout_ms;
 
+    /* Host-produced heartbeat is independent of any one motion state. */
+    uint32_t last_controller_heartbeat_ms;
+    bool controller_heartbeat_sent;
+
     uint32_t last_heartbeat_ms[CANOPEN_MASTER_MAX_NODES];
     bool heartbeat_timestamp_valid[CANOPEN_MASTER_MAX_NODES];
 
@@ -119,6 +136,17 @@ bool canopen_master_poll(
 bool canopen_master_send_nmt_all(
     CanopenMaster *master,
     CanopenNmtCommand command
+);
+
+/*
+ * Transmit one controller heartbeat at most once per period.
+ * Call from the supervisor's periodic task even in PAUSED/FAULT/E-STOP,
+ * and from poll() for users of the master outside that task.
+ * A non-running controller cannot produce this signal.
+ */
+bool canopen_master_service_heartbeat(
+    CanopenMaster *master,
+    uint32_t now_ms
 );
 
 /* CANopen SYNC, COB-ID 0x080, DLC 0. */
@@ -226,6 +254,19 @@ bool canopen_master_begin_set_heartbeat_period(
     CanopenMaster *master,
     size_t node_index,
     uint16_t heartbeat_period_ms,
+    uint32_t now_ms
+);
+
+/* AVATAR 0x1016:01: configure and verify heartbeat consumer (UINT32). */
+bool canopen_master_begin_set_heartbeat_consumer(
+    CanopenMaster *master,
+    size_t node_index,
+    uint32_t now_ms
+);
+
+bool canopen_master_begin_read_heartbeat_consumer(
+    CanopenMaster *master,
+    size_t node_index,
     uint32_t now_ms
 );
 

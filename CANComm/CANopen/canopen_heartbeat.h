@@ -23,6 +23,15 @@ typedef struct
     uint8_t state;
 } CanopenHeartbeat;
 
+/* Build one standard CANopen heartbeat frame (0x700 + producer node ID).
+ * The controller uses OPERATIONAL (0x05) to announce a live NMT master.
+ */
+bool canopen_heartbeat_build(
+    uint8_t producer_node_id,
+    CanopenHeartbeatState state,
+    CanFrame *frame
+);
+
 /* Parse one heartbeat/boot-up frame from 0x700 + node-id. */
 bool canopen_heartbeat_parse(
     const CanFrame *frame,

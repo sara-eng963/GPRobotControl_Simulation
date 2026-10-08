@@ -23,6 +23,9 @@
 
 #define SDO_ABORT_OBJECT_NOT_EXIST 0x06020000UL
 
+/* AVATAR manual §11.2 default: Node 127, 2000 ms. */
+#define AVATAR_CONSUMER_DEFAULT 0x007F07D0UL
+
 static uint16_t read_u16_le(
     const uint8_t *data
 )
@@ -454,6 +457,10 @@ static AvatarMNodeResult handle_sdo_read(
         );
     }
 
+    if (index == AVATAR_M_OD_HEARTBEAT_CONSUMER_TIME && subindex == 1U)
+        return sdo_read_u32(node, index, subindex,
+                            node->heartbeat_consumer_value, response);
+
     if (
         index ==
             AVATAR_M_OD_HEARTBEAT_PRODUCER_TIME &&
@@ -513,7 +520,7 @@ static AvatarMNodeResult handle_sdo_read(
             node,
             index,
             subindex,
-            0U,
+            node->communication_drop_alarm ? 0x20U : 0U,
             response
         );
     }
@@ -553,6 +560,21 @@ static AvatarMNodeResult handle_sdo_write(
             subindex,
             response
         );
+    }
+
+    if (index == AVATAR_M_OD_HEARTBEAT_CONSUMER_TIME &&
+        subindex == 1U && input->data[0] == SDO_WRITE_U32)
+    {
+        const uint32_t value = read_u32_le(&input->data[4]);
+        const uint8_t producer = (uint8_t)((value >> 16) & 0xFFU);
+        if ((value & 0xFF000000UL) != 0U ||
+            !canopen_node_id_valid(producer))
+            return sdo_abort(node, index, subindex, 0x06090030UL, response);
+        node->heartbeat_consumer_value = value;
+        node->consumer_heartbeat_seen = false;
+        node->consumer_elapsed_ms = 0U;
+        node->communication_drop_alarm = false;
+        return sdo_write_ok(node, index, subindex, response);
     }
 
     if (
@@ -745,8 +767,12 @@ static AvatarMNodeResult handle_nmt(
             return
                 AVATAR_M_NODE_NO_RESPONSE;
 
+        /* Runtime reset clears the watchdog latch and waits for heartbeat. */
         case CANOPEN_NMT_RESET_APPLICATION:
         case CANOPEN_NMT_RESET_COMMUNICATION:
+            node->consumer_heartbeat_seen = false;
+            node->consumer_elapsed_ms = 0U;
+            node->communication_drop_alarm = false;
             node->nmt_state =
                 AVATAR_M_NMT_PRE_OPERATIONAL;
 
@@ -780,6 +806,8 @@ static AvatarMNodeResult handle_rpdo4(
     CanFrame *response
 )
 {
+    if (node->communication_drop_alarm)
+        return AVATAR_M_NODE_NO_RESPONSE;
     int32_t target_position =
         0;
 
@@ -835,6 +863,8 @@ static AvatarMNodeResult handle_sync(
     const CanFrame *input
 )
 {
+    if (node->communication_drop_alarm)
+        return AVATAR_M_NODE_NO_RESPONSE;
     if (
         input->id !=
             CANOPEN_COBID_SYNC ||
@@ -898,6 +928,8 @@ bool avatar_m_node_init(
     node->heartbeat_period_ms =
         AVATAR_M_DEFAULT_HEARTBEAT_PRODUCER_MS;
 
+    node->heartbeat_consumer_value = AVATAR_CONSUMER_DEFAULT;
+
     return
         true;
 }
@@ -916,6 +948,22 @@ AvatarMNodeResult avatar_m_node_process_frame(
     {
         return
             AVATAR_M_NODE_INVALID_FRAME;
+    }
+
+    const uint8_t producer =
+        (uint8_t)((node->heartbeat_consumer_value >> 16) & 0xFFU);
+    if (input->dlc == 1U &&
+        canopen_node_id_valid(producer) &&
+        input->id == canopen_heartbeat_id(producer))
+    {
+        if ((node->heartbeat_consumer_value & 0xFFFFU) != 0U &&
+            input->data[0] == CANOPEN_HEARTBEAT_OPERATIONAL)
+        {
+            node->consumer_heartbeat_seen = true;
+            node->consumer_elapsed_ms = 0U;
+            node->communication_drop_alarm = false;
+        }
+        return AVATAR_M_NODE_NO_RESPONSE;
     }
 
     if (
@@ -1001,6 +1049,24 @@ bool avatar_m_node_tick_ms(
     )
     {
         return false;
+    }
+
+    /* The watchdog arms only after receiving the first host heartbeat.
+     * Clearing active/cached target is a simulation of the documented stop,
+     * NOT an electrical or safety-rated drive-disable model. */
+    if (node->consumer_heartbeat_seen &&
+        (node->heartbeat_consumer_value & 0xFFFFU) != 0U)
+    {
+        const uint32_t deadline = node->heartbeat_consumer_value & 0xFFFFU;
+        if (elapsed_ms >= deadline ||
+            node->consumer_elapsed_ms >= deadline - elapsed_ms)
+        {
+            node->consumer_elapsed_ms = deadline;
+            node->communication_drop_alarm = true;
+            node->cached_target_valid = false;
+            node->active_target_valid = false;
+        }
+        else node->consumer_elapsed_ms += elapsed_ms;
     }
 
     node->heartbeat_elapsed_ms +=

@@ -271,6 +271,32 @@ int main(void)
         "Heartbeat disabled in stopped state"
     );
 
+    AvatarMNodeSim wd;
+    CanFrame wd_reply = {0};
+    CHECK(avatar_m_node_init(&wd, 2U), "Watchdog drive initialized");
+    CHECK(wd.heartbeat_consumer_value == 0x007F07D0UL,
+          "Watchdog default 0x007F07D0 matches manual");
+    CanFrame host_hb = {.id = 0x77FU, .dlc = 1U, .data = {0x05U}};
+    CHECK(!wd.consumer_heartbeat_seen, "No watchdog before first heartbeat");
+    (void)avatar_m_node_process_frame(&wd, &host_hb, &wd_reply);
+    CHECK(wd.consumer_heartbeat_seen, "Node 127 heartbeat starts monitoring");
+    (void)avatar_m_node_tick_ms(&wd, 1999U, &wd_reply);
+    CHECK(!wd.communication_drop_alarm, "No timeout before 2000ms");
+    (void)avatar_m_node_tick_ms(&wd, 1U, &wd_reply);
+    CHECK(wd.communication_drop_alarm, "2000ms timeout stops simulated drive");
+    (void)avatar_m_node_process_frame(&wd, &host_hb, &wd_reply);
+    CHECK(!wd.communication_drop_alarm, "Resumed heartbeat clears stop");
+    CanFrame hb_sdo = {.id = 0x602U, .dlc = 8U,
+                      .data = {0x23U, 0x16U, 0x10U, 0x01U,
+                               0xF4U, 0x01U, 0x7FU, 0x00U}};
+    CHECK(avatar_m_node_process_frame(&wd, &hb_sdo, &wd_reply) ==
+          AVATAR_M_NODE_RESPONSE && wd_reply.data[0] == 0x60U,
+          "0x1016:01 accepts 500ms watch interval");
+    CHECK(wd.heartbeat_consumer_value == 0x007F01F4UL,
+          "Read-back state stores 500ms consumer interval");
+    (void)avatar_m_node_process_frame(&wd, &host_hb, &wd_reply);
+    (void)avatar_m_node_tick_ms(&wd, 500U, &wd_reply);
+    CHECK(wd.communication_drop_alarm, "500ms timeout triggers");
     printf("\nTests failed: %d\n", failures);
 
     return failures != 0;
