@@ -10,6 +10,7 @@ add_executable(
     test_avatar_m_node_sim.c
     avatar_m_node_sim.c
     ../avatar_m_pdo.c
+    ../../CiA402/cia402.c
 )
 
 target_include_directories(
