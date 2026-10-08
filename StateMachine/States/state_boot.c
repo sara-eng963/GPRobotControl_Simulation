@@ -445,7 +445,7 @@ StateStepResult state_boot_step(
             {
                 boot_advance(
                     boot,
-                    BOOT_PHASE_CONFIGURE_INTERPOLATION_MODE,
+                    BOOT_PHASE_CONFIGURE_HEARTBEAT_CONSUMER,
                     now_ms
                 );
 
@@ -494,6 +494,45 @@ StateStepResult state_boot_step(
                 );
             }
 
+            boot->axisIndex++;
+            return STATE_STEP_RUNNING;
+        }
+
+        case BOOT_PHASE_CONFIGURE_HEARTBEAT_CONSUMER:
+        case BOOT_PHASE_VERIFY_HEARTBEAT_CONSUMER:
+        {
+            const bool verify =
+                boot->phase == BOOT_PHASE_VERIFY_HEARTBEAT_CONSUMER;
+            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            {
+                boot_advance(boot,
+                    verify ? BOOT_PHASE_CONFIGURE_INTERPOLATION_MODE
+                           : BOOT_PHASE_VERIFY_HEARTBEAT_CONSUMER,
+                    now_ms);
+                return STATE_STEP_RUNNING;
+            }
+            if (!boot->transactionStarted)
+            {
+                const bool sent = verify
+                    ? canopen_master_begin_read_heartbeat_consumer(
+                        master, boot->axisIndex, now_ms)
+                    : canopen_master_begin_set_heartbeat_consumer(
+                        master, boot->axisIndex, now_ms);
+                if (!sent)
+                    return boot_fail(boot, BOOT_ERROR_HEARTBEAT_CONFIGURATION,
+                                     (int)boot->axisIndex + 1);
+                boot->transactionStarted = true;
+                return STATE_STEP_RUNNING;
+            }
+            uint32_t readback = 0U;
+            const BootSdoPollResult result =
+                collect_sdo(boot, master, verify, verify ? 4U : 0U,
+                            verify ? &readback : NULL);
+            if (result == BOOT_SDO_WAITING) return STATE_STEP_RUNNING;
+            if (result != BOOT_SDO_DONE ||
+                (verify && readback != CANOPEN_DRIVE_CONSUMER_VALUE))
+                return boot_fail(boot, BOOT_ERROR_HEARTBEAT_CONFIGURATION,
+                                 (int)boot->axisIndex + 1);
             boot->axisIndex++;
             return STATE_STEP_RUNNING;
         }
