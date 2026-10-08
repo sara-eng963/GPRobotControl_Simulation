@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 /* Standard CANopen NMT state values carried by heartbeat/boot-up messages. */
+/*7.2.8.3.2.2 section*/
 typedef enum
 {
     CANOPEN_HEARTBEAT_BOOTUP = 0x00U,

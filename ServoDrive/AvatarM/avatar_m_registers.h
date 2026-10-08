@@ -19,6 +19,7 @@
  */
 
 /* AVATAR identity values documented in the manufacturer CANopen manual. */
+/*page 12*/
 #define AVATAR_M_EXPECTED_VENDOR_ID             0x00000331UL
 #define AVATAR_M_EXPECTED_PRODUCT_CODE          0x00000001UL
 #define AVATAR_M_EXPECTED_VERSION               0x00000100UL
