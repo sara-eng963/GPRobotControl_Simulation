@@ -94,6 +94,22 @@ bool avatar_m_drive_build_set_heartbeat_period(
     CanFrame *frame
 );
 
+/*
+ * 0x1016:01 UINT32: bits 23..16 monitored heartbeat producer Node-ID,
+ * bits 15..0 consumer timeout in ms; bits 31..24 reserved/zero.
+ */
+bool avatar_m_drive_build_set_heartbeat_consumer(
+    const AvatarMDrive *drive,
+    uint8_t controller_node_id,
+    uint16_t consumer_timeout_ms,
+    CanFrame *frame
+);
+
+bool avatar_m_drive_build_read_heartbeat_consumer(
+    const AvatarMDrive *drive,
+    CanFrame *frame
+);
+
 /* Write the AVATAR/CiA-402 controlword object 0x6040:00. */
 bool avatar_m_drive_build_write_controlword(
     const AvatarMDrive *drive,

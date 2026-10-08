@@ -177,6 +177,26 @@ int main(void)
     );
 
     CHECK(
+        canopen_master_service_heartbeat(&master, 0U) &&
+        fake.tx_count == 1U &&
+        fake.tx[0].id == 0x77FU &&
+        fake.tx[0].dlc == 1U &&
+        fake.tx[0].data[0] == 0x05U,
+        "Master produces 0x77F operational heartbeat"
+    );
+    CHECK(
+        canopen_master_service_heartbeat(&master, 99U) &&
+        fake.tx_count == 1U,
+        "Heartbeat period suppresses duplicate transmission"
+    );
+    CHECK(
+        canopen_master_service_heartbeat(&master, 100U) &&
+        fake.tx_count == 2U,
+        "Master heartbeat repeats at 100ms"
+    );
+    fake_clear_tx(&fake);
+
+    CHECK(
         canopen_master_send_nmt_all(
             &master,
             CANOPEN_NMT_START
@@ -276,9 +296,23 @@ int main(void)
         "Heartbeat timeout marks communication unhealthy"
     );
 
-    fake_clear_tx(
-        &fake
+    fake_clear_tx(&fake);
+    CHECK(
+        canopen_master_begin_set_heartbeat_consumer(&master, 0U, 140U) &&
+        fake.tx_count == 1U &&
+        fake.tx[0].id == 0x601U &&
+        fake.tx[0].data[0] == 0x23U &&
+        fake.tx[0].data[1] == 0x16U &&
+        fake.tx[0].data[2] == 0x10U &&
+        fake.tx[0].data[3] == 0x01U &&
+        fake.tx[0].data[4] == 0xD0U &&
+        fake.tx[0].data[5] == 0x07U &&
+        fake.tx[0].data[6] == 0x7FU &&
+        fake.tx[0].data[7] == 0x00U,
+        "SDO writes 0x1016:01 = 0x007F07D0"
     );
+    canopen_master_sdo_clear(&master);
+    fake_clear_tx(&fake);
 
     CHECK(
         canopen_master_begin_set_interpolation_mode(
