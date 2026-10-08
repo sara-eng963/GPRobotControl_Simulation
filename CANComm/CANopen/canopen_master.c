@@ -2,6 +2,7 @@
 
 #include "canopen_heartbeat.h"
 #include "canopen_ids.h"
+#include "canopen_objects.h"
 #include "../../ServoDrive/CiA402/cia402.h"
 
 #include <stddef.h>
@@ -1046,7 +1047,7 @@ bool canopen_master_begin_set_heartbeat_consumer(
 
     return begin_sdo(
         master, node_index, &frame,
-        AVATAR_M_OD_HEARTBEAT_CONSUMER_TIME,
+        CANOPEN_OD_HEARTBEAT_CONSUMER_TIME,
         CANOPEN_DRIVE_CONSUMER_SUBINDEX,
         false, now_ms
     );
@@ -1072,7 +1073,7 @@ bool canopen_master_begin_read_heartbeat_consumer(
 
     return begin_sdo(
         master, node_index, &frame,
-        AVATAR_M_OD_HEARTBEAT_CONSUMER_TIME,
+        CANOPEN_OD_HEARTBEAT_CONSUMER_TIME,
         CANOPEN_DRIVE_CONSUMER_SUBINDEX,
         true, now_ms
     );
