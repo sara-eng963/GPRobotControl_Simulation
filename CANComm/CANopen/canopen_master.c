@@ -21,7 +21,8 @@ static bool node_ids_valid_and_unique(
 
     for (uint8_t i = 0U; i < config->node_count; ++i)
     {
-        if (!canopen_node_id_valid(config->node_ids[i]))
+        if (!canopen_node_id_valid(config->node_ids[i]) ||
+            config->node_ids[i] == CANOPEN_CONTROLLER_NODE_ID)
         {
             return false;
         }
@@ -339,6 +340,39 @@ static void process_sdo_response(
     }
 }
 
+bool canopen_master_service_heartbeat(
+    CanopenMaster *master,
+    uint32_t now_ms
+)
+{
+    if (master == NULL || !master->initialized)
+    {
+        return false;
+    }
+
+    if (master->controller_heartbeat_sent &&
+        (uint32_t)(now_ms - master->last_controller_heartbeat_ms) <
+            CANOPEN_CONTROLLER_HEARTBEAT_MS)
+    {
+        return true;
+    }
+
+    CanFrame frame;
+    if (!canopen_heartbeat_build(
+            CANOPEN_CONTROLLER_NODE_ID,
+            CANOPEN_HEARTBEAT_OPERATIONAL,
+            &frame) ||
+        !send_frame(master, &frame))
+    {
+        /* Do not mark failed transmissions as sent. Retry on next tick. */
+        return false;
+    }
+
+    master->last_controller_heartbeat_ms = now_ms;
+    master->controller_heartbeat_sent = true;
+    return true;
+}
+
 bool canopen_master_poll(
     CanopenMaster *master,
     uint32_t now_ms
@@ -348,6 +382,11 @@ bool canopen_master_poll(
         master == NULL ||
         !master->initialized
     )
+    {
+        return false;
+    }
+
+    if (!canopen_master_service_heartbeat(master, now_ms))
     {
         return false;
     }
@@ -982,6 +1021,61 @@ bool canopen_master_begin_set_heartbeat_period(
             false,
             now_ms
         );
+}
+
+bool canopen_master_begin_set_heartbeat_consumer(
+    CanopenMaster *master,
+    size_t node_index,
+    uint32_t now_ms
+)
+{
+    if (master == NULL || node_index >= master->node_count)
+    {
+        return false;
+    }
+
+    CanFrame frame;
+    if (!avatar_m_drive_build_set_heartbeat_consumer(
+            &master->drives[node_index],
+            CANOPEN_CONTROLLER_NODE_ID,
+            CANOPEN_DRIVE_CONSUMER_TIMEOUT_MS,
+            &frame))
+    {
+        return false;
+    }
+
+    return begin_sdo(
+        master, node_index, &frame,
+        AVATAR_M_OD_HEARTBEAT_CONSUMER_TIME,
+        CANOPEN_DRIVE_CONSUMER_SUBINDEX,
+        false, now_ms
+    );
+}
+
+bool canopen_master_begin_read_heartbeat_consumer(
+    CanopenMaster *master,
+    size_t node_index,
+    uint32_t now_ms
+)
+{
+    if (master == NULL || node_index >= master->node_count)
+    {
+        return false;
+    }
+
+    CanFrame frame;
+    if (!avatar_m_drive_build_read_heartbeat_consumer(
+            &master->drives[node_index], &frame))
+    {
+        return false;
+    }
+
+    return begin_sdo(
+        master, node_index, &frame,
+        AVATAR_M_OD_HEARTBEAT_CONSUMER_TIME,
+        CANOPEN_DRIVE_CONSUMER_SUBINDEX,
+        true, now_ms
+    );
 }
 
 bool canopen_master_begin_write_controlword(

@@ -124,6 +124,47 @@ bool avatar_m_drive_build_set_heartbeat_period(
     );
 }
 
+bool avatar_m_drive_build_set_heartbeat_consumer(
+    const AvatarMDrive *drive,
+    uint8_t controller_node_id,
+    uint16_t consumer_timeout_ms,
+    CanFrame *frame
+)
+{
+    if (drive == NULL ||
+        !canopen_node_id_valid(controller_node_id) ||
+        consumer_timeout_ms == 0U)
+    {
+        return false;
+    }
+
+    const uint32_t value =
+        ((uint32_t)controller_node_id << 16) |
+        (uint32_t)consumer_timeout_ms;
+
+    return canopen_sdo_build_write_u32(
+        drive->node_id,
+        AVATAR_M_OD_HEARTBEAT_CONSUMER_TIME,
+        1U,
+        value,
+        frame
+    );
+}
+
+bool avatar_m_drive_build_read_heartbeat_consumer(
+    const AvatarMDrive *drive,
+    CanFrame *frame
+)
+{
+    return drive != NULL &&
+        canopen_sdo_build_read(
+            drive->node_id,
+            AVATAR_M_OD_HEARTBEAT_CONSUMER_TIME,
+            1U,
+            frame
+        );
+}
+
 bool avatar_m_drive_build_write_controlword(
     const AvatarMDrive *drive,
     uint16_t controlword,

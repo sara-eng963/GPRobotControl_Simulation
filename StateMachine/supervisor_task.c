@@ -712,7 +712,32 @@ static void supervisor_task_entry(void *argument)
             if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
         }
 
-        run_active_state(context);
+        /*
+         * Keep producing Node 127's heartbeat even while PAUSED, FAULT,
+         * or EMERGENCY_STOP. A dead/stalled supervisor sends nothing, so
+         * the AVATAR drives' 0x1016 consumer can detect controller loss.
+         */
+        bool controller_hb_ok = true;
+        if (context->config.canopen_master != NULL &&
+            context->config.canopen_master->initialized)
+        {
+            controller_hb_ok = canopen_master_service_heartbeat(
+                context->config.canopen_master,
+                supervisor_now_ms()
+            );
+        }
+        if (!controller_hb_ok &&
+            context->machine.activeState != ROBOT_STATE_FAULT &&
+            context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+        {
+            emit_step_failure(context, 0xE001U);
+        }
+        if (controller_hb_ok ||
+            context->machine.activeState == ROBOT_STATE_FAULT ||
+            context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)
+        {
+            run_active_state(context);
+        }
         if (context->config.io.write_outputs != NULL)
         {
             SupervisorOutputSnapshot outputs;

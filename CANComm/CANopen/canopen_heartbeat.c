@@ -3,6 +3,33 @@
 #include "canopen_ids.h"
 
 #include <stddef.h>
+#include <string.h>
+
+bool canopen_heartbeat_build(
+    uint8_t producer_node_id,
+    CanopenHeartbeatState state,
+    CanFrame *frame
+)
+{
+    if (frame == NULL || !canopen_node_id_valid(producer_node_id))
+    {
+        return false;
+    }
+
+    if (state != CANOPEN_HEARTBEAT_OPERATIONAL &&
+        state != CANOPEN_HEARTBEAT_PRE_OPERATIONAL &&
+        state != CANOPEN_HEARTBEAT_STOPPED)
+    {
+        /* Boot-up (0x00) is a startup event, not a cyclic producer state. */
+        return false;
+    }
+
+    memset(frame, 0, sizeof(*frame));
+    frame->id = canopen_heartbeat_id(producer_node_id);
+    frame->dlc = 1U;
+    frame->data[0] = (uint8_t)state;
+    return true;
+}
 
 bool canopen_heartbeat_parse(
     const CanFrame *frame,
