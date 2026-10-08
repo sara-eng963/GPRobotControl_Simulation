@@ -47,6 +47,10 @@ typedef struct
 
     /* Object 0x1017. Vendor manual default: 1000 ms. */
     uint32_t heartbeat_period_ms;
+    uint32_t heartbeat_consumer_value;
+    uint32_t consumer_elapsed_ms;
+    bool consumer_heartbeat_seen;
+    bool communication_drop_alarm;
     uint32_t heartbeat_elapsed_ms;
 } AvatarMNodeSim;
 
