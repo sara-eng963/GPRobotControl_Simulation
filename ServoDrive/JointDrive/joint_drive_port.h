@@ -87,6 +87,20 @@ static inline bool joint_drive_port_read_axis(const JointDrivePort *port,
            port->read_axis(port->context, axis, feedback);
 }
 
+/* Confirm every axis has decoded an Operation Enabled state. */
+static inline bool joint_drive_port_all_enabled(const JointDrivePort *port)
+{
+    if (!joint_drive_port_valid(port))
+        return false;
+    for (size_t i = 0U; i < JOINT_DRIVE_AXES; ++i) {
+        JointDriveAxisFeedback axis = {0};
+        if (!joint_drive_port_read_axis(port, i, &axis) ||
+            !axis.operation_enabled)
+            return false;
+    }
+    return true;
+}
+
 static inline bool joint_drive_port_send_targets(const JointDrivePort *port,
                                                  const int32_t targets[JOINT_DRIVE_AXES])
 {
