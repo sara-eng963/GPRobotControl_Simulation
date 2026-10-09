@@ -4,11 +4,12 @@
 
 ```text
 Supervisor / robot states
-       ↓ JointDrivePort
-CANopenJointDrivePort (adapter)
-       ↓ CanopenMaster (CiA-402 + AVATAR PDO/NMT/SDO)
-CanBackend (SIL Kit today; STM32 FDCAN later)
-       ↓ six AVATAR M nodes
+       ├─ JointDrivePort (IDLE / HOMING / APPROACH / TEACHING / EXECUTION)
+       └─ DriveCommissioningPort (BOOT: identity, network, SDO)
+             ↓ CANopen adapters
+          CanopenMaster (CiA-402 + AVATAR PDO/NMT/SDO)
+             ↓ CanBackend (SIL Kit today; STM32 FDCAN later)
+          Six AVATAR M nodes
 ```
 
 The **state machine** decides *when* and *why* to move. The **joint-drive
@@ -27,6 +28,9 @@ RPDO4 frames followed by SYNC.
   on all axes before advancing.
 - `state_teaching`: **read-only** capture of joint feedback and FK-based TCP
   measurements; manual-guidance motion remains a separate capability.
+- `state_boot`: uses the separate commissioning port for NMT/SDO setup,
+  heartbeat state and CiA-402 enable sequencing, then uses the joint-drive
+  port for cyclic six-axis hold commands and freshness verification.
 
 ## Deliberate boundaries
 
@@ -43,16 +47,20 @@ RPDO4 frames followed by SYNC.
   post-command fresh feedback and apply timeouts.
 - A position snapshot is not automatically coherent across axes unless the
   backend/owner enforces that. TPDO counters remain per-axis.
-- `state_boot` still performs CANopen-specific drive commissioning (NMT,
-  SDO, CiA-402). Do not add every commissioning operation to the motion port;
-  introduce a separate commissioning/control interface when migrating BOOT.
+- `state_boot` performs drive commissioning via `DriveCommissioningPort`
+  rather than calling `CanopenMaster` directly. The port is local and
+  nonblocking; it does not replace the concrete CANopen protocol coordinator.
+- The supervisor is still the composition root owning `CanopenMaster` and
+  service-heartbeat production; simulator-specific input and HMI helpers still
+  access it directly. Protocol ownership remains one supervisor task in the
+  intended firmware architecture.
 - Hard real-time 500 Hz timing and safety-rated stopping remain **unverified**
   on STM32 hardware. Passing PC SIL Kit tests is not hardware qualification.
 
 ## Regression checks
 
-The root CMake project registers standalone fake-drive tests for IDLE,
-HOMING, APPROACH, and TEACHING; `canopen_master_test` verifies the CANopen
+The root CMake project registers standalone fake-drive tests for BOOT,
+IDLE, HOMING, APPROACH, and TEACHING; `canopen_master_test` verifies the CANopen
 adapter's RPDO4 + SYNC sequence; `supervisor_silkit_sequence` runs the
 full simulated six-motor supervisory workflow.
 
