@@ -49,6 +49,7 @@ if(ENABLE_SILKIT)
         -Wall
         -Wextra
         -Werror=implicit-function-declaration
+        -Werror=incompatible-pointer-types
     )
 
     target_include_directories(
