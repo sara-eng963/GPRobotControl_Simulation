@@ -1601,7 +1601,9 @@ static void udp_status(void *ctx,const SupervisorDiagnostics *s)
     w[0]=HMI_STATUS_MAGIC;w[1]=HMI_PROTOCOL_VERSION;w[2]=++status_sequence;
     w[3]=s->machine.activeState;w[4]=s->selected_geometry;w[5]=estop;
     w[6]=s->machine.activeState==ROBOT_STATE_PAUSED;
-    w[7]=s->machine.activeState==ROBOT_STATE_TEACHING && guidance_pending && !estop;
+    w[7]=s->machine.activeState==ROBOT_STATE_TEACHING &&
+         guidance_pose_queue != NULL &&
+         uxQueueMessagesWaiting(guidance_pose_queue) > 0U && !estop;
     w[8]=s->boot.phase;w[9]=s->boot.error;w[10]=s->homing_phase;w[11]=s->homing_error;
     w[14]=s->teaching.phase;w[15]=s->teaching.error;w[16]=s->teaching.status_message_id;
     w[17]=s->teaching.next_point_number;w[18]=s->segment_count;
