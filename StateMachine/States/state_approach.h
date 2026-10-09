@@ -466,9 +466,4 @@ const char *state_approach_error_name(
 );
 
 
-#ifdef __cplusplus
-}
-#endif
-
-
 #endif /* STATE_APPROACH_H */
