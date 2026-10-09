@@ -28,7 +28,7 @@ target_include_directories(supervisor_interface_test PRIVATE
     ${CMAKE_SOURCE_DIR}/StateMachine/States
 )
 target_link_libraries(supervisor_interface_test PRIVATE
-    freertos_kernel freertos_config control_core canopen_stack pthread m
+    freertos_kernel freertos_config control_core canopen_stack intercore_ipc pthread m
 )
 add_test(NAME supervisor_interface_test COMMAND supervisor_interface_test)
 set_tests_properties(supervisor_interface_test PROPERTIES TIMEOUT 15)
