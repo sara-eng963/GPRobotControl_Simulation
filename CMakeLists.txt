@@ -356,6 +356,7 @@ add_executable(
     CANComm/Tests/test_canopen_master.c
 
     CANComm/CANopen/canopen_master.c
+    ServoDrive/JointDrive/canopen_joint_drive_port.c
     CANComm/CANopen/canopen_nmt.c
     CANComm/CANopen/canopen_sdo.c
     CANComm/CANopen/canopen_heartbeat.c
