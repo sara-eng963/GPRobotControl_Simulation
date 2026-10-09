@@ -28,7 +28,8 @@ add_executable(supervisor_interface_test
 )
 target_compile_features(supervisor_interface_test PRIVATE c_std_11)
 target_compile_options(supervisor_interface_test PRIVATE
-    -Wall -Wextra -Werror=implicit-function-declaration)
+    -Wall -Wextra -Werror=implicit-function-declaration
+    -Werror=incompatible-pointer-types)
 target_include_directories(supervisor_interface_test PRIVATE
     ${CMAKE_SOURCE_DIR}/StateMachine
     ${CMAKE_SOURCE_DIR}/StateMachine/States
