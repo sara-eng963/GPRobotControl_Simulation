@@ -494,3 +494,19 @@ target_include_directories(joint_drive_approach_test PRIVATE
 target_link_libraries(joint_drive_approach_test PRIVATE control_core m)
 enable_testing()
 add_test(NAME joint_drive_approach_test COMMAND joint_drive_approach_test)
+
+# TEACHING capture regression with fake six-axis drive, no CANopen / SIL Kit.
+add_executable(joint_drive_teaching_test
+    StateMachine/Tests/test_joint_drive_teaching.c
+    StateMachine/States/state_teaching.c
+    ServoDrive/AvatarM/avatar_m_position.c
+)
+target_compile_features(joint_drive_teaching_test PRIVATE c_std_11)
+target_compile_options(joint_drive_teaching_test PRIVATE
+    -Wall -Wextra -Werror=implicit-function-declaration
+    -Werror=incompatible-pointer-types)
+target_include_directories(joint_drive_teaching_test PRIVATE
+    StateMachine StateMachine/States ServoDrive/JointDrive)
+target_link_libraries(joint_drive_teaching_test PRIVATE control_core m)
+enable_testing()
+add_test(NAME joint_drive_teaching_test COMMAND joint_drive_teaching_test)
