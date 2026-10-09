@@ -4,7 +4,6 @@
 #include "../../ControlCore/Math/control_types.h"
 #include "../../ControlCore/Math/math3d.h"
 
-#include "../../ServoDrive/CiA402/cia402.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -354,16 +353,15 @@ static bool config_is_valid(
  * We only replace the old external "someone fills TeachingInputs" boundary
  * with our existing robot interfaces:
  *
- *      AVATAR TPDO4 feedback
+ *      JointDrivePort feedback and operation-enabled status
  *      AVATAR position conversion
- *      CiA-402
  *      ControlCore FK
  */
 
 static bool build_teaching_inputs(
     const RobotConfig *robot,
     const TeachingRuntimeInputs *runtime,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     const AvatarMPositionScale position_scales[ROBOT_DOF],
     uint32_t now_ms,
     TeachingInputs *inputs
@@ -372,17 +370,15 @@ static bool build_teaching_inputs(
     if (
         robot == NULL ||
         runtime == NULL ||
-        master == NULL ||
+        !joint_drive_port_valid(drive_port) ||
         position_scales == NULL ||
-        inputs == NULL ||
-        !master->initialized ||
-        master->node_count != ROBOT_DOF
+        inputs == NULL
     )
     {
         return false;
     }
 
-    if (!canopen_master_poll(master, now_ms))
+    if (!joint_drive_port_poll(drive_port, now_ms))
     {
         return false;
     }
@@ -433,7 +429,7 @@ static bool build_teaching_inputs(
      */
     inputs->measurement_valid = true;
     inputs->drives_ready =
-        canopen_master_healthy(master, now_ms);
+        joint_drive_port_healthy(drive_port, now_ms);
 
     double q[ROBOT_DOF] =
     {
@@ -443,12 +439,11 @@ static bool build_teaching_inputs(
 
     for (size_t axis = 0U; axis < ROBOT_DOF; ++axis)
     {
-        const AvatarMDrive *drive =
-            canopen_master_drive(master, axis);
+        JointDriveAxisFeedback feedback;
 
         if (
-            drive == NULL ||
-            !drive->feedback_valid ||
+            !joint_drive_port_read_axis(drive_port, axis, &feedback) ||
+            !feedback.feedback_valid ||
             !avatar_m_position_scale_valid(
                 &position_scales[axis])
         )
@@ -462,7 +457,7 @@ static bool build_teaching_inputs(
 
         if (!avatar_m_position_units_to_joint_rad(
                 &position_scales[axis],
-                drive->feedback.actual_position,
+                feedback.actual_position_units,
                 &joint_rad))
         {
             inputs->measurement_valid = false;
@@ -479,10 +474,7 @@ static bool build_teaching_inputs(
             inputs->measurement_valid = false;
         }
 
-        if (
-            drive->cia402_state !=
-            CIA402_STATE_OPERATION_ENABLED
-        )
+        if (!feedback.operation_enabled)
         {
             inputs->drives_ready = false;
         }
@@ -1524,7 +1516,7 @@ StateStepResult state_teaching_step(
     TeachingState *state,
     const RobotConfig *robot,
     const TeachingRuntimeInputs *runtime,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     const AvatarMPositionScale position_scales[ROBOT_DOF],
     uint32_t now_ms,
     TeachingEvent event,
@@ -1535,7 +1527,7 @@ StateStepResult state_teaching_step(
         state == NULL ||
         robot == NULL ||
         runtime == NULL ||
-        master == NULL ||
+        drive_port == NULL ||
         position_scales == NULL ||
         outputs == NULL
     )
@@ -1559,7 +1551,7 @@ StateStepResult state_teaching_step(
         !build_teaching_inputs(
             robot,
             runtime,
-            master,
+            drive_port,
             position_scales,
             now_ms,
             &inputs
