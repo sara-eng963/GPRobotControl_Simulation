@@ -478,3 +478,19 @@ target_include_directories(joint_drive_homing_test PRIVATE
 target_link_libraries(joint_drive_homing_test PRIVATE control_core m)
 enable_testing()
 add_test(NAME joint_drive_homing_test COMMAND joint_drive_homing_test)
+
+# APPROACH regression without CANopen or SIL Kit: six-axis fake drive.
+add_executable(joint_drive_approach_test
+    StateMachine/Tests/test_joint_drive_approach.c
+    StateMachine/States/state_approach.c
+    ServoDrive/AvatarM/avatar_m_position.c
+)
+target_compile_features(joint_drive_approach_test PRIVATE c_std_11)
+target_compile_options(joint_drive_approach_test PRIVATE
+    -Wall -Wextra -Werror=implicit-function-declaration
+    -Werror=incompatible-pointer-types)
+target_include_directories(joint_drive_approach_test PRIVATE
+    StateMachine StateMachine/States ServoDrive/JointDrive)
+target_link_libraries(joint_drive_approach_test PRIVATE control_core m)
+enable_testing()
+add_test(NAME joint_drive_approach_test COMMAND joint_drive_approach_test)
