@@ -28,6 +28,7 @@ typedef struct {
     unsigned commands;
     unsigned polls;
     unsigned reads;
+    unsigned configuration_checks;
 } FakeDrive;
 
 static inline void fake_joint_drive_reset(FakeDrive *fake)
@@ -48,7 +49,9 @@ static inline void fake_joint_drive_reset(FakeDrive *fake)
 
 static inline bool fake_drive_is_configured(void *ctx)
 {
-    return ((FakeDrive *)ctx)->configured;
+    FakeDrive *fake = (FakeDrive *)ctx;
+    ++fake->configuration_checks;
+    return fake->configured;
 }
 
 static inline bool fake_drive_poll(void *ctx, uint32_t now_ms)

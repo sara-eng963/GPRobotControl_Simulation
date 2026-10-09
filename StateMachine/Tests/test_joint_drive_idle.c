@@ -26,6 +26,14 @@ int main(void)
 
     reset_fake(&fake);
     JointDrivePort port = fake_joint_drive_make_port(&fake);
+    CHECK(joint_drive_port_all_enabled(&port) &&
+          fake.configuration_checks == 1U,
+          "Composite enable check validates port configuration exactly once");
+    fake.configured = false;
+    CHECK(!joint_drive_port_all_enabled(&port) &&
+          fake.configuration_checks == 2U,
+          "Composite enable check rejects an unconfigured drive");
+    fake.configured = true;
     state_idle_enter(&idle);
     CHECK(state_idle_step(&idle, IDLE_COMMAND_NONE, &port, 0) == STATE_STEP_RUNNING &&
           idle.phase == IDLE_PHASE_HOLDING,
