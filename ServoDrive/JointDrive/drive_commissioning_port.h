@@ -61,6 +61,7 @@ typedef struct {
 typedef struct {
     void *context;
 
+    bool (*is_initialized)(void *context);
     bool (*is_configured)(void *context);
     void (*reset_runtime)(void *context, uint32_t heartbeat_timeout_ms);
     bool (*send_network_command)(void *context, DriveNetworkCommand command);
@@ -82,14 +83,14 @@ static inline bool drive_commissioning_port_valid(
     const DriveCommissioningPort *port)
 {
     return port != NULL && port->context != NULL &&
+           port->is_initialized != NULL &&
            port->is_configured != NULL &&
            port->reset_runtime != NULL &&
            port->send_network_command != NULL &&
            port->all_heartbeat_state != NULL &&
            port->begin_operation != NULL &&
            port->operation_result != NULL &&
-           port->clear_operation != NULL &&
-           port->is_configured(port->context);
+           port->clear_operation != NULL;
 }
 
 static inline bool drive_commissioning_port_begin(
