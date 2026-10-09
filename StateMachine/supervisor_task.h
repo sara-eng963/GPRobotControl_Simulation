@@ -2,6 +2,8 @@
 #define SUPERVISOR_TASK_H
 
 #include "state_machine.h"
+/* Composition root still owns the concrete CANopen coordinator. */
+#include "../CANComm/CANopen/canopen_master.h"
 #include "supervisor_io.h"
 #include "supervisor_hmi.h"
 #include "States/state_approach.h"
