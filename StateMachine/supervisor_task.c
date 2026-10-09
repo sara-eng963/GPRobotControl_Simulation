@@ -182,7 +182,7 @@ static void enter_active_state(SupervisorTaskContext *context)
             state_approach_enter(
                 &context->approach,
                 context->config.robot,
-                context->config.canopen_master,
+                &context->execution_drive,
                 context->config.avatar_position_scales,
                 &request,
                 context->config.approach_config,
