@@ -2,7 +2,7 @@
 #define STATE_BOOT_H
 
 #include "../state_machine_types.h"
-#include "../../CANComm/CANopen/canopen_master.h"
+#include "../../ServoDrive/JointDrive/drive_commissioning_port.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -88,15 +88,15 @@ void state_boot_enter(
 );
 
 /*
- * Execute one non-blocking CANopen BOOT step.
- *
- * Platform-specific CAN setup happens before BOOT. The caller supplies an
- * initialized CanopenMaster backed by STM32 FDCAN, SIL Kit, or a test backend.
- * BOOT then performs CANopen/AVATAR commissioning only.
+ * Execute one nonblocking commissioning / readiness step.
+ * DriveCommissioningPort handles NMT/SDO-style network setup;
+ * JointDrivePort handles cyclic commands and feedback.
+ * Neither interface is an inter-core IPC ABI.
  */
 StateStepResult state_boot_step(
     BootState *boot,
-    CanopenMaster *master,
+    const DriveCommissioningPort *commissioning,
+    const JointDrivePort *drive_port,
     uint32_t now_ms
 );
 
