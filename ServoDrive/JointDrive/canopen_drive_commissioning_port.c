@@ -2,6 +2,12 @@
 
 #include "../AvatarM/avatar_m_registers.h"
 
+static bool initialized(void *context)
+{
+    const CanopenMaster *master = (const CanopenMaster *)context;
+    return master != NULL && master->initialized;
+}
+
 static bool configured(void *context)
 {
     const CanopenMaster *master = (const CanopenMaster *)context;
@@ -134,6 +140,7 @@ DriveCommissioningPort canopen_drive_commissioning_port_make(CanopenMaster *mast
 {
     const DriveCommissioningPort port = {
         .context = master,
+        .is_initialized = initialized,
         .is_configured = configured,
         .reset_runtime = reset_runtime,
         .send_network_command = send_network_command,
