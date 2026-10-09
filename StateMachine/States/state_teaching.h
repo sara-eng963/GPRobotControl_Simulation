@@ -4,7 +4,7 @@
 
 #include "../state_machine_types.h"
 
-#include "../../CANComm/CANopen/canopen_master.h"
+#include "../../ServoDrive/JointDrive/joint_drive_port.h"
 #include "../../ControlCore/Config/robot_config.h"
 #include "../../ServoDrive/AvatarM/avatar_m_position.h"
 
@@ -391,9 +391,9 @@ void state_teaching_enter(
  *
  * The function:
  *
- *      1. polls the shared CANopen master,
- *      2. reads all six AVATAR TPDO4 joint positions,
- *      3. checks all six CiA-402 drives,
+ *      1. polls the shared joint drive service,
+ *      2. reads six measured joint positions from the drive port,
+ *      3. checks all six operation-enabled statuses,
  *      4. converts raw AVATAR counts to joint radians,
  *      5. computes TCP pose using our ControlCore FK,
  *      6. runs the preserved Teaching event logic.
@@ -417,7 +417,7 @@ StateStepResult state_teaching_step(
     TeachingState *state,
     const RobotConfig *robot,
     const TeachingRuntimeInputs *runtime,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     const AvatarMPositionScale position_scales[ROBOT_DOF],
     uint32_t now_ms,
     TeachingEvent event,
