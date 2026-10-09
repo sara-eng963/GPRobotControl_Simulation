@@ -1,6 +1,5 @@
 #include "state_boot.h"
 
-#include "../../ServoDrive/AvatarM/avatar_m_registers.h"
 #include "../../ServoDrive/CiA402/cia402.h"
 
 #include <stdbool.h>
@@ -60,145 +59,39 @@ static bool phase_timed_out(
 
 static BootSdoPollResult collect_sdo(
     BootState *boot,
-    CanopenMaster *master,
+    const DriveCommissioningPort *commissioning,
     bool expect_read,
     uint8_t expected_size,
     uint32_t *value
 )
 {
-    const CanopenMasterSdoState state =
-        canopen_master_sdo_state(master);
+    const DriveOperationResult result =
+        drive_commissioning_port_result(commissioning);
 
-    if (state == CANOPEN_MASTER_SDO_PENDING)
-    {
+    if (result.status == DRIVE_OPERATION_PENDING)
         return BOOT_SDO_WAITING;
-    }
 
-    if (state == CANOPEN_MASTER_SDO_COMPLETE)
+    if (result.status == DRIVE_OPERATION_COMPLETE)
     {
-        const CanopenSdoResponse *response =
-            canopen_master_sdo_response(master);
-
-        if (response == NULL)
-        {
+        if (!result.has_response ||
+            (expect_read &&
+             (!result.is_read || result.data_size != expected_size)) ||
+            (!expect_read && !result.is_write_ok))
             return BOOT_SDO_FAILED;
-        }
-
-        if (
-            expect_read &&
-            (
-                response->type != CANOPEN_SDO_RESPONSE_READ ||
-                response->data_size != expected_size
-            )
-        )
-        {
-            return BOOT_SDO_FAILED;
-        }
-
-        if (
-            !expect_read &&
-            response->type != CANOPEN_SDO_RESPONSE_WRITE_OK
-        )
-        {
-            return BOOT_SDO_FAILED;
-        }
 
         if (expect_read && value != NULL)
-        {
-            *value = response->value;
-        }
+            *value = result.value;
 
-        canopen_master_sdo_clear(master);
+        drive_commissioning_port_clear(commissioning);
         boot->transactionStarted = false;
-
         return BOOT_SDO_DONE;
     }
 
-    if (
-        state == CANOPEN_MASTER_SDO_ABORT ||
-        state == CANOPEN_MASTER_SDO_TIMEOUT ||
-        state == CANOPEN_MASTER_SDO_TRANSPORT_ERROR
-    )
-    {
-        if (state == CANOPEN_MASTER_SDO_ABORT)
-        {
-            const CanopenSdoResponse *response =
-                canopen_master_sdo_response(master);
-
-            if (response != NULL)
-            {
-                printf(
-                    "BOOT: SDO abort 0x%08lX\n",
-                    (unsigned long)response->abort_code
-                );
-            }
-        }
-
-        return BOOT_SDO_FAILED;
-    }
+    if (result.status == DRIVE_OPERATION_ABORT)
+        printf("BOOT: SDO abort 0x%08lX\n",
+               (unsigned long)result.abort_code);
 
     return BOOT_SDO_FAILED;
-}
-
-static bool all_nodes_report_state(
-    const CanopenMaster *master,
-    AvatarMHeartbeatState expected
-)
-{
-    if (
-        master == NULL ||
-        master->node_count != BOOT_EXPECTED_NODE_COUNT
-    )
-    {
-        return false;
-    }
-
-    for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
-    {
-        const AvatarMDrive *drive =
-            canopen_master_drive(master, i);
-
-        if (
-            drive == NULL ||
-            !drive->heartbeat_seen ||
-            drive->heartbeat_state != expected
-        )
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static bool expected_node_layout(
-    const CanopenMaster *master
-)
-{
-    if (
-        master == NULL ||
-        !master->initialized ||
-        master->node_count != BOOT_EXPECTED_NODE_COUNT
-    )
-    {
-        return false;
-    }
-
-    for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
-    {
-        const AvatarMDrive *drive =
-            canopen_master_drive(master, i);
-
-        if (
-            drive == NULL ||
-            drive->node_id != (uint8_t)(i + 1U)
-        )
-        {
-            return false;
-        }
-    }
-
-    return true;
 }
 
 void state_boot_enter(
@@ -220,14 +113,15 @@ void state_boot_enter(
 
 StateStepResult state_boot_step(
     BootState *boot,
-    CanopenMaster *master,
+    const DriveCommissioningPort *commissioning,
+    const JointDrivePort *drive_port,
     uint32_t now_ms
 )
 {
     if (
         boot == NULL ||
-        master == NULL ||
-        !master->initialized
+        !drive_commissioning_port_valid(commissioning) ||
+        !joint_drive_port_valid(drive_port)
     )
     {
         if (boot != NULL)
@@ -242,7 +136,7 @@ StateStepResult state_boot_step(
         return STATE_STEP_FAILED;
     }
 
-    if (!canopen_master_poll(master, now_ms))
+    if (!joint_drive_port_poll(drive_port, now_ms))
     {
         return boot_fail(
             boot,
@@ -257,7 +151,7 @@ StateStepResult state_boot_step(
     {
         case BOOT_PHASE_INIT:
         {
-            if (!expected_node_layout(master))
+            if (!commissioning->is_configured(commissioning->context))
             {
                 return boot_fail(
                     boot,
@@ -266,10 +160,8 @@ StateStepResult state_boot_step(
                 );
             }
 
-            canopen_master_clear_runtime(master);
-
-            master->heartbeat_timeout_ms =
-                BOOT_HEARTBEAT_TIMEOUT_MS;
+            drive_commissioning_port_reset_runtime(
+                commissioning, BOOT_HEARTBEAT_TIMEOUT_MS);
 
             boot_advance(
                 boot,
@@ -282,9 +174,8 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_RESET_COMMUNICATION:
         {
-            if (!canopen_master_send_nmt_all(
-                    master,
-                    CANOPEN_NMT_RESET_COMMUNICATION))
+            if (!drive_commissioning_port_network_command(
+                    commissioning, DRIVE_NETWORK_RESET_COMMUNICATION))
             {
                 return boot_fail(
                     boot,
@@ -304,9 +195,8 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_WAIT_BOOTUP:
         {
-            if (all_nodes_report_state(
-                    master,
-                    AVATAR_M_HEARTBEAT_STATE_BOOTUP))
+            if (drive_commissioning_port_all_heartbeat_state(
+                    commissioning, DRIVE_NODE_BOOTUP))
             {
                 boot_advance(
                     boot,
@@ -344,11 +234,8 @@ StateStepResult state_boot_step(
 
             if (!boot->transactionStarted)
             {
-                if (!canopen_master_begin_read_identity(
-                        master,
-                        boot->axisIndex,
-                        boot->identitySubindex,
-                        now_ms))
+                if (!drive_commissioning_port_begin(commissioning,
+                        DRIVE_COMMISSION_READ_IDENTITY, boot->axisIndex, boot->identitySubindex, now_ms))
                 {
                     return boot_fail(
                         boot,
@@ -366,7 +253,7 @@ StateStepResult state_boot_step(
             const BootSdoPollResult sdo =
                 collect_sdo(
                     boot,
-                    master,
+                    commissioning,
                     true,
                     4U,
                     &value
@@ -388,14 +275,14 @@ StateStepResult state_boot_step(
 
             if (
                 boot->identitySubindex == 1U &&
-                value != (uint32_t)AVATAR_M_EXPECTED_VENDOR_ID
+                value != (uint32_t)commissioning->expected_vendor_id
             )
             {
                 printf(
                     "BOOT: Node %u vendor mismatch. "
                     "Expected=0x%08lX Actual=0x%08lX\n",
                     (unsigned)boot->axisIndex + 1U,
-                    (unsigned long)AVATAR_M_EXPECTED_VENDOR_ID,
+                    (unsigned long)commissioning->expected_vendor_id,
                     (unsigned long)value
                 );
 
@@ -408,14 +295,14 @@ StateStepResult state_boot_step(
 
             if (
                 boot->identitySubindex == 2U &&
-                value != (uint32_t)AVATAR_M_EXPECTED_PRODUCT_CODE
+                value != (uint32_t)commissioning->expected_product_code
             )
             {
                 printf(
                     "BOOT: Node %u product mismatch. "
                     "Expected=0x%08lX Actual=0x%08lX\n",
                     (unsigned)boot->axisIndex + 1U,
-                    (unsigned long)AVATAR_M_EXPECTED_PRODUCT_CODE,
+                    (unsigned long)commissioning->expected_product_code,
                     (unsigned long)value
                 );
 
@@ -454,11 +341,8 @@ StateStepResult state_boot_step(
 
             if (!boot->transactionStarted)
             {
-                if (!canopen_master_begin_set_heartbeat_period(
-                        master,
-                        boot->axisIndex,
-                        BOOT_HEARTBEAT_PRODUCER_MS,
-                        now_ms))
+                if (!drive_commissioning_port_begin(commissioning,
+                        DRIVE_COMMISSION_SET_HEARTBEAT_PERIOD, boot->axisIndex, BOOT_HEARTBEAT_PRODUCER_MS, now_ms))
                 {
                     return boot_fail(
                         boot,
@@ -474,7 +358,7 @@ StateStepResult state_boot_step(
             const BootSdoPollResult sdo =
                 collect_sdo(
                     boot,
-                    master,
+                    commissioning,
                     false,
                     0U,
                     NULL
@@ -514,10 +398,12 @@ StateStepResult state_boot_step(
             if (!boot->transactionStarted)
             {
                 const bool sent = verify
-                    ? canopen_master_begin_read_heartbeat_consumer(
-                        master, boot->axisIndex, now_ms)
-                    : canopen_master_begin_set_heartbeat_consumer(
-                        master, boot->axisIndex, now_ms);
+                    ? drive_commissioning_port_begin(commissioning,
+                        DRIVE_COMMISSION_READ_HEARTBEAT_CONSUMER,
+                        boot->axisIndex, 0U, now_ms)
+                    : drive_commissioning_port_begin(commissioning,
+                        DRIVE_COMMISSION_SET_HEARTBEAT_CONSUMER,
+                        boot->axisIndex, 0U, now_ms);
                 if (!sent)
                     return boot_fail(boot, BOOT_ERROR_HEARTBEAT_CONFIGURATION,
                                      (int)boot->axisIndex + 1);
@@ -526,11 +412,13 @@ StateStepResult state_boot_step(
             }
             uint32_t readback = 0U;
             const BootSdoPollResult result =
-                collect_sdo(boot, master, verify, verify ? 4U : 0U,
+                collect_sdo(
+                    boot,
+                    commissioning, verify, verify ? 4U : 0U,
                             verify ? &readback : NULL);
             if (result == BOOT_SDO_WAITING) return STATE_STEP_RUNNING;
             if (result != BOOT_SDO_DONE ||
-                (verify && readback != CANOPEN_DRIVE_CONSUMER_VALUE))
+                (verify && readback != commissioning->expected_heartbeat_consumer))
                 return boot_fail(boot, BOOT_ERROR_HEARTBEAT_CONFIGURATION,
                                  (int)boot->axisIndex + 1);
             boot->axisIndex++;
@@ -552,10 +440,8 @@ StateStepResult state_boot_step(
 
             if (!boot->transactionStarted)
             {
-                if (!canopen_master_begin_set_interpolation_mode(
-                        master,
-                        boot->axisIndex,
-                        now_ms))
+                if (!drive_commissioning_port_begin(commissioning,
+                        DRIVE_COMMISSION_SET_INTERPOLATION_MODE, boot->axisIndex, 0U, now_ms))
                 {
                     return boot_fail(
                         boot,
@@ -571,7 +457,7 @@ StateStepResult state_boot_step(
             const BootSdoPollResult sdo =
                 collect_sdo(
                     boot,
-                    master,
+                    commissioning,
                     false,
                     0U,
                     NULL
@@ -610,10 +496,8 @@ StateStepResult state_boot_step(
 
             if (!boot->transactionStarted)
             {
-                if (!canopen_master_begin_read_mode_display(
-                        master,
-                        boot->axisIndex,
-                        now_ms))
+                if (!drive_commissioning_port_begin(commissioning,
+                        DRIVE_COMMISSION_READ_MODE_DISPLAY, boot->axisIndex, 0U, now_ms))
                 {
                     return boot_fail(
                         boot,
@@ -631,7 +515,7 @@ StateStepResult state_boot_step(
             const BootSdoPollResult sdo =
                 collect_sdo(
                     boot,
-                    master,
+                    commissioning,
                     true,
                     1U,
                     &value
@@ -644,7 +528,7 @@ StateStepResult state_boot_step(
 
             if (
                 sdo == BOOT_SDO_FAILED ||
-                (uint8_t)value != (uint8_t)AVATAR_M_MODE_INTERPOLATION
+                (uint8_t)value != (uint8_t)commissioning->expected_mode_display
             )
             {
                 return boot_fail(
@@ -660,9 +544,8 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_REQUEST_OPERATIONAL:
         {
-            if (!canopen_master_send_nmt_all(
-                    master,
-                    CANOPEN_NMT_START))
+            if (!drive_commissioning_port_network_command(
+                    commissioning, DRIVE_NETWORK_START))
             {
                 return boot_fail(
                     boot,
@@ -682,9 +565,8 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_WAIT_OPERATIONAL_HEARTBEAT:
         {
-            if (all_nodes_report_state(
-                    master,
-                    AVATAR_M_HEARTBEAT_STATE_OPERATIONAL))
+            if (drive_commissioning_port_all_heartbeat_state(
+                    commissioning, DRIVE_NODE_OPERATIONAL))
             {
                 boot_advance(
                     boot,
@@ -730,10 +612,8 @@ StateStepResult state_boot_step(
             {
                 if (!boot->transactionStarted)
                 {
-                    if (!canopen_master_begin_read_statusword(
-                            master,
-                            boot->axisIndex,
-                            now_ms))
+                    if (!drive_commissioning_port_begin(commissioning,
+                        DRIVE_COMMISSION_READ_STATUSWORD, boot->axisIndex, 0U, now_ms))
                     {
                         return boot_fail(
                             boot,
@@ -750,8 +630,8 @@ StateStepResult state_boot_step(
 
                 const BootSdoPollResult sdo =
                     collect_sdo(
-                        boot,
-                        master,
+                    boot,
+                    commissioning,
                         true,
                         2U,
                         &raw_statusword
@@ -820,11 +700,8 @@ StateStepResult state_boot_step(
 
             if (!boot->transactionStarted)
             {
-                if (!canopen_master_begin_write_controlword(
-                        master,
-                        boot->axisIndex,
-                        boot->pendingControlword,
-                        now_ms))
+                if (!drive_commissioning_port_begin(commissioning,
+                        DRIVE_COMMISSION_WRITE_CONTROLWORD, boot->axisIndex, boot->pendingControlword, now_ms))
                 {
                     return boot_fail(
                         boot,
@@ -840,7 +717,7 @@ StateStepResult state_boot_step(
             const BootSdoPollResult sdo =
                 collect_sdo(
                     boot,
-                    master,
+                    commissioning,
                     false,
                     0U,
                     NULL
@@ -895,10 +772,8 @@ StateStepResult state_boot_step(
 
             if (!boot->transactionStarted)
             {
-                if (!canopen_master_begin_read_actual_position(
-                        master,
-                        boot->axisIndex,
-                        now_ms))
+                if (!drive_commissioning_port_begin(commissioning,
+                        DRIVE_COMMISSION_READ_ACTUAL_POSITION, boot->axisIndex, 0U, now_ms))
                 {
                     return boot_fail(
                         boot,
@@ -916,7 +791,7 @@ StateStepResult state_boot_step(
             const BootSdoPollResult sdo =
                 collect_sdo(
                     boot,
-                    master,
+                    commissioning,
                     true,
                     4U,
                     &raw_position
@@ -951,13 +826,11 @@ StateStepResult state_boot_step(
             for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
             {
                 boot->lastTpdoCount[i] =
-                    canopen_master_tpdo_rx_count(master, i);
+                    joint_drive_port_feedback_sequence(drive_port, i);
             }
 
-            if (!canopen_master_send_target_cycle(
-                    master,
-                    boot->holdPosition,
-                    BOOT_EXPECTED_NODE_COUNT))
+            if (!joint_drive_port_send_targets(
+                    drive_port, boot->holdPosition))
             {
                 return boot_fail(
                     boot,
@@ -984,7 +857,7 @@ StateStepResult state_boot_step(
             for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
             {
                 if (
-                    canopen_master_tpdo_rx_count(master, i) <=
+                    joint_drive_port_feedback_sequence(drive_port, i) <=
                     boot->lastTpdoCount[i]
                 )
                 {
@@ -1011,8 +884,8 @@ StateStepResult state_boot_step(
             }
 
             if (
-                !canopen_master_all_feedback_valid(master) ||
-                !canopen_master_all_drives_operation_enabled(master)
+                !joint_drive_port_all_feedback_valid(drive_port) ||
+                !joint_drive_port_all_enabled(drive_port)
             )
             {
                 return boot_fail(
@@ -1029,9 +902,7 @@ StateStepResult state_boot_step(
                 BOOT_STABILITY_REQUIRED_CYCLES
             )
             {
-                if (!canopen_master_ready_for_motion(
-                        master,
-                        now_ms))
+                if (!joint_drive_port_ready(drive_port, now_ms))
                 {
                     return boot_fail(
                         boot,
@@ -1052,13 +923,11 @@ StateStepResult state_boot_step(
             for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
             {
                 boot->lastTpdoCount[i] =
-                    canopen_master_tpdo_rx_count(master, i);
+                    joint_drive_port_feedback_sequence(drive_port, i);
             }
 
-            if (!canopen_master_send_target_cycle(
-                    master,
-                    boot->holdPosition,
-                    BOOT_EXPECTED_NODE_COUNT))
+            if (!joint_drive_port_send_targets(
+                    drive_port, boot->holdPosition))
             {
                 return boot_fail(
                     boot,
