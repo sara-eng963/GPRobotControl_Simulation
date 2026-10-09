@@ -470,7 +470,7 @@ static void run_active_state(SupervisorTaskContext *context)
             step = state_idle_step(
                 &context->idle,
                 IDLE_COMMAND_NONE,
-                context->config.canopen_master,
+                &context->execution_drive,
                 supervisor_now_ms()
             );
             if (step == STATE_STEP_FAILED)
