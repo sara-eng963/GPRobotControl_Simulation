@@ -3,6 +3,7 @@
 #include "../HMI/hmi_protocol.h"
 #include "../CANComm/SILKit/silkit_can_backend.h"
 #include "../CANComm/CANopen/canopen_master.h"
+#include "../ServoDrive/JointDrive/canopen_joint_drive_port.h"
 #include "../ServoDrive/CiA402/cia402.h"
 #include "../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../ControlCore/Kinematics/control_fk.h"
@@ -33,6 +34,8 @@ static RobotConfig robot;
  */
 static CanBackend silkit_backend;
 static CanopenMaster can_boot_master;
+/* Non-owning drive service for the standalone retraction callback. */
+static JointDrivePort retraction_drive;
 static AvatarMPositionScale avatar_position_scales[SIM_NUM_AXES];
 
 static HomingConfig homing_config;
@@ -724,7 +727,7 @@ static StateStepResult retract_step(void *ctx) {
         &retraction,
         &homing_config,
         &robot,
-        &can_boot_master,
+        &retraction_drive,
         avatar_position_scales,
         (uint32_t)(xTaskGetTickCount()*1000/configTICK_RATE_HZ)
     );
@@ -1669,6 +1672,9 @@ static bool start_system(void)
         fprintf(stderr, "Could not initialize SIL Kit CANopen transport.\n");
         return false;
     }
+    /* Reuse the same CANopen coordinator as Supervisor; never reinterpret
+     * a CanopenMaster pointer as JointDrivePort during retraction. */
+    retraction_drive = canopen_joint_drive_port_make(&can_boot_master);
     execution_services=(PathExecutionServices){execution_read_prefetched,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
     paused_services=(PausedServices){hold,off,NULL};fault_services=(FaultServices){safe,NULL};emergency_services=(EmergencyStopServices){safe,NULL};
     SupervisorTaskConfig c={0};
