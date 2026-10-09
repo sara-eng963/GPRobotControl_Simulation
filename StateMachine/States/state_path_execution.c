@@ -79,11 +79,9 @@ static bool services_valid(const PathExecutionServices *services)
            services->controlled_stop != NULL;
 }
 
-static bool master_valid(const CanopenMaster *master)
+static bool drive_valid(const PathExecutionState *state)
 {
-    return master != NULL &&
-           master->initialized &&
-           master->node_count == CANOPEN_MASTER_MAX_NODES;
+    return state != NULL && joint_drive_port_valid(&state->drive);
 }
 
 static bool master_motion_ready(
@@ -93,24 +91,18 @@ static bool master_motion_ready(
 {
     return
         state != NULL &&
-        master_valid(state->master) &&
-        canopen_master_ready_for_motion(
-            state->master,
-            now_ms
-        );
+        drive_valid(state) &&
+        joint_drive_port_ready(&state->drive, now_ms);
 }
 
 static void capture_tpdo_counts(PathExecutionState *state)
 {
     for (size_t axis = 0U;
-         axis < CANOPEN_MASTER_MAX_NODES;
+         axis < JOINT_DRIVE_AXES;
          ++axis)
     {
         state->command_tpdo_count[axis] =
-            canopen_master_tpdo_rx_count(
-                state->master,
-                axis
-            );
+            joint_drive_port_feedback_sequence(&state->drive, axis);
     }
 }
 
@@ -123,10 +115,7 @@ static bool fresh_feedback_arrived(
          ++axis)
     {
         if (
-            canopen_master_tpdo_rx_count(
-                state->master,
-                axis
-            )
+            joint_drive_port_feedback_sequence(&state->drive, axis)
             <=
             state->command_tpdo_count[axis]
         )
@@ -161,7 +150,7 @@ static bool send_execution_sample(
     if (
         state == NULL ||
         sample == NULL ||
-        !master_valid(state->master)
+        !drive_valid(state)
     )
     {
         return false;
@@ -169,10 +158,9 @@ static bool send_execution_sample(
 
     capture_tpdo_counts(state);
 
-    if (!canopen_master_send_target_cycle(
-            state->master,
-            sample->target_position_units,
-            CANOPEN_MASTER_MAX_NODES))
+    if (!joint_drive_port_send_targets(
+            &state->drive,
+            sample->target_position_units))
     {
         return false;
     }
@@ -186,7 +174,7 @@ static bool send_execution_sample(
 
 void state_path_execution_enter(
     PathExecutionState *state,
-    CanopenMaster *master,
+    const JointDrivePort *drive,
     const PathExecutionRequest *request,
     const PathExecutionConfig *config,
     const PathExecutionServices *services
@@ -202,7 +190,7 @@ void state_path_execution_enter(
     state->phase = PATH_EXEC_PHASE_CHECK_PREREQUISITES;
     state->result = PATH_EXEC_RESULT_RUNNING;
     state->initialized = true;
-    state->master = master;
+    if (drive != NULL) state->drive = *drive;
 
     if (
         request != NULL &&
@@ -274,10 +262,7 @@ StateStepResult state_path_execution_step(
 
     if (
         !master_valid(state->master) ||
-        !canopen_master_poll(
-            state->master,
-            inputs->now_ms
-        )
+        !joint_drive_port_poll(&state->drive, inputs->now_ms)
     )
     {
         return fail(
