@@ -261,7 +261,7 @@ int main(void)
     fake.fail_identity=true;
     state_boot_enter(&boot);
     CHECK(simulate(&boot,&commissioning,&motion,100U)==STATE_STEP_FAILED &&
-          boot.error==BOOT_ERROR_NODE_IDENTITY && boot.failedAxis==1,
+          boot.error==BOOT_ERROR_NODE_IDENTITY && boot.failed_axis==1,
           "BOOT identifies which drive failed identity request");
 
     fake_init(&fake);
@@ -275,7 +275,7 @@ int main(void)
     fake.faulted_statusword=true;
     state_boot_enter(&boot);
     CHECK(simulate(&boot,&commissioning,&motion,1000U)==STATE_STEP_FAILED &&
-          boot.error==BOOT_ERROR_DRIVE_FAULT && boot.failedAxis==1,
+          boot.error==BOOT_ERROR_DRIVE_FAULT && boot.failed_axis==1,
           "BOOT rejects CiA402 drive fault");
 
     printf("\nBOOT tests failed: %d\n",failures);

@@ -28,11 +28,11 @@ static void boot_advance(
 )
 {
     boot->phase = next_phase;
-    boot->axisIndex = 0U;
-    boot->identitySubindex = 1U;
-    boot->transactionStarted = false;
-    boot->stableCycles = 0U;
-    boot->phaseStartedMs = now_ms;
+    boot->axis_index = 0U;
+    boot->identity_subindex = 1U;
+    boot->transaction_started = false;
+    boot->stable_cycles = 0U;
+    boot->phase_started_ms = now_ms;
 }
 
 static StateStepResult boot_fail(
@@ -42,7 +42,7 @@ static StateStepResult boot_fail(
 )
 {
     boot->error = error;
-    boot->failedAxis = failed_axis;
+    boot->failed_axis = failed_axis;
     boot->phase = BOOT_PHASE_FAILED;
     return STATE_STEP_FAILED;
 }
@@ -53,7 +53,7 @@ static bool phase_timed_out(
 )
 {
     return
-        (uint32_t)(now_ms - boot->phaseStartedMs) >=
+        (uint32_t)(now_ms - boot->phase_started_ms) >=
         BOOT_PHASE_TIMEOUT_MS;
 }
 
@@ -83,7 +83,7 @@ static BootSdoPollResult collect_sdo(
             *value = result.value;
 
         drive_commissioning_port_clear(commissioning);
-        boot->transactionStarted = false;
+        boot->transaction_started = false;
         return BOOT_SDO_DONE;
     }
 
@@ -107,8 +107,8 @@ void state_boot_enter(
 
     boot->phase = BOOT_PHASE_INIT;
     boot->error = BOOT_ERROR_NONE;
-    boot->enableStage = BOOT_ENABLE_READ_STATUS;
-    boot->identitySubindex = 1U;
+    boot->enable_stage = BOOT_ENABLE_READ_STATUS;
+    boot->identity_subindex = 1U;
 }
 
 StateStepResult state_boot_step(
@@ -151,8 +151,8 @@ StateStepResult state_boot_step(
         return boot_fail(
             boot,
             BOOT_ERROR_SDO,
-            boot->axisIndex < JOINT_DRIVE_AXES
-                ? (int)boot->axisIndex + 1
+            boot->axis_index < JOINT_DRIVE_AXES
+                ? (int)boot->axis_index + 1
                 : 0
         );
     }
@@ -231,7 +231,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_VERIFY_IDENTITIES:
         {
-            if (boot->axisIndex >= JOINT_DRIVE_AXES)
+            if (boot->axis_index >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -242,19 +242,19 @@ StateStepResult state_boot_step(
                 return STATE_STEP_RUNNING;
             }
 
-            if (!boot->transactionStarted)
+            if (!boot->transaction_started)
             {
                 if (!drive_commissioning_port_begin(commissioning,
-                        DRIVE_COMMISSION_READ_IDENTITY, boot->axisIndex, boot->identitySubindex, now_ms))
+                        DRIVE_COMMISSION_READ_IDENTITY, boot->axis_index, boot->identity_subindex, now_ms))
                 {
                     return boot_fail(
                         boot,
                         BOOT_ERROR_NODE_IDENTITY,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
-                boot->transactionStarted = true;
+                boot->transaction_started = true;
                 return STATE_STEP_RUNNING;
             }
 
@@ -279,19 +279,19 @@ StateStepResult state_boot_step(
                 return boot_fail(
                     boot,
                     BOOT_ERROR_NODE_IDENTITY,
-                    (int)boot->axisIndex + 1
+                    (int)boot->axis_index + 1
                 );
             }
 
             if (
-                boot->identitySubindex == 1U &&
+                boot->identity_subindex == 1U &&
                 value != (uint32_t)commissioning->expected_vendor_id
             )
             {
                 printf(
                     "BOOT: Node %u vendor mismatch. "
                     "Expected=0x%08lX Actual=0x%08lX\n",
-                    (unsigned)boot->axisIndex + 1U,
+                    (unsigned)boot->axis_index + 1U,
                     (unsigned long)commissioning->expected_vendor_id,
                     (unsigned long)value
                 );
@@ -299,19 +299,19 @@ StateStepResult state_boot_step(
                 return boot_fail(
                     boot,
                     BOOT_ERROR_NODE_IDENTITY,
-                    (int)boot->axisIndex + 1
+                    (int)boot->axis_index + 1
                 );
             }
 
             if (
-                boot->identitySubindex == 2U &&
+                boot->identity_subindex == 2U &&
                 value != (uint32_t)commissioning->expected_product_code
             )
             {
                 printf(
                     "BOOT: Node %u product mismatch. "
                     "Expected=0x%08lX Actual=0x%08lX\n",
-                    (unsigned)boot->axisIndex + 1U,
+                    (unsigned)boot->axis_index + 1U,
                     (unsigned long)commissioning->expected_product_code,
                     (unsigned long)value
                 );
@@ -319,18 +319,18 @@ StateStepResult state_boot_step(
                 return boot_fail(
                     boot,
                     BOOT_ERROR_NODE_IDENTITY,
-                    (int)boot->axisIndex + 1
+                    (int)boot->axis_index + 1
                 );
             }
 
-            if (boot->identitySubindex == 1U)
+            if (boot->identity_subindex == 1U)
             {
-                boot->identitySubindex = 2U;
+                boot->identity_subindex = 2U;
             }
             else
             {
-                boot->identitySubindex = 1U;
-                boot->axisIndex++;
+                boot->identity_subindex = 1U;
+                boot->axis_index++;
             }
 
             return STATE_STEP_RUNNING;
@@ -338,7 +338,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_CONFIGURE_HEARTBEAT:
         {
-            if (boot->axisIndex >= JOINT_DRIVE_AXES)
+            if (boot->axis_index >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -349,19 +349,19 @@ StateStepResult state_boot_step(
                 return STATE_STEP_RUNNING;
             }
 
-            if (!boot->transactionStarted)
+            if (!boot->transaction_started)
             {
                 if (!drive_commissioning_port_begin(commissioning,
-                        DRIVE_COMMISSION_SET_HEARTBEAT_PERIOD, boot->axisIndex, BOOT_HEARTBEAT_PRODUCER_MS, now_ms))
+                        DRIVE_COMMISSION_SET_HEARTBEAT_PERIOD, boot->axis_index, BOOT_HEARTBEAT_PRODUCER_MS, now_ms))
                 {
                     return boot_fail(
                         boot,
                         BOOT_ERROR_HEARTBEAT_CONFIGURATION,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
-                boot->transactionStarted = true;
+                boot->transaction_started = true;
                 return STATE_STEP_RUNNING;
             }
 
@@ -384,11 +384,11 @@ StateStepResult state_boot_step(
                 return boot_fail(
                     boot,
                     BOOT_ERROR_HEARTBEAT_CONFIGURATION,
-                    (int)boot->axisIndex + 1
+                    (int)boot->axis_index + 1
                 );
             }
 
-            boot->axisIndex++;
+            boot->axis_index++;
             return STATE_STEP_RUNNING;
         }
 
@@ -397,7 +397,7 @@ StateStepResult state_boot_step(
         {
             const bool verify =
                 boot->phase == BOOT_PHASE_VERIFY_HEARTBEAT_CONSUMER;
-            if (boot->axisIndex >= JOINT_DRIVE_AXES)
+            if (boot->axis_index >= JOINT_DRIVE_AXES)
             {
                 boot_advance(boot,
                     verify ? BOOT_PHASE_CONFIGURE_INTERPOLATION_MODE
@@ -405,19 +405,19 @@ StateStepResult state_boot_step(
                     now_ms);
                 return STATE_STEP_RUNNING;
             }
-            if (!boot->transactionStarted)
+            if (!boot->transaction_started)
             {
                 const bool sent = verify
                     ? drive_commissioning_port_begin(commissioning,
                         DRIVE_COMMISSION_READ_HEARTBEAT_CONSUMER,
-                        boot->axisIndex, 0U, now_ms)
+                        boot->axis_index, 0U, now_ms)
                     : drive_commissioning_port_begin(commissioning,
                         DRIVE_COMMISSION_SET_HEARTBEAT_CONSUMER,
-                        boot->axisIndex, 0U, now_ms);
+                        boot->axis_index, 0U, now_ms);
                 if (!sent)
                     return boot_fail(boot, BOOT_ERROR_HEARTBEAT_CONFIGURATION,
-                                     (int)boot->axisIndex + 1);
-                boot->transactionStarted = true;
+                                     (int)boot->axis_index + 1);
+                boot->transaction_started = true;
                 return STATE_STEP_RUNNING;
             }
             uint32_t readback = 0U;
@@ -430,14 +430,14 @@ StateStepResult state_boot_step(
             if (result != BOOT_SDO_DONE ||
                 (verify && readback != commissioning->expected_heartbeat_consumer))
                 return boot_fail(boot, BOOT_ERROR_HEARTBEAT_CONFIGURATION,
-                                 (int)boot->axisIndex + 1);
-            boot->axisIndex++;
+                                 (int)boot->axis_index + 1);
+            boot->axis_index++;
             return STATE_STEP_RUNNING;
         }
 
         case BOOT_PHASE_CONFIGURE_INTERPOLATION_MODE:
         {
-            if (boot->axisIndex >= JOINT_DRIVE_AXES)
+            if (boot->axis_index >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -448,19 +448,19 @@ StateStepResult state_boot_step(
                 return STATE_STEP_RUNNING;
             }
 
-            if (!boot->transactionStarted)
+            if (!boot->transaction_started)
             {
                 if (!drive_commissioning_port_begin(commissioning,
-                        DRIVE_COMMISSION_SET_INTERPOLATION_MODE, boot->axisIndex, 0U, now_ms))
+                        DRIVE_COMMISSION_SET_INTERPOLATION_MODE, boot->axis_index, 0U, now_ms))
                 {
                     return boot_fail(
                         boot,
                         BOOT_ERROR_MODE_CONFIGURATION,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
-                boot->transactionStarted = true;
+                boot->transaction_started = true;
                 return STATE_STEP_RUNNING;
             }
 
@@ -483,17 +483,17 @@ StateStepResult state_boot_step(
                 return boot_fail(
                     boot,
                     BOOT_ERROR_MODE_CONFIGURATION,
-                    (int)boot->axisIndex + 1
+                    (int)boot->axis_index + 1
                 );
             }
 
-            boot->axisIndex++;
+            boot->axis_index++;
             return STATE_STEP_RUNNING;
         }
 
         case BOOT_PHASE_VERIFY_INTERPOLATION_MODE:
         {
-            if (boot->axisIndex >= JOINT_DRIVE_AXES)
+            if (boot->axis_index >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -504,19 +504,19 @@ StateStepResult state_boot_step(
                 return STATE_STEP_RUNNING;
             }
 
-            if (!boot->transactionStarted)
+            if (!boot->transaction_started)
             {
                 if (!drive_commissioning_port_begin(commissioning,
-                        DRIVE_COMMISSION_READ_MODE_DISPLAY, boot->axisIndex, 0U, now_ms))
+                        DRIVE_COMMISSION_READ_MODE_DISPLAY, boot->axis_index, 0U, now_ms))
                 {
                     return boot_fail(
                         boot,
                         BOOT_ERROR_MODE_VERIFICATION,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
-                boot->transactionStarted = true;
+                boot->transaction_started = true;
                 return STATE_STEP_RUNNING;
             }
 
@@ -544,11 +544,11 @@ StateStepResult state_boot_step(
                 return boot_fail(
                     boot,
                     BOOT_ERROR_MODE_VERIFICATION,
-                    (int)boot->axisIndex + 1
+                    (int)boot->axis_index + 1
                 );
             }
 
-            boot->axisIndex++;
+            boot->axis_index++;
             return STATE_STEP_RUNNING;
         }
 
@@ -584,10 +584,10 @@ StateStepResult state_boot_step(
                     now_ms
                 );
 
-                boot->enableStage =
+                boot->enable_stage =
                     BOOT_ENABLE_READ_STATUS;
 
-                boot->driveEnableAttempts =
+                boot->drive_enable_attempts =
                     0U;
 
                 return STATE_STEP_RUNNING;
@@ -607,7 +607,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_ENABLE_DRIVES:
         {
-            if (boot->axisIndex >= JOINT_DRIVE_AXES)
+            if (boot->axis_index >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -618,21 +618,21 @@ StateStepResult state_boot_step(
                 return STATE_STEP_RUNNING;
             }
 
-            if (boot->enableStage == BOOT_ENABLE_READ_STATUS)
+            if (boot->enable_stage == BOOT_ENABLE_READ_STATUS)
             {
-                if (!boot->transactionStarted)
+                if (!boot->transaction_started)
                 {
                     if (!drive_commissioning_port_begin(commissioning,
-                        DRIVE_COMMISSION_READ_STATUSWORD, boot->axisIndex, 0U, now_ms))
+                        DRIVE_COMMISSION_READ_STATUSWORD, boot->axis_index, 0U, now_ms))
                     {
                         return boot_fail(
                             boot,
                             BOOT_ERROR_DRIVE_ENABLE,
-                            (int)boot->axisIndex + 1
+                            (int)boot->axis_index + 1
                         );
                     }
 
-                    boot->transactionStarted = true;
+                    boot->transaction_started = true;
                     return STATE_STEP_RUNNING;
                 }
 
@@ -657,7 +657,7 @@ StateStepResult state_boot_step(
                     return boot_fail(
                         boot,
                         BOOT_ERROR_DRIVE_ENABLE,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
@@ -671,7 +671,7 @@ StateStepResult state_boot_step(
                     return boot_fail(
                         boot,
                         BOOT_ERROR_DRIVE_FAULT,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
@@ -680,47 +680,47 @@ StateStepResult state_boot_step(
                     return boot_fail(
                         boot,
                         BOOT_ERROR_DRIVE_QUICK_STOP,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
                 if (drive_state == CIA402_STATE_OPERATION_ENABLED)
                 {
-                    boot->axisIndex++;
-                    boot->driveEnableAttempts = 0U;
+                    boot->axis_index++;
+                    boot->drive_enable_attempts = 0U;
                     return STATE_STEP_RUNNING;
                 }
 
                 if (!cia402_get_enable_controlword(
                         drive_state,
-                        &boot->pendingControlword))
+                        &boot->pending_controlword))
                 {
                     return boot_fail(
                         boot,
                         BOOT_ERROR_DRIVE_STATE,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
-                boot->enableStage =
+                boot->enable_stage =
                     BOOT_ENABLE_WRITE_CONTROLWORD;
 
                 return STATE_STEP_RUNNING;
             }
 
-            if (!boot->transactionStarted)
+            if (!boot->transaction_started)
             {
                 if (!drive_commissioning_port_begin(commissioning,
-                        DRIVE_COMMISSION_WRITE_CONTROLWORD, boot->axisIndex, boot->pendingControlword, now_ms))
+                        DRIVE_COMMISSION_WRITE_CONTROLWORD, boot->axis_index, boot->pending_controlword, now_ms))
                 {
                     return boot_fail(
                         boot,
                         BOOT_ERROR_DRIVE_ENABLE,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
-                boot->transactionStarted = true;
+                boot->transaction_started = true;
                 return STATE_STEP_RUNNING;
             }
 
@@ -743,25 +743,25 @@ StateStepResult state_boot_step(
                 return boot_fail(
                     boot,
                     BOOT_ERROR_DRIVE_ENABLE,
-                    (int)boot->axisIndex + 1
+                    (int)boot->axis_index + 1
                 );
             }
 
-            boot->driveEnableAttempts++;
+            boot->drive_enable_attempts++;
 
             if (
-                boot->driveEnableAttempts >
+                boot->drive_enable_attempts >
                 BOOT_DRIVE_ENABLE_MAX_ATTEMPTS
             )
             {
                 return boot_fail(
                     boot,
                     BOOT_ERROR_DRIVE_ENABLE,
-                    (int)boot->axisIndex + 1
+                    (int)boot->axis_index + 1
                 );
             }
 
-            boot->enableStage =
+            boot->enable_stage =
                 BOOT_ENABLE_READ_STATUS;
 
             return STATE_STEP_RUNNING;
@@ -769,7 +769,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_READ_POSITION_FEEDBACK:
         {
-            if (boot->axisIndex >= JOINT_DRIVE_AXES)
+            if (boot->axis_index >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -780,19 +780,19 @@ StateStepResult state_boot_step(
                 return STATE_STEP_RUNNING;
             }
 
-            if (!boot->transactionStarted)
+            if (!boot->transaction_started)
             {
                 if (!drive_commissioning_port_begin(commissioning,
-                        DRIVE_COMMISSION_READ_ACTUAL_POSITION, boot->axisIndex, 0U, now_ms))
+                        DRIVE_COMMISSION_READ_ACTUAL_POSITION, boot->axis_index, 0U, now_ms))
                 {
                     return boot_fail(
                         boot,
                         BOOT_ERROR_POSITION_FEEDBACK,
-                        (int)boot->axisIndex + 1
+                        (int)boot->axis_index + 1
                     );
                 }
 
-                boot->transactionStarted = true;
+                boot->transaction_started = true;
                 return STATE_STEP_RUNNING;
             }
 
@@ -817,17 +817,17 @@ StateStepResult state_boot_step(
                 return boot_fail(
                     boot,
                     BOOT_ERROR_POSITION_FEEDBACK,
-                    (int)boot->axisIndex + 1
+                    (int)boot->axis_index + 1
                 );
             }
 
             memcpy(
-                &boot->holdPosition[boot->axisIndex],
+                &boot->hold_position[boot->axis_index],
                 &raw_position,
                 sizeof(raw_position)
             );
 
-            boot->axisIndex++;
+            boot->axis_index++;
             return STATE_STEP_RUNNING;
         }
 
@@ -836,12 +836,12 @@ StateStepResult state_boot_step(
             for (size_t i = 0U; i < JOINT_DRIVE_AXES; ++i)
             {
                 if (!joint_drive_port_feedback_sequence(
-                        drive_port, i, &boot->lastTpdoCount[i]))
+                        drive_port, i, &boot->last_tpdo_count[i]))
                     return boot_fail(boot, BOOT_ERROR_CYCLIC_COMMUNICATION, 0);
             }
 
             if (!joint_drive_port_send_targets(
-                    drive_port, boot->holdPosition))
+                    drive_port, boot->hold_position))
             {
                 return boot_fail(
                     boot,
@@ -856,7 +856,7 @@ StateStepResult state_boot_step(
                 now_ms
             );
 
-            boot->cycleStartedMs = now_ms;
+            boot->cycle_started_ms = now_ms;
 
             return STATE_STEP_RUNNING;
         }
@@ -870,7 +870,7 @@ StateStepResult state_boot_step(
                 uint32_t current_sequence = 0U;
                 if (!joint_drive_port_feedback_sequence(
                         drive_port, i, &current_sequence) ||
-                    current_sequence <= boot->lastTpdoCount[i])
+                    current_sequence <= boot->last_tpdo_count[i])
                 {
                     all_fresh = false;
                     break;
@@ -880,7 +880,7 @@ StateStepResult state_boot_step(
             if (!all_fresh)
             {
                 if (
-                    (uint32_t)(now_ms - boot->cycleStartedMs) >=
+                    (uint32_t)(now_ms - boot->cycle_started_ms) >=
                     BOOT_CYCLIC_RESPONSE_TIMEOUT_MS
                 )
                 {
@@ -906,10 +906,10 @@ StateStepResult state_boot_step(
                 );
             }
 
-            boot->stableCycles++;
+            boot->stable_cycles++;
 
             if (
-                boot->stableCycles >=
+                boot->stable_cycles >=
                 BOOT_STABILITY_REQUIRED_CYCLES
             )
             {
@@ -934,12 +934,12 @@ StateStepResult state_boot_step(
             for (size_t i = 0U; i < JOINT_DRIVE_AXES; ++i)
             {
                 if (!joint_drive_port_feedback_sequence(
-                        drive_port, i, &boot->lastTpdoCount[i]))
+                        drive_port, i, &boot->last_tpdo_count[i]))
                     return boot_fail(boot, BOOT_ERROR_CYCLIC_COMMUNICATION, 0);
             }
 
             if (!joint_drive_port_send_targets(
-                    drive_port, boot->holdPosition))
+                    drive_port, boot->hold_position))
             {
                 return boot_fail(
                     boot,
@@ -948,7 +948,7 @@ StateStepResult state_boot_step(
                 );
             }
 
-            boot->cycleStartedMs = now_ms;
+            boot->cycle_started_ms = now_ms;
 
             return STATE_STEP_RUNNING;
         }

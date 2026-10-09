@@ -62,23 +62,23 @@ typedef struct
 {
     BootPhase phase;
     BootError error;
-    int failedAxis;
+    int failed_axis;
 
-    uint8_t axisIndex;
-    uint8_t identitySubindex;
-    bool transactionStarted;
+    uint8_t axis_index;
+    uint8_t identity_subindex;
+    bool transaction_started;
 
-    BootEnableStage enableStage;
-    uint16_t pendingControlword;
-    uint32_t driveEnableAttempts;
+    BootEnableStage enable_stage;
+    uint16_t pending_controlword;
+    uint32_t drive_enable_attempts;
 
-    int32_t holdPosition[JOINT_DRIVE_AXES];
+    int32_t hold_position[JOINT_DRIVE_AXES];
 
-    uint32_t stableCycles;
-    uint32_t lastTpdoCount[JOINT_DRIVE_AXES];
+    uint32_t stable_cycles;
+    uint32_t last_tpdo_count[JOINT_DRIVE_AXES];
 
-    uint32_t phaseStartedMs;
-    uint32_t cycleStartedMs;
+    uint32_t phase_started_ms;
+    uint32_t cycle_started_ms;
 } BootState;
 
 void state_boot_enter(
