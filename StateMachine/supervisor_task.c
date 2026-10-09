@@ -42,7 +42,7 @@ typedef struct
     PathValidationState validation;
     ApproachState approach;
     PathExecutionState path_execution;
-    JointDrivePort execution_drive;
+    JointDrivePort joint_drive;
     PausedState paused;
     FaultState fault;
     EmergencyStopState emergency_stop;
@@ -182,7 +182,7 @@ static void enter_active_state(SupervisorTaskContext *context)
             state_approach_enter(
                 &context->approach,
                 context->config.robot,
-                &context->execution_drive,
+                &context->joint_drive,
                 context->config.avatar_position_scales,
                 &request,
                 context->config.approach_config,
@@ -217,7 +217,7 @@ static void enter_active_state(SupervisorTaskContext *context)
                    sizeof(context->path_execution_inputs));
             state_path_execution_enter(
                 &context->path_execution,
-                &context->execution_drive,
+                &context->joint_drive,
                 &request,
                 context->config.path_execution_config,
                 context->config.path_execution_services
@@ -456,7 +456,7 @@ static void run_active_state(SupervisorTaskContext *context)
                 &context->homing,
                 context->config.homing_config,
                 context->config.robot,
-                &context->execution_drive,
+                &context->joint_drive,
                 context->config.avatar_position_scales,
                 supervisor_now_ms()
             );
@@ -470,7 +470,7 @@ static void run_active_state(SupervisorTaskContext *context)
             step = state_idle_step(
                 &context->idle,
                 IDLE_COMMAND_NONE,
-                &context->execution_drive,
+                &context->joint_drive,
                 supervisor_now_ms()
             );
             if (step == STATE_STEP_FAILED)
@@ -482,7 +482,7 @@ static void run_active_state(SupervisorTaskContext *context)
                 &context->teaching,
                 context->config.robot,
                 &context->teaching_runtime,
-                &context->execution_drive,
+                &context->joint_drive,
                 context->config.avatar_position_scales,
                 supervisor_now_ms(),
                 context->pending_teaching_event,
@@ -799,7 +799,7 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
         return false;
     }
 
-    g_supervisor.execution_drive =
+    g_supervisor.joint_drive =
         canopen_joint_drive_port_make(config->canopen_master);
     state_machine_init(&g_supervisor.machine);
     state_machine_enable_unified_execution(&g_supervisor.machine);
