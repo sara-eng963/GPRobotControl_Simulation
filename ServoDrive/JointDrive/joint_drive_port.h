@@ -98,7 +98,11 @@ static inline bool joint_drive_port_all_enabled(const JointDrivePort *port)
         return false;
     for (size_t i = 0U; i < JOINT_DRIVE_AXES; ++i) {
         JointDriveAxisFeedback axis = {0};
-        if (!joint_drive_port_read_axis(port, i, &axis) ||
+        /* Port validity/configuration was checked once above.
+         * Rechecking via joint_drive_port_read_axis() would repeat
+         * is_configured() (a six-node scan) for every axis.
+         */
+        if (!port->read_axis(port->context, i, &axis) ||
             !axis.operation_enabled)
             return false;
     }
