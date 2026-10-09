@@ -1,7 +1,5 @@
 #include "state_idle.h"
 
-#include "../../ServoDrive/CiA402/cia402.h"
-
 #include <stddef.h>
 #include <string.h>
 
@@ -20,30 +18,15 @@ static StateStepResult idle_fail(
     return STATE_STEP_FAILED;
 }
 
-static bool master_layout_valid(
-    const CanopenMaster *master
-)
-{
-    return
-        master != NULL &&
-        master->initialized &&
-        master->node_count == ROBOT_DOF;
-}
-
 static int first_disabled_axis(
-    const CanopenMaster *master
+    const JointDrivePort *drive_port
 )
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
-        const AvatarMDrive *drive =
-            canopen_master_drive(master, i);
-
-        if (
-            drive == NULL ||
-            drive->cia402_state !=
-                CIA402_STATE_OPERATION_ENABLED
-        )
+        JointDriveAxisFeedback feedback;
+        if (!joint_drive_port_read_axis(drive_port, i, &feedback) ||
+            !feedback.operation_enabled)
         {
             return (int)i + 1;
         }
@@ -53,7 +36,7 @@ static int first_disabled_axis(
 }
 
 static IdleError idle_network_status(
-    const CanopenMaster *master,
+    const JointDrivePort *drive_port,
     uint32_t now_ms,
     int *failed_axis
 )
@@ -61,20 +44,19 @@ static IdleError idle_network_status(
     *failed_axis = 0;
 
     if (
-        !master_layout_valid(master) ||
-        !canopen_master_healthy(master, now_ms)
+        !joint_drive_port_healthy(drive_port, now_ms)
     )
     {
         return IDLE_ERROR_COMMUNICATION;
     }
 
-    if (!canopen_master_all_feedback_valid(master))
+    if (!joint_drive_port_all_feedback_valid(drive_port))
     {
         return IDLE_ERROR_POSITION_FEEDBACK;
     }
 
     const int disabled_axis =
-        first_disabled_axis(master);
+        first_disabled_axis(drive_port);
 
     if (disabled_axis != 0)
     {
@@ -87,25 +69,25 @@ static IdleError idle_network_status(
 
 static void capture_tpdo_counts(
     IdleState *idle,
-    const CanopenMaster *master
+    const JointDrivePort *drive_port
 )
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
         idle->commandTpdoCount[i] =
-            canopen_master_tpdo_rx_count(master, i);
+            joint_drive_port_feedback_sequence(drive_port, i);
     }
 }
 
 static bool all_command_feedback_arrived(
     const IdleState *idle,
-    const CanopenMaster *master
+    const JointDrivePort *drive_port
 )
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
         if (
-            canopen_master_tpdo_rx_count(master, i) <=
+            joint_drive_port_feedback_sequence(drive_port, i) <=
             idle->commandTpdoCount[i]
         )
         {
@@ -129,16 +111,13 @@ static bool command_due(
 
 static StateStepResult send_hold_cycle(
     IdleState *idle,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     uint32_t now_ms
 )
 {
-    capture_tpdo_counts(idle, master);
+    capture_tpdo_counts(idle, drive_port);
 
-    if (!canopen_master_send_target_cycle(
-            master,
-            idle->holdPositionUnits,
-            ROBOT_DOF))
+    if (!joint_drive_port_send_targets(drive_port, idle->holdPositionUnits))
     {
         return idle_fail(
             idle,
@@ -174,13 +153,13 @@ void state_idle_enter(
 StateStepResult state_idle_step(
     IdleState *idle,
     IdleCommand command,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     uint32_t now_ms
 )
 {
     if (
         idle == NULL ||
-        master == NULL
+        drive_port == NULL
     )
     {
         if (idle != NULL)
@@ -195,7 +174,7 @@ StateStepResult state_idle_step(
         return STATE_STEP_FAILED;
     }
 
-    if (!canopen_master_poll(master, now_ms))
+    if (!joint_drive_port_poll(drive_port, now_ms))
     {
         return idle_fail(
             idle,
@@ -212,7 +191,7 @@ StateStepResult state_idle_step(
 
             const IdleError status =
                 idle_network_status(
-                    master,
+                    drive_port,
                     now_ms,
                     &failed_axis
                 );
@@ -228,13 +207,9 @@ StateStepResult state_idle_step(
 
             for (size_t i = 0U; i < ROBOT_DOF; ++i)
             {
-                const AvatarMDrive *drive =
-                    canopen_master_drive(master, i);
-
-                if (
-                    drive == NULL ||
-                    !drive->feedback_valid
-                )
+                JointDriveAxisFeedback feedback;
+                if (!joint_drive_port_read_axis(drive_port, i, &feedback) ||
+                    !feedback.feedback_valid)
                 {
                     return idle_fail(
                         idle,
@@ -244,7 +219,7 @@ StateStepResult state_idle_step(
                 }
 
                 idle->holdPositionUnits[i] =
-                    drive->feedback.actual_position;
+                    feedback.actual_position_units;
             }
 
             idle->phase = IDLE_PHASE_HOLDING;
@@ -258,7 +233,7 @@ StateStepResult state_idle_step(
 
             const IdleError status =
                 idle_network_status(
-                    master,
+                    drive_port,
                     now_ms,
                     &failed_axis
                 );
@@ -276,7 +251,7 @@ StateStepResult state_idle_step(
             {
                 if (all_command_feedback_arrived(
                         idle,
-                        master))
+                        drive_port))
                 {
                     idle->awaitingFeedback = false;
                     idle->cyclesHeld++;
@@ -328,7 +303,7 @@ StateStepResult state_idle_step(
 
             return send_hold_cycle(
                 idle,
-                master,
+                drive_port,
                 now_ms
             );
         }
