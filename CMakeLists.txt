@@ -445,3 +445,16 @@ target_compile_features(
 
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/external_memory_tests.cmake")
+
+# The IDLE state is tested using a fake drive port, without CANopen or SIL Kit.
+add_executable(joint_drive_idle_test
+    StateMachine/Tests/test_joint_drive_idle.c
+    StateMachine/States/state_idle.c
+)
+target_compile_features(joint_drive_idle_test PRIVATE c_std_11)
+target_compile_options(joint_drive_idle_test PRIVATE
+    -Wall -Wextra -Werror=implicit-function-declaration)
+target_include_directories(joint_drive_idle_test PRIVATE
+    StateMachine StateMachine/States ServoDrive/JointDrive)
+enable_testing()
+add_test(NAME joint_drive_idle_test COMMAND joint_drive_idle_test)
