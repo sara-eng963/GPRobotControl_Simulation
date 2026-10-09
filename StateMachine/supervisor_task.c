@@ -456,7 +456,7 @@ static void run_active_state(SupervisorTaskContext *context)
                 &context->homing,
                 context->config.homing_config,
                 context->config.robot,
-                context->config.canopen_master,
+                &context->execution_drive,
                 context->config.avatar_position_scales,
                 supervisor_now_ms()
             );
