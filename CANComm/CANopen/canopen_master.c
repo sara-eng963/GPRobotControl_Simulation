@@ -8,6 +8,23 @@
 #include <stddef.h>
 #include <string.h>
 
+static bool owner_access_allowed(const CanopenMaster *master)
+{
+    return master == NULL || master->owner_check == NULL ||
+           master->owner_check(master->owner_check_context);
+}
+
+bool canopen_master_bind_runtime_owner(CanopenMaster *master,
+                                       CanopenMasterOwnerCheck check,
+                                       void *context)
+{
+    if (master == NULL || !master->initialized || check == NULL ||
+        master->owner_check != NULL || !check(context)) return false;
+    master->owner_check_context = context;
+    master->owner_check = check;
+    return true;
+}
+
 static bool node_ids_valid_and_unique(
     const CanopenMasterConfig *config
 )
@@ -132,6 +149,7 @@ void canopen_master_close(
     CanopenMaster *master
 )
 {
+    if (!owner_access_allowed(master)) return;
     if (master == NULL)
     {
         return;
@@ -155,6 +173,7 @@ void canopen_master_clear_runtime(
     CanopenMaster *master
 )
 {
+    if (!owner_access_allowed(master)) return;
     if (
         master == NULL ||
         !master->initialized
@@ -193,6 +212,7 @@ void canopen_master_set_heartbeat_timeout(
     uint32_t timeout_ms
 )
 {
+    if (!owner_access_allowed(master)) return;
     if (master == NULL || !master->initialized)
     {
         return;
@@ -359,6 +379,7 @@ bool canopen_master_service_heartbeat(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (master == NULL || !master->initialized)
     {
         return false;
@@ -387,26 +408,15 @@ bool canopen_master_service_heartbeat(
     return true;
 }
 
-/*
- * TODO(FreeRTOS hardware integration): enforce single-task ownership of the
- * CANopen coordinator for polling, SDO/NMT and synchronized target writes.
- *
- * Do not bind ownership in canopen_master_init(): initialization currently
- * runs before the supervisor task starts, so the initializing task is not
- * necessarily the runtime owner. A bool/magic tag cannot detect competing
- * task callers. When the MCU task architecture is finalized, explicitly
- * claim a FreeRTOS TaskHandle_t in the drive-owning task, check it in all
- * mutating master entry points in debug builds, and route other tasks through
- * a queue. Guard FreeRTOS-specific code so standalone host tests remain usable.
- *
- * Until then, exclusive ownership is a caller-side precondition, NOT an
- * invariant verified by canopen_master_poll().
- */
+/* Runtime owner is installed by Supervisor after scheduling starts.
+ * This coordinator is RTOS-independent; foreign callers fail closed.
+ * Cross-task clients must use published snapshots and command queues. */
 bool canopen_master_poll(
     CanopenMaster *master,
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         !master->initialized
@@ -494,6 +504,7 @@ bool canopen_master_send_nmt_all(
     CanopenNmtCommand command
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         !master->initialized
@@ -523,6 +534,7 @@ bool canopen_master_send_sync(
     CanopenMaster *master
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         !master->initialized
@@ -558,6 +570,7 @@ bool canopen_master_send_target_cycle(
     size_t target_count
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         !master->initialized ||
@@ -599,6 +612,7 @@ const AvatarMDrive *canopen_master_drive(
     size_t node_index
 )
 {
+    if (!owner_access_allowed(master)) return NULL;
     if (
         master == NULL ||
         !master->initialized ||
@@ -617,6 +631,7 @@ uint32_t canopen_master_tpdo_rx_count(
     size_t node_index
 )
 {
+    if (!owner_access_allowed(master)) return 0U;
     if (
         master == NULL ||
         !master->initialized ||
@@ -634,6 +649,7 @@ bool canopen_master_all_feedback_valid(
     const CanopenMaster *master
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         !master->initialized ||
@@ -658,6 +674,7 @@ bool canopen_master_all_heartbeats_operational(
     const CanopenMaster *master
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         !master->initialized ||
@@ -690,6 +707,7 @@ bool canopen_master_all_drives_operation_enabled(
     const CanopenMaster *master
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (!canopen_master_all_feedback_valid(master))
     {
         return false;
@@ -714,6 +732,7 @@ bool canopen_master_healthy(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (!canopen_master_all_heartbeats_operational(master))
     {
         return false;
@@ -746,6 +765,7 @@ bool canopen_master_ready_for_motion(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     return
         canopen_master_healthy(
             master,
@@ -760,6 +780,7 @@ CanopenMasterSdoState canopen_master_sdo_state(
     const CanopenMaster *master
 )
 {
+    if (!owner_access_allowed(master)) return CANOPEN_MASTER_SDO_TRANSPORT_ERROR;
     if (master == NULL)
     {
         return
@@ -774,6 +795,7 @@ const CanopenSdoResponse *canopen_master_sdo_response(
     const CanopenMaster *master
 )
 {
+    if (!owner_access_allowed(master)) return NULL;
     if (
         master == NULL ||
         (
@@ -795,6 +817,7 @@ void canopen_master_sdo_clear(
     CanopenMaster *master
 )
 {
+    if (!owner_access_allowed(master)) return;
     if (master == NULL)
     {
         return;
@@ -873,6 +896,7 @@ bool canopen_master_begin_set_interpolation_mode(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         node_index >= master->node_count
@@ -908,6 +932,7 @@ bool canopen_master_begin_read_work_mode(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         node_index >= master->node_count
@@ -943,6 +968,7 @@ bool canopen_master_begin_read_mode_display(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         node_index >= master->node_count
@@ -979,6 +1005,7 @@ bool canopen_master_begin_read_identity(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         node_index >= master->node_count ||
@@ -1022,6 +1049,7 @@ bool canopen_master_begin_set_heartbeat_period(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         node_index >= master->node_count
@@ -1058,6 +1086,7 @@ bool canopen_master_begin_set_heartbeat_consumer(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (master == NULL || node_index >= master->node_count)
     {
         return false;
@@ -1087,6 +1116,7 @@ bool canopen_master_begin_read_heartbeat_consumer(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (master == NULL || node_index >= master->node_count)
     {
         return false;
@@ -1114,6 +1144,7 @@ bool canopen_master_begin_write_controlword(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         node_index >= master->node_count
@@ -1150,6 +1181,7 @@ bool canopen_master_begin_read_statusword(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         node_index >= master->node_count
@@ -1185,6 +1217,7 @@ bool canopen_master_begin_read_actual_position(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         node_index >= master->node_count
@@ -1220,6 +1253,7 @@ bool canopen_master_begin_read_alarm(
     uint32_t now_ms
 )
 {
+    if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
         node_index >= master->node_count

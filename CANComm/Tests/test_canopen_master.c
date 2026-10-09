@@ -23,6 +23,11 @@ typedef struct
 
 static int failures = 0;
 
+static bool fake_runtime_owner(void *context)
+{
+    return context != NULL && *(const bool *)context;
+}
+
 #define CHECK(condition, message)     do     {         if (condition)         {             printf("[PASS] %s\n", message);         }         else         {             printf("[FAIL] %s\n", message);             failures++;         }     } while (0)
 
 static CanBackendResult fake_send(
@@ -482,6 +487,30 @@ int main(void)
         ) < 1e-12,
         "AVATAR position conversion round-trips joint radians"
     );
+
+    /* Runtime owner is bound only after initialization. Wrong callers must
+     * fail without emitting CAN frames or accessing live drive objects. */
+    bool on_owner = true;
+    CHECK(canopen_master_bind_runtime_owner(&master, fake_runtime_owner,
+                                            &on_owner),
+          "Bind a single CANopen runtime owner");
+    CHECK(!canopen_master_bind_runtime_owner(&master, fake_runtime_owner,
+                                             &on_owner),
+          "Second owner binding is rejected");
+    const size_t tx_before_foreign = fake.tx_count;
+    const int32_t foreign_targets[6] = {1, 2, 3, 4, 5, 6};
+    on_owner = false;
+    CHECK(!canopen_master_poll(&master, 400U),
+          "Foreign task cannot poll CANopen");
+    CHECK(!canopen_master_send_target_cycle(&master, foreign_targets, 6U),
+          "Foreign task cannot command six motors");
+    CHECK(canopen_master_drive(&master, 0U) == NULL,
+          "Foreign task cannot access live drive feedback");
+    CHECK(fake.tx_count == tx_before_foreign,
+          "Foreign task generated no CAN traffic");
+    on_owner = true;
+    CHECK(canopen_master_drive(&master, 0U) != NULL,
+          "Owner retains drive feedback access");
 
     printf(
         "\nTests failed: %d\n",

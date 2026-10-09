@@ -55,11 +55,15 @@ static void test_task(void *argument)
     (void)argument;
     StateMachine state;
     SupervisorInputSnapshot inputs;
+    SupervisorDriveSnapshot drive_snapshot;
     SupervisorMessage message = {0}, received;
     check(supervisor_task_get_state(&state), "Initialized state snapshot is readable");
     check(state.activeState == ROBOT_STATE_BOOT, "Task begins in BOOT before supervisor starts");
     check(!supervisor_task_get_state(NULL), "Null state destination is rejected");
     check(!supervisor_task_get_inputs(NULL), "Null input destination is rejected");
+    check(!supervisor_task_get_drive_snapshot(NULL), "Null drive snapshot is rejected");
+    check(supervisor_task_get_drive_snapshot(&drive_snapshot) &&
+          !drive_snapshot.valid, "Uninitialized CANopen publishes invalid snapshot");
     check(!supervisor_task_post(NULL, 0), "Null message is rejected");
     check(!supervisor_task_post_hmi((SupervisorHmiCommand)-1, 0), "Negative HMI command is rejected");
     check(!supervisor_task_post_hmi(SUP_HMI_COMMAND_COUNT, 0), "Out-of-range HMI command is rejected");

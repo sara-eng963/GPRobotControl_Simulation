@@ -42,6 +42,7 @@ typedef struct
 {
     StateMachine machine;
     SupervisorInputSnapshot gpio_inputs;
+    SupervisorDriveSnapshot drive_snapshot;
     SupervisorTaskConfig config;
 
     BootState boot;
@@ -509,6 +510,40 @@ static void handle_hmi_command(SupervisorTaskContext *context,
     }
 }
 
+/* A single CANopen runtime owner. The check is injected into the RTOS-neutral
+ * CANopen coordinator only from its owning FreeRTOS task. */
+static bool supervisor_is_canopen_owner(void *context)
+{
+    return xTaskGetCurrentTaskHandle() == (TaskHandle_t)context;
+}
+
+/* Snapshot protects readers from direct access to mutable drive/heartbeat
+ * data. For Phase 1 all readers share this scheduler and its critical region. */
+static void publish_drive_snapshot(SupervisorTaskContext *context)
+{
+    const CanopenMaster *master = context->config.canopen_master;
+    SupervisorDriveSnapshot snapshot = {0};
+    snapshot.timestamp_ms = supervisor_now_ms();
+    if (master != NULL && master->initialized) {
+        snapshot.valid = true;
+        snapshot.drives_ready = canopen_master_all_feedback_valid(master) &&
+            canopen_master_all_drives_operation_enabled(master);
+        snapshot.heartbeats_operational =
+            canopen_master_all_heartbeats_operational(master);
+        for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis) {
+            const AvatarMDrive *drive = canopen_master_drive(master, axis);
+            if (drive != NULL) {
+                snapshot.feedback_valid[axis] = drive->feedback_valid;
+                snapshot.actual_position_units[axis] =
+                    drive->feedback.actual_position;
+            }
+        }
+    }
+    taskENTER_CRITICAL();
+    context->drive_snapshot = snapshot;
+    taskEXIT_CRITICAL();
+}
+
 static void handle_message(
     SupervisorTaskContext *context,
     const SupervisorMessage *message
@@ -518,6 +553,19 @@ static void handle_message(
     {
         case SUPERVISOR_MESSAGE_HMI_COMMAND:
             handle_hmi_command(context, message->data.hmi_command);
+            break;
+
+        case SUPERVISOR_MESSAGE_GUIDED_TARGET:
+            /* NEVER let an external producer call the CANopen coordinator.
+             * Apply only in TEACHING with fresh motion authorization. */
+            if (context->machine.activeState == ROBOT_STATE_TEACHING &&
+                context->machine.safety.statusValid &&
+                context->machine.safety.motionPermitted &&
+                canopen_master_ready_for_motion(context->config.canopen_master,
+                                                supervisor_now_ms())) {
+                (void)joint_drive_port_send_targets(
+                    &context->joint_drive, message->data.guided_target_units);
+            }
             break;
         case SUPERVISOR_MESSAGE_EVENT:
             handle_policy_event(context, &message->data.event);
@@ -858,6 +906,13 @@ static void supervisor_task_entry(void *argument)
     SupervisorTaskContext *context = argument;
     TickType_t last_wake = xTaskGetTickCount();
     SupervisorMessage message;
+    if (context->config.canopen_master->initialized) {
+        /* Initialization is pre-scheduler; bind only from the true owner. */
+        configASSERT(canopen_master_bind_runtime_owner(
+            context->config.canopen_master,
+            supervisor_is_canopen_owner,
+            xTaskGetCurrentTaskHandle()));
+    }
 
     for (;;)
     {
@@ -915,6 +970,7 @@ static void supervisor_task_entry(void *argument)
         {
             run_active_state(context);
         }
+        publish_drive_snapshot(context);
         if (context->config.io.write_outputs != NULL)
         {
             SupervisorOutputSnapshot outputs;
@@ -1081,6 +1137,15 @@ bool supervisor_task_get_inputs(SupervisorInputSnapshot *inputs)
     if (inputs == NULL || !g_supervisor.initialized) return false;
     taskENTER_CRITICAL();
     *inputs = g_supervisor.gpio_inputs;
+    taskEXIT_CRITICAL();
+    return true;
+}
+
+bool supervisor_task_get_drive_snapshot(SupervisorDriveSnapshot *out)
+{
+    if (out == NULL || !g_supervisor.initialized) return false;
+    taskENTER_CRITICAL();
+    *out = g_supervisor.drive_snapshot;
     taskEXIT_CRITICAL();
     return true;
 }

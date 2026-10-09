@@ -32,7 +32,9 @@ typedef enum
     SUPERVISOR_MESSAGE_TEACHING_RUNTIME,
     SUPERVISOR_MESSAGE_APPROACH_CONTROL,
     SUPERVISOR_MESSAGE_PATH_EXECUTION_INPUTS,
-    SUPERVISOR_MESSAGE_HMI_COMMAND
+    SUPERVISOR_MESSAGE_HMI_COMMAND,
+    /* Nonblocking six-axis target request, accepted only during TEACHING. */
+    SUPERVISOR_MESSAGE_GUIDED_TARGET
 } SupervisorMessageType;
 
 typedef struct
@@ -47,8 +49,20 @@ typedef struct
         ApproachControlInputs approach_control;
         PathExecutionInputs path_execution_inputs;
         SupervisorHmiCommand hmi_command;
+        int32_t guided_target_units[JOINT_DRIVE_AXES];
     } data;
 } SupervisorMessage;
+
+/* Published only by Supervisor. Readers copy under the same-core critical
+ * section; Phase 2 replaces that transport with an inter-core mailbox. */
+typedef struct {
+    bool valid;
+    bool drives_ready;
+    bool heartbeats_operational;
+    bool feedback_valid[JOINT_DRIVE_AXES];
+    int32_t actual_position_units[JOINT_DRIVE_AXES];
+    uint32_t timestamp_ms;
+} SupervisorDriveSnapshot;
 
 typedef struct
 {
@@ -128,6 +142,7 @@ bool supervisor_task_post_from_isr(
 
 bool supervisor_task_get_state(StateMachine *state);
 bool supervisor_task_get_inputs(SupervisorInputSnapshot *inputs);
+bool supervisor_task_get_drive_snapshot(SupervisorDriveSnapshot *out);
 bool supervisor_task_post_hmi(SupervisorHmiCommand command, TickType_t wait_ticks);
 QueueHandle_t supervisor_task_queue(void);
 TaskHandle_t supervisor_task_handle(void);

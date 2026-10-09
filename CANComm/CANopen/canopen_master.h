@@ -68,6 +68,9 @@ typedef struct
 
 } CanopenMasterSdoTransaction;
 
+/* RTOS-independent callback: runtime access must originate from its one owner. */
+typedef bool (*CanopenMasterOwnerCheck)(void *context);
+
 typedef struct
 {
     CanBackend *backend;
@@ -92,7 +95,18 @@ typedef struct
 
     bool initialized;
 
+    /* Bound once by the controller task after initialization and before use. */
+    CanopenMasterOwnerCheck owner_check;
+    void *owner_check_context;
+
 } CanopenMaster;
+
+/* Initialize before task scheduling; bind exactly once inside owner task.
+ * Unbound coordinators retain standalone-test/initialization semantics.
+ * Bound calls from another task fail without touching the CAN transport. */
+bool canopen_master_bind_runtime_owner(CanopenMaster *master,
+                                       CanopenMasterOwnerCheck check,
+                                       void *context);
 
 /*
  * Initialize the six-axis CANopen coordinator around an already-created

@@ -68,8 +68,9 @@ static PausedServices paused_services;
 static FaultServices fault_services;
 static EmergencyStopServices emergency_services;
 static HomingState retraction;
-static bool wire_feed, estop, protective, injected_fault, communication_failure, guidance_pending;
-static float guidance_xyz[3];
+static bool wire_feed, estop, protective, injected_fault, communication_failure;
+typedef struct { float xyz[3]; } SimGuidancePose;
+static QueueHandle_t guidance_pose_queue;
 static unsigned guidance_error;
 static bool homed;
 static int udp=-1;
@@ -103,80 +104,33 @@ static uint32_t sim_now_ms(void)
 
 static bool sim_can_communication_healthy(void)
 {
-    return
-        !communication_failure &&
-        canopen_master_all_heartbeats_operational(
-            &can_boot_master
-        );
+    SupervisorDriveSnapshot snapshot;
+    return !communication_failure &&
+        supervisor_task_get_drive_snapshot(&snapshot) &&
+        snapshot.valid && snapshot.heartbeats_operational;
 }
 
 static bool sim_can_drives_ready(void)
 {
-    return
-        !communication_failure &&
-        canopen_master_all_feedback_valid(
-            &can_boot_master
-        ) &&
-        canopen_master_all_drives_operation_enabled(
-            &can_boot_master
-        );
+    SupervisorDriveSnapshot snapshot;
+    return !communication_failure &&
+        supervisor_task_get_drive_snapshot(&snapshot) &&
+        snapshot.valid && snapshot.drives_ready;
 }
 
-static bool sim_read_joint(
-    size_t axis,
-    double *joint_rad
-)
+/* Non-owning tasks receive one consistent copy instead of dereferencing
+ * CanopenMaster while Supervisor is polling and updating its drives. */
+static bool sim_read_joint_vector(double q[SIM_NUM_AXES])
 {
-    if (
-        joint_rad == NULL ||
-        axis >= SIM_NUM_AXES
-    )
-    {
-        return false;
+    SupervisorDriveSnapshot snapshot;
+    if (q == NULL || !supervisor_task_get_drive_snapshot(&snapshot) ||
+        !snapshot.valid) return false;
+    for (size_t axis = 0U; axis < SIM_NUM_AXES; ++axis) {
+        if (!snapshot.feedback_valid[axis] ||
+            !avatar_m_position_units_to_joint_rad(
+                &avatar_position_scales[axis],
+                snapshot.actual_position_units[axis], &q[axis])) return false;
     }
-
-    const AvatarMDrive *drive =
-        canopen_master_drive(
-            &can_boot_master,
-            axis
-        );
-
-    if (
-        drive == NULL ||
-        !drive->feedback_valid
-    )
-    {
-        return false;
-    }
-
-    return avatar_m_position_units_to_joint_rad(
-        &avatar_position_scales[axis],
-        drive->feedback.actual_position,
-        joint_rad
-    );
-}
-
-static bool sim_read_joint_vector(
-    double q[SIM_NUM_AXES]
-)
-{
-    if (q == NULL)
-    {
-        return false;
-    }
-
-    for (size_t axis = 0U;
-         axis < SIM_NUM_AXES;
-         ++axis)
-    {
-        if (!sim_read_joint(
-                axis,
-                &q[axis]))
-        {
-            return false;
-        }
-    }
-
     return true;
 }
 
@@ -243,11 +197,11 @@ static bool sim_apply_guided_joint_vector(
      * commands still travel through the real CanopenMaster -> SIL Kit CAN1
      * transport -> six AVATAR SIL Kit nodes. No motor state is mutated here.
      */
-    return canopen_master_send_target_cycle(
-        &can_boot_master,
-        targets,
-        SIM_NUM_AXES
-    );
+    SupervisorMessage request = {0};
+    request.type = SUPERVISOR_MESSAGE_GUIDED_TARGET;
+    memcpy(request.data.guided_target_units, targets, sizeof(targets));
+    /* Queue acceptance is not permission to move: Supervisor gates it. */
+    return supervisor_task_post(&request, 0U);
 }
 
 /* Simulated RAM source: physical STM32 firmware will substitute the W25Q
@@ -883,24 +837,6 @@ static void input_task(void *arg)
         const bool motion_permitted=
             drives_ready&&communication_healthy&&!estop&&!protective&&!injected_fault;
 
-        if(guidance_pending) {
-            guidance_pending=false;guidance_error=2;
-            if(machine.activeState==ROBOT_STATE_TEACHING && !estop && !protective && drives_ready) {
-                double q[SIM_NUM_AXES],target[4][4],solution[SIM_NUM_AXES];
-                if(sim_read_joint_vector(q)) {
-                    control_fk(&robot,q,target);
-                    for(int j=0;j<3;j++)target[j][3]=guidance_xyz[j];
-                    ADLSParameters params;adls_default_parameters(&params);
-                    if(adls_ik(&robot,target,q,&params,solution,&guidance_info) &&
-                       sim_apply_guided_joint_vector(solution)) {
-                        guidance_error=0;
-                    } else {
-                        guidance_error=1;
-                        fprintf(stderr,"[GUIDANCE] IK/apply failed: target=[%.6f %.6f %.6f] m iterations=%d pos_error=%.6g m ori_error=%.6g rad\n", guidance_xyz[0],guidance_xyz[1],guidance_xyz[2],guidance_info.iterations,guidance_info.positionError,guidance_info.orientationError);
-                    }
-                }
-            }
-        }
         SupervisorMessage m={0};m.type=SUPERVISOR_MESSAGE_SAFETY;
         m.data.safety.statusValid=true;
         m.data.safety.drivesReady=drives_ready;
@@ -916,6 +852,27 @@ static void input_task(void *arg)
         if((injected_fault||communication_failure)!=old_fault){
             if(injected_fault||communication_failure){event.data.event.type=SUPERVISOR_EVENT_FAULT_DETECTED;event.data.event.faultSeverity=ROBOT_FAULT_SEVERITY_RECOVERABLE;event.data.event.faultCode=0x9001;post_required(&event);}
             old_fault=injected_fault||communication_failure;
+        }
+        /* Safety/fault messages must precede any guidance command in queue. */
+        SimGuidancePose guidance_pose;
+        const bool guidance_pending = guidance_pose_queue &&
+            xQueueReceive(guidance_pose_queue, &guidance_pose, 0U) == pdPASS;
+        if(guidance_pending) {guidance_error=2;
+            if(machine.activeState==ROBOT_STATE_TEACHING && !estop && !protective && drives_ready) {
+                double q[SIM_NUM_AXES],target[4][4],solution[SIM_NUM_AXES];
+                if(sim_read_joint_vector(q)) {
+                    control_fk(&robot,q,target);
+                    for(int j=0;j<3;j++)target[j][3]=guidance_pose.xyz[j];
+                    ADLSParameters params;adls_default_parameters(&params);
+                    if(adls_ik(&robot,target,q,&params,solution,&guidance_info) &&
+                       sim_apply_guided_joint_vector(solution)) {
+                        guidance_error=0;
+                    } else {
+                        guidance_error=1;
+                        fprintf(stderr,"[GUIDANCE] IK/apply failed: target=[%.6f %.6f %.6f] m iterations=%d pos_error=%.6g m ori_error=%.6g rad\n", guidance_pose.xyz[0],guidance_pose.xyz[1],guidance_pose.xyz[2],guidance_info.iterations,guidance_info.positionError,guidance_info.orientationError);
+                    }
+                }
+            }
         }
         m.type=SUPERVISOR_MESSAGE_TEACHING_RUNTIME;
         memset(&m.data,0,sizeof(m.data));
@@ -1460,7 +1417,12 @@ static bool udp_event(void *ctx,HmiEvent *event)
         printf("[HMI RX] time_ms=%u command=%u sequence=%u (received, not yet acknowledged)\n",
             (unsigned)(xTaskGetTickCount()*1000/configTICK_RATE_HZ),words[2],words[3]);
     if(words[2]==HMI_PROTOCOL_SIM_ESTOP_TOGGLE){estop=!estop;return false;}
-    if(words[2]==HMI_PROTOCOL_SIM_GUIDANCE_POSE){for(int i=0;i<3;i++)guidance_xyz[i]=word_float(words[4+i]);guidance_pending=true;return false;}
+    if(words[2]==HMI_PROTOCOL_SIM_GUIDANCE_POSE){
+        SimGuidancePose pose;
+        for(int i=0;i<3;i++)pose.xyz[i]=word_float(words[4+i]);
+        (void)xQueueOverwrite(guidance_pose_queue,&pose);
+        return false;
+    }
     /* Additive mock-input commands; the existing GUI need not emit them. */
     if(words[2]==0x80000003U){injected_fault=words[4]!=0;return false;}
     if(words[2]==0x80000004U){protective=words[4]!=0;return false;}
@@ -1771,6 +1733,9 @@ static bool configure_silkit_can(void)
 static bool start_system(void)
 {
     if (!trajectory_prefetch_init(&validated_prefetch)) return false;
+    /* One-slot FreeRTOS mailbox: GUI overwrites stale Cartesian requests. */
+    guidance_pose_queue = xQueueCreate(1U, sizeof(SimGuidancePose));
+    if (guidance_pose_queue == NULL) return false;
     const char *selected=getenv("GP_STORAGE_BACKEND");
     host_flash_mode=selected != NULL && strcmp(selected,"flash")==0;
     if (host_flash_mode && !host_flash_initialize()) return false;
