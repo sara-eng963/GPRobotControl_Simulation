@@ -95,15 +95,16 @@ static bool master_motion_ready(
         joint_drive_port_ready(&state->drive, now_ms);
 }
 
-static void capture_tpdo_counts(PathExecutionState *state)
+static bool capture_tpdo_counts(PathExecutionState *state)
 {
     for (size_t axis = 0U;
          axis < JOINT_DRIVE_AXES;
          ++axis)
     {
-        state->command_tpdo_count[axis] =
-            joint_drive_port_feedback_sequence(&state->drive, axis);
+        if (!joint_drive_port_feedback_sequence(&state->drive, axis, &state->command_tpdo_count[axis]))
+            return false;
     }
+    return true;
 }
 
 static bool fresh_feedback_arrived(
@@ -114,10 +115,10 @@ static bool fresh_feedback_arrived(
          axis < JOINT_DRIVE_AXES;
          ++axis)
     {
+        uint32_t current_sequence = 0U;
         if (
-            joint_drive_port_feedback_sequence(&state->drive, axis)
-            <=
-            state->command_tpdo_count[axis]
+            !joint_drive_port_feedback_sequence(&state->drive, axis, &current_sequence) ||
+            current_sequence <= state->command_tpdo_count[axis]
         )
         {
             return false;
@@ -156,7 +157,8 @@ static bool send_execution_sample(
         return false;
     }
 
-    capture_tpdo_counts(state);
+    if (!capture_tpdo_counts(state))
+        return false;
 
     if (!joint_drive_port_send_targets(
             &state->drive,

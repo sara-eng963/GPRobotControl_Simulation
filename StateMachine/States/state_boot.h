@@ -7,8 +7,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define BOOT_EXPECTED_NODE_COUNT 6U
-
 typedef enum
 {
     BOOT_PHASE_INIT = 0,
@@ -74,10 +72,10 @@ typedef struct
     uint16_t pendingControlword;
     uint32_t driveEnableAttempts;
 
-    int32_t holdPosition[BOOT_EXPECTED_NODE_COUNT];
+    int32_t holdPosition[JOINT_DRIVE_AXES];
 
     uint32_t stableCycles;
-    uint32_t lastTpdoCount[BOOT_EXPECTED_NODE_COUNT];
+    uint32_t lastTpdoCount[JOINT_DRIVE_AXES];
 
     uint32_t phaseStartedMs;
     uint32_t cycleStartedMs;

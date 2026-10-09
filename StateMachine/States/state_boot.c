@@ -151,7 +151,7 @@ StateStepResult state_boot_step(
         return boot_fail(
             boot,
             BOOT_ERROR_SDO,
-            boot->axisIndex < BOOT_EXPECTED_NODE_COUNT
+            boot->axisIndex < JOINT_DRIVE_AXES
                 ? (int)boot->axisIndex + 1
                 : 0
         );
@@ -231,7 +231,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_VERIFY_IDENTITIES:
         {
-            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            if (boot->axisIndex >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -338,7 +338,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_CONFIGURE_HEARTBEAT:
         {
-            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            if (boot->axisIndex >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -397,7 +397,7 @@ StateStepResult state_boot_step(
         {
             const bool verify =
                 boot->phase == BOOT_PHASE_VERIFY_HEARTBEAT_CONSUMER;
-            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            if (boot->axisIndex >= JOINT_DRIVE_AXES)
             {
                 boot_advance(boot,
                     verify ? BOOT_PHASE_CONFIGURE_INTERPOLATION_MODE
@@ -437,7 +437,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_CONFIGURE_INTERPOLATION_MODE:
         {
-            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            if (boot->axisIndex >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -493,7 +493,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_VERIFY_INTERPOLATION_MODE:
         {
-            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            if (boot->axisIndex >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -607,7 +607,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_ENABLE_DRIVES:
         {
-            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            if (boot->axisIndex >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -769,7 +769,7 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_READ_POSITION_FEEDBACK:
         {
-            if (boot->axisIndex >= BOOT_EXPECTED_NODE_COUNT)
+            if (boot->axisIndex >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
                     boot,
@@ -833,10 +833,11 @@ StateStepResult state_boot_step(
 
         case BOOT_PHASE_INITIAL_PDO_EXCHANGE:
         {
-            for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
+            for (size_t i = 0U; i < JOINT_DRIVE_AXES; ++i)
             {
-                boot->lastTpdoCount[i] =
-                    joint_drive_port_feedback_sequence(drive_port, i);
+                if (!joint_drive_port_feedback_sequence(
+                        drive_port, i, &boot->lastTpdoCount[i]))
+                    return boot_fail(boot, BOOT_ERROR_CYCLIC_COMMUNICATION, 0);
             }
 
             if (!joint_drive_port_send_targets(
@@ -864,12 +865,12 @@ StateStepResult state_boot_step(
         {
             bool all_fresh = true;
 
-            for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
+            for (size_t i = 0U; i < JOINT_DRIVE_AXES; ++i)
             {
-                if (
-                    joint_drive_port_feedback_sequence(drive_port, i) <=
-                    boot->lastTpdoCount[i]
-                )
+                uint32_t current_sequence = 0U;
+                if (!joint_drive_port_feedback_sequence(
+                        drive_port, i, &current_sequence) ||
+                    current_sequence <= boot->lastTpdoCount[i])
                 {
                     all_fresh = false;
                     break;
@@ -930,10 +931,11 @@ StateStepResult state_boot_step(
                 return STATE_STEP_RUNNING;
             }
 
-            for (size_t i = 0U; i < BOOT_EXPECTED_NODE_COUNT; ++i)
+            for (size_t i = 0U; i < JOINT_DRIVE_AXES; ++i)
             {
-                boot->lastTpdoCount[i] =
-                    joint_drive_port_feedback_sequence(drive_port, i);
+                if (!joint_drive_port_feedback_sequence(
+                        drive_port, i, &boot->lastTpdoCount[i]))
+                    return boot_fail(boot, BOOT_ERROR_CYCLIC_COMMUNICATION, 0);
             }
 
             if (!joint_drive_port_send_targets(

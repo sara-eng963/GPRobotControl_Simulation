@@ -119,16 +119,17 @@ static HomingError network_status_error(
     return HOMING_ERROR_NONE;
 }
 
-static void capture_tpdo_counts(
+static bool capture_tpdo_counts(
     HomingState *homing,
     const JointDrivePort *drive_port
 )
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
-        homing->commandTpdoCount[i] =
-            joint_drive_port_feedback_sequence(drive_port, i);
+        if (!joint_drive_port_feedback_sequence(drive_port, i, &homing->commandTpdoCount[i]))
+            return false;
     }
+    return true;
 }
 
 static bool all_command_feedback_arrived(
@@ -138,9 +139,10 @@ static bool all_command_feedback_arrived(
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
+        uint32_t current_sequence = 0U;
         if (
-            joint_drive_port_feedback_sequence(drive_port, i) <=
-            homing->commandTpdoCount[i]
+            !joint_drive_port_feedback_sequence(drive_port, i, &current_sequence) ||
+            current_sequence <= homing->commandTpdoCount[i]
         )
         {
             return false;
@@ -245,7 +247,8 @@ static StateStepResult send_joint_cycle(
         );
     }
 
-    capture_tpdo_counts(homing, drive_port);
+    if (!capture_tpdo_counts(homing, drive_port))
+        return homing_fail(homing, HOMING_ERROR_COMMUNICATION, 0);
 
     if (!joint_drive_port_send_targets(drive_port, targets))
     {

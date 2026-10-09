@@ -400,7 +400,7 @@ static bool read_feedback_ready(
 }
 
 
-static void capture_tpdo_counts(
+static bool capture_tpdo_counts(
     ApproachState *state
 )
 {
@@ -408,9 +408,10 @@ static void capture_tpdo_counts(
          axis < ROBOT_DOF;
          ++axis)
     {
-        state->command_tpdo_count[axis] =
-            joint_drive_port_feedback_sequence(&state->drive, axis);
+        if (!joint_drive_port_feedback_sequence(&state->drive, axis, &state->command_tpdo_count[axis]))
+            return false;
     }
+    return true;
 }
 
 
@@ -422,10 +423,10 @@ static bool command_feedback_arrived(
          axis < ROBOT_DOF;
          ++axis)
     {
+        uint32_t current_sequence = 0U;
         if (
-            joint_drive_port_feedback_sequence(&state->drive, axis)
-            <=
-            state->command_tpdo_count[axis]
+            !joint_drive_port_feedback_sequence(&state->drive, axis, &current_sequence) ||
+            current_sequence <= state->command_tpdo_count[axis]
         )
         {
             return false;
@@ -466,7 +467,12 @@ static bool write_target_units(
         return false;
     }
 
-    capture_tpdo_counts(state);
+    if (!capture_tpdo_counts(state))
+    {
+        state->error = APPROACH_ERR_COMMUNICATION;
+        state->failed_joint = 0U;
+        return false;
+    }
 
     if (!joint_drive_port_send_targets(&state->drive, target_units))
     {

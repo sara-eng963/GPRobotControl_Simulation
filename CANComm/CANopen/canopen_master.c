@@ -14,7 +14,7 @@ static bool node_ids_valid_and_unique(
 {
     if (
         config->node_count == 0U ||
-        config->node_count > CANOPEN_MASTER_MAX_NODES
+        config->node_count > JOINT_DRIVE_AXES
     )
     {
         return false;

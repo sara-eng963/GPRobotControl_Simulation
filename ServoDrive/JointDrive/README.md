@@ -41,6 +41,12 @@ RPDO4 frames followed by SYNC.
   coordinator. Calls from states and supervisor heartbeat service occur in its
   serialized execution context. Simulator helpers must not concurrently
   mutate the master from other tasks.
+- `joint_drive_port_feedback_sequence()` returns validity separately from
+  its output counter; a zero sequence value is legitimate.
+- `joint_drive_port_all_enabled()` is a BOOT diagnostic checking decoded
+  enable status only, whereas `canopen_master_all_drives_operation_enabled()`
+  also requires feedback_valid. BOOT explicitly tests feedback separately;
+  `joint_drive_port_ready()` remains canonical for motion permission.
 - `JointDrivePort.send_targets` is one coordinated six-axis *transaction*.
   A successful return reports software/backend acceptance, **not** verified
   bus delivery nor physical motion completion. States separately require

@@ -67,16 +67,17 @@ static IdleError idle_network_status(
     return IDLE_ERROR_NONE;
 }
 
-static void capture_tpdo_counts(
+static bool capture_tpdo_counts(
     IdleState *idle,
     const JointDrivePort *drive_port
 )
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
-        idle->commandTpdoCount[i] =
-            joint_drive_port_feedback_sequence(drive_port, i);
+        if (!joint_drive_port_feedback_sequence(drive_port, i, &idle->commandTpdoCount[i]))
+            return false;
     }
+    return true;
 }
 
 static bool all_command_feedback_arrived(
@@ -86,9 +87,10 @@ static bool all_command_feedback_arrived(
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
+        uint32_t current_sequence = 0U;
         if (
-            joint_drive_port_feedback_sequence(drive_port, i) <=
-            idle->commandTpdoCount[i]
+            !joint_drive_port_feedback_sequence(drive_port, i, &current_sequence) ||
+            current_sequence <= idle->commandTpdoCount[i]
         )
         {
             return false;
@@ -115,7 +117,8 @@ static StateStepResult send_hold_cycle(
     uint32_t now_ms
 )
 {
-    capture_tpdo_counts(idle, drive_port);
+    if (!capture_tpdo_counts(idle, drive_port))
+        return idle_fail(idle, IDLE_ERROR_COMMUNICATION, 0);
 
     if (!joint_drive_port_send_targets(drive_port, idle->holdPositionUnits))
     {

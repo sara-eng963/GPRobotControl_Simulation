@@ -293,9 +293,18 @@ int main(void)
     JointDrivePort port = canopen_joint_drive_port_make(&master);
     CHECK(joint_drive_port_valid(&port), "JointDrivePort accepts six-node CANopen master");
     CHECK(joint_drive_port_ready(&port, 110U), "JointDrivePort reports ready on valid feedback");
-    CHECK(joint_drive_port_feedback_sequence(&port, 0U) > 0U &&
-          joint_drive_port_feedback_sequence(&port, 5U) > 0U,
+    uint32_t first_count = 0U;
+    uint32_t last_count = 0U;
+    CHECK(joint_drive_port_feedback_sequence(&port, 0U, &first_count) &&
+          joint_drive_port_feedback_sequence(&port, 5U, &last_count) &&
+          first_count > 0U && last_count > 0U,
           "JointDrivePort exposes fresh TPDO4 counters");
+    uint32_t unchanged = 12345U;
+    CHECK(!joint_drive_port_feedback_sequence(NULL, 0U, &unchanged) &&
+          !joint_drive_port_feedback_sequence(&port, 6U, &unchanged) &&
+          !joint_drive_port_feedback_sequence(&port, 0U, NULL) &&
+          unchanged == 12345U,
+          "Invalid counter requests do not overwrite the output");
     fake_clear_tx(&fake);
     CHECK(joint_drive_port_poll(&port, 110U), "JointDrivePort polls CANopen coordinator");
     CHECK(joint_drive_port_send_targets(&port, targets) && fake.tx_count == 7U,

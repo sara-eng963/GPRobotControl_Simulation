@@ -5,12 +5,11 @@
 #include "canopen_nmt.h"
 #include "canopen_sdo.h"
 #include "../../ServoDrive/AvatarM/avatar_m_drive.h"
+#include "../../ServoDrive/JointDrive/joint_drive_port.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
-#define CANOPEN_MASTER_MAX_NODES 6U
 
 /*
  * AVATAR manual, section 11.2: consumer 0x1016:01 defaults to monitoring
@@ -39,7 +38,7 @@ typedef struct
 {
     CanBackend *backend;
 
-    uint8_t node_ids[CANOPEN_MASTER_MAX_NODES];
+    uint8_t node_ids[JOINT_DRIVE_AXES];
     uint8_t node_count;
 
     /*
@@ -73,7 +72,7 @@ typedef struct
 {
     CanBackend *backend;
 
-    AvatarMDrive drives[CANOPEN_MASTER_MAX_NODES];
+    AvatarMDrive drives[JOINT_DRIVE_AXES];
     uint8_t node_count;
 
     uint32_t heartbeat_timeout_ms;
@@ -83,11 +82,11 @@ typedef struct
     uint32_t last_controller_heartbeat_ms;
     bool controller_heartbeat_sent;
 
-    uint32_t last_heartbeat_ms[CANOPEN_MASTER_MAX_NODES];
-    bool heartbeat_timestamp_valid[CANOPEN_MASTER_MAX_NODES];
+    uint32_t last_heartbeat_ms[JOINT_DRIVE_AXES];
+    bool heartbeat_timestamp_valid[JOINT_DRIVE_AXES];
 
     /* Monotonic per-node TPDO4 receive counters for cyclic freshness checks. */
-    uint32_t tpdo_rx_count[CANOPEN_MASTER_MAX_NODES];
+    uint32_t tpdo_rx_count[JOINT_DRIVE_AXES];
 
     CanopenMasterSdoTransaction sdo;
 

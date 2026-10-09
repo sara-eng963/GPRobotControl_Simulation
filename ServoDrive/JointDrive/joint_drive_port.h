@@ -87,7 +87,11 @@ static inline bool joint_drive_port_read_axis(const JointDrivePort *port,
            port->read_axis(port->context, axis, feedback);
 }
 
-/* Confirm every axis has decoded an Operation Enabled state. */
+/* BOOT-only enable-state diagnostic. Unlike CanopenMaster's
+ * all_drives_operation_enabled(), this checks only decoded enable status,
+ * not feedback_valid; BOOT checks feedback validity separately.
+ * joint_drive_port_ready() is the canonical motion-readiness predicate.
+ */
 static inline bool joint_drive_port_all_enabled(const JointDrivePort *port)
 {
     if (!joint_drive_port_valid(port))
@@ -108,12 +112,18 @@ static inline bool joint_drive_port_send_targets(const JointDrivePort *port,
            port->send_targets(port->context, targets, JOINT_DRIVE_AXES);
 }
 
-static inline uint32_t joint_drive_port_feedback_sequence(const JointDrivePort *port,
-                                                           size_t axis)
+/* 0 is a valid TPDO count. Out-of-range, null or unconfigured ports fail
+ * without modifying *sequence. The vtable signature remains unchanged.
+ */
+static inline bool joint_drive_port_feedback_sequence(const JointDrivePort *port,
+                                                      size_t axis,
+                                                      uint32_t *sequence)
 {
-    if (!joint_drive_port_valid(port) || axis >= JOINT_DRIVE_AXES)
-        return 0U;
-    return port->feedback_sequence(port->context, axis);
+    if (!joint_drive_port_valid(port) ||
+        axis >= JOINT_DRIVE_AXES || sequence == NULL)
+        return false;
+    *sequence = port->feedback_sequence(port->context, axis);
+    return true;
 }
 
 #endif /* JOINT_DRIVE_PORT_H */
