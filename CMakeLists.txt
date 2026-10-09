@@ -458,3 +458,18 @@ target_include_directories(joint_drive_idle_test PRIVATE
     StateMachine StateMachine/States ServoDrive/JointDrive)
 enable_testing()
 add_test(NAME joint_drive_idle_test COMMAND joint_drive_idle_test)
+
+# HOMING application-state regression using a fake six-axis drive service.
+add_executable(joint_drive_homing_test
+    StateMachine/Tests/test_joint_drive_homing.c
+    StateMachine/States/state_homing.c
+    ServoDrive/AvatarM/avatar_m_position.c
+)
+target_compile_features(joint_drive_homing_test PRIVATE c_std_11)
+target_compile_options(joint_drive_homing_test PRIVATE
+    -Wall -Wextra -Werror=implicit-function-declaration)
+target_include_directories(joint_drive_homing_test PRIVATE
+    StateMachine StateMachine/States ServoDrive/JointDrive)
+target_link_libraries(joint_drive_homing_test PRIVATE control_core m)
+enable_testing()
+add_test(NAME joint_drive_homing_test COMMAND joint_drive_homing_test)
