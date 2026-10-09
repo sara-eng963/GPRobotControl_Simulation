@@ -2,7 +2,7 @@
 #define STATE_IDLE_H
 
 #include "../state_machine_types.h"
-#include "../../CANComm/CANopen/canopen_master.h"
+#include "../../ServoDrive/JointDrive/joint_drive_port.h"
 #include "../../ControlCore/Config/robot_config.h"
 
 #include <stdbool.h>
@@ -75,7 +75,7 @@ void state_idle_enter(
 StateStepResult state_idle_step(
     IdleState *idle,
     IdleCommand command,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     uint32_t now_ms
 );
 
