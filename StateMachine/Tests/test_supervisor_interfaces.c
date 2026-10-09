@@ -130,6 +130,9 @@ static void test_task(void *argument)
           state.rejectedEventCount == rejections + 1,
           "M7 Supervisor handles and rejects M4 START during E-stop");
 
+    /* Status is deliberately published at 10 ms, not on every tick.
+     * Wait more than one publish interval to avoid scheduler-phase races. */
+    vTaskDelay(pdMS_TO_TICKS(25));
     GpIpcMessage ipc_status = {0};
     bool saw_ipc_status = false;
     while (gp_ipc_m4_receive(&test_ipc, &ipc_status)) {
