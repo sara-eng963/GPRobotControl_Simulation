@@ -512,3 +512,19 @@ target_include_directories(joint_drive_teaching_test PRIVATE
 target_link_libraries(joint_drive_teaching_test PRIVATE control_core m)
 enable_testing()
 add_test(NAME joint_drive_teaching_test COMMAND joint_drive_teaching_test)
+
+# BOOT nonblocking state regression using fake motion/commissioning ports.
+add_executable(joint_drive_boot_test
+    StateMachine/Tests/test_joint_drive_boot.c
+    StateMachine/States/state_boot.c
+    ServoDrive/CiA402/cia402.c
+)
+target_compile_features(joint_drive_boot_test PRIVATE c_std_11)
+target_compile_options(joint_drive_boot_test PRIVATE
+    -Wall -Wextra -Werror=implicit-function-declaration
+    -Werror=incompatible-pointer-types)
+target_include_directories(joint_drive_boot_test PRIVATE
+    StateMachine StateMachine/States ServoDrive/JointDrive)
+target_link_libraries(joint_drive_boot_test PRIVATE m)
+enable_testing()
+add_test(NAME joint_drive_boot_test COMMAND joint_drive_boot_test)
