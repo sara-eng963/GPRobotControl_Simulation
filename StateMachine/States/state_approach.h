@@ -8,7 +8,7 @@
 #include "../../ControlCore/Config/robot_config.h"
 #include "../../ControlCore/Math/control_types.h"
 #include "../../ControlCore/Trajectory/joint_trajectory.h"
-#include "../../CANComm/CANopen/canopen_master.h"
+#include "../../ServoDrive/JointDrive/joint_drive_port.h"
 #include "../../ServoDrive/AvatarM/avatar_m_position.h"
 
 #include <stdbool.h>
@@ -249,12 +249,8 @@ typedef struct
  * SERVICES NOT YET OWNED BY A COMMON PROJECT MODULE
  * ============================================================================
  *
- * AVATAR position conversion, TPDO4 feedback, RPDO4 targets, CiA-402
- * readiness and CANopen SYNC are used DIRECTLY by state_approach.c.
- *
- * Therefore we do NOT carry over the teammate's approach_project_adapter.
- *
- * Only two external capabilities remain as callbacks:
+ * The JointDrivePort handles feedback, readiness and target cycles.
+ * Only two application-level capabilities remain as callbacks:
  *
  *      1. read one sample from committed Path Validation storage
  *      2. installation/cell collision checking
@@ -342,7 +338,7 @@ typedef struct
 
     const RobotConfig *robot;
 
-    CanopenMaster *master;
+    JointDrivePort drive;
     const AvatarMPositionScale *position_scales;
 
     ApproachRequest request;
@@ -421,7 +417,7 @@ typedef struct
 void state_approach_enter(
     ApproachState *state,
     const RobotConfig *robot,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     const AvatarMPositionScale position_scales[ROBOT_DOF],
     const ApproachRequest *request,
     const ApproachConfig *config,
