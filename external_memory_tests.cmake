@@ -124,3 +124,19 @@ if(ENABLE_RENODE_TESTS)
 else()
     message(STATUS "Renode QSPI firmware tests DISABLED by ENABLE_RENODE_TESTS=OFF")
 endif()
+
+# Batch 5: flash-backed prefetch under host 2 ms pacing.
+# Functional integrity and fault detection only. WSL is not RTOS/hardware
+# deadline evidence; CTest PASS does not certify 500 Hz determinism.
+add_executable(flash_prefetch_500hz_test
+    Simulation/Tests/test_flash_prefetch_500hz.c
+    Simulation/Storage/trajectory_prefetch.c
+    Simulation/Renode/Storage/qspi_nor_validated_storage.c
+    Simulation/Renode/Storage/w25q512jv_flash.c
+    Simulation/Tests/w25q_nor_model.c)
+target_compile_options(flash_prefetch_500hz_test PRIVATE
+    -O2 -Wall -Wextra -Werror -UNDEBUG)
+target_link_libraries(flash_prefetch_500hz_test PRIVATE Threads::Threads)
+add_test(NAME flash_prefetch_500hz_test COMMAND flash_prefetch_500hz_test)
+set_tests_properties(flash_prefetch_500hz_test PROPERTIES
+    TIMEOUT 60 RUN_SERIAL TRUE LABELS "external_memory;timing_model")
