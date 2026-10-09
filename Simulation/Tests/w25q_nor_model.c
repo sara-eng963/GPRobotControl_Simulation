@@ -98,9 +98,11 @@ bool w25_model_command(void *ctx, uint8_t op, uint32_t at,
     if (at >= capacity(m) || (op == 0x13U && (uint64_t)at+n > capacity(m))) return false;
     if (op == 0x21U) at &= ~(SECTOR-1U);
     Stage stage=classify(m,op,at);
-    assert(m->event_count < MAX_EVENTS);
+    /* The long-running SIL Kit flash backend does not retain per-operation
+     * traces. Preserve monotonically increasing operation counters for faults. */
+    if (!m->suppress_event_trace) assert(m->event_count < MAX_EVENTS);
     unsigned number=++m->event_count;
-    m->events[number-1]=(Event){op,at,n,stage};
+    if (!m->suppress_event_trace) m->events[number-1]=(Event){op,at,n,stage};
     bool inject=m->fault != NO_FAULT && number == m->fail_event;
     if (inject) m->fired=true;
     if (inject && (m->fault == CUT_BEFORE || m->fault == READ_ERROR)) {

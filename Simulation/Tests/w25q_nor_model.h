@@ -28,6 +28,7 @@ typedef struct {
     uint8_t *external_bytes;
     size_t memory_size;
     bool enforce_target, reject_wren, stuck_wip, ignored_clears_wel, keep_wel;
+    bool suppress_event_trace; /* false when zero-initialized: preserve test traces */
     bool reset_enabled;
     uint32_t marker_offset, late_corrupt_header_offset, jedec_id, op_calls[256], unknown_commands;
     uint32_t protect_begin, protect_end, busy_rejections;

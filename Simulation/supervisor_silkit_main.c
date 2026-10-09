@@ -8,6 +8,8 @@
 #include "../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../ControlCore/Kinematics/control_fk.h"
 #include "Storage/trajectory_prefetch.h"
+#include "Renode/Storage/qspi_nor_validated_storage.h"
+#include "Tests/w25q_nor_model.h"
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <fcntl.h>
@@ -47,6 +49,12 @@ static Vec3 pv_raw_geometry[SIM_PV_GEOMETRY_CAPACITY], pv_arc_geometry[SIM_PV_GE
 static real_t pv_l_original[SIM_PV_GEOMETRY_CAPACITY], pv_l_arc[SIM_PV_GEOMETRY_CAPACITY];
 static ADLSInfo pv_ik_scratch, guidance_info;
 static RamValidatedStorage validated_storage;
+/* Host test ONLY: independent W25Q512JV model, not STM32 QUADSPI hardware. */
+static QspiNorValidatedStorage host_flash_storage;
+static Model host_flash_model;
+static uint8_t *host_flash_image;
+static PvExecutionSample host_flash_first_sample;
+static bool host_flash_mode, host_flash_first_valid;
 static TrajectoryPrefetch validated_prefetch;
 static TaskHandle_t prefetch_task_handle;
 static PathValidationStorage path_validation_storage;
@@ -422,12 +430,100 @@ static void ram_storage_abort(
 }
 
 
+
+/* Batch 6 host functional integration: path validation uses the same storage
+ * APIs as the STM32 side. This synchronous write path is NOT a deployable
+ * RTOS scheduling design. Move flash writes away from Supervisor on hardware. */
+static bool host_flash_read_batch(uint32_t first, PvExecutionSample *out,
+                                  uint32_t count, void *ctx)
+{
+    return qspi_nor_validated_storage_read_samples(first, out, count, ctx);
+}
+
+static bool host_flash_begin(void *ctx)
+{
+    if (!quiesce_prefetch_worker()) return false;
+    trajectory_prefetch_disarm(&validated_prefetch);
+    host_flash_first_valid=false;
+    return qspi_nor_validated_storage_begin(ctx);
+}
+
+static bool host_flash_commit(const ValidatedTrajectory *metadata, void *ctx)
+{
+    QspiNorValidatedStorage *storage=(QspiNorValidatedStorage *)ctx;
+    if (!qspi_nor_validated_storage_commit(metadata,storage)) return false;
+
+    /* Reconstruct runtime state from persistent image, independently of
+     * in-memory commit bookkeeping. The image survives the object reset. */
+    QspiNorValidatedStorage recovered;
+    if (!qspi_nor_validated_storage_init(&recovered,storage->base_address,
+                                         storage->capacity_samples) ||
+        !qspi_nor_validated_storage_load_committed(&recovered) ||
+        recovered.scan_io_error_mask != 0U ||
+        recovered.metadata.program_id != metadata->program_id ||
+        recovered.metadata.artifact_crc != metadata->artifact_crc ||
+        recovered.sample_count != metadata->sample_count)
+        return false;
+    *storage=recovered;
+    /* APPROACH currently only reads sample zero, from the Supervisor task.
+     * Cache it here; never perform direct flash I/O inside APPROACH. */
+    if (!qspi_nor_validated_storage_read_sample(0,&host_flash_first_sample,storage))
+        return false;
+    host_flash_first_valid=true;
+
+    if (!trajectory_prefetch_prepare(&validated_prefetch,host_flash_read_batch,
+                                      storage,metadata->sample_count) ||
+        !trajectory_prefetch_refill(&validated_prefetch) ||
+        !trajectory_prefetch_refill(&validated_prefetch) ||
+        !trajectory_prefetch_resume_worker(&validated_prefetch))
+        return false;
+    printf("[FLASH_SIM] committed+recovered program=%u samples=%u prefilled=%u\n",
+           metadata->program_id,metadata->sample_count,
+           trajectory_prefetch_buffered(&validated_prefetch));
+    fflush(stdout);
+    return true;
+}
+
+static void host_flash_abort(void *ctx)
+{
+    if (!quiesce_prefetch_worker()) {
+        fprintf(stderr,"[FLASH_SIM] worker did not quiesce before abort\n");
+        exit(EXIT_FAILURE);
+    }
+    trajectory_prefetch_disarm(&validated_prefetch);
+    host_flash_first_valid=false;
+    qspi_nor_validated_storage_abort(ctx);
+}
+
+static bool host_flash_initialize(void)
+{
+    host_flash_image=malloc(W25Q512JV_SIZE_BYTES);
+    if (!host_flash_image) return false;
+    w25_model_init(&host_flash_model,host_flash_image,W25Q512JV_SIZE_BYTES);
+    host_flash_model.suppress_event_trace=true;
+    W25Q512JVBus bus={w25_model_command,w25_model_time,w25_model_idle,
+                      &host_flash_model};
+    if (!qspi_nor_validated_storage_set_bus(&bus) ||
+        !qspi_nor_validated_storage_init(&host_flash_storage,0U,
+                                         SIM_PV_STORAGE_CAPACITY)) return false;
+    puts("[FLASH_SIM] W25Q512JV host-model backend enabled (NOT STM32 hardware)");
+    fflush(stdout);
+    return true;
+}
+
 static bool approach_read_validated_sample(
     uint32_t sample_index,
     PvExecutionSample *sample,
     void *context
 )
 {
+    if (host_flash_mode) {
+        (void)context;
+        if (sample == NULL || sample_index != 0U || !host_flash_first_valid)
+            return false;
+        *sample=host_flash_first_sample;
+        return true;
+    }
     RamValidatedStorage *storage =
         (RamValidatedStorage *)context;
 
@@ -1647,7 +1743,21 @@ static bool configure_silkit_can(void)
 static bool start_system(void)
 {
     if (!trajectory_prefetch_init(&validated_prefetch)) return false;
+    const char *selected=getenv("GP_STORAGE_BACKEND");
+    host_flash_mode=selected != NULL && strcmp(selected,"flash")==0;
+    if (host_flash_mode && !host_flash_initialize()) return false;
     configure_robot();configure_state_dependencies();
+    if (host_flash_mode) {
+        path_validation_storage=(PathValidationStorage){
+            .begin=host_flash_begin,
+            .write_sample=qspi_nor_validated_storage_write_sample,
+            .commit=host_flash_commit,
+            .abort=host_flash_abort,
+            .capacity_samples=SIM_PV_STORAGE_CAPACITY,
+            .context=&host_flash_storage
+        };
+        approach_services.storage_context=&host_flash_storage;
+    }
 
     if (!configure_silkit_can())
     {

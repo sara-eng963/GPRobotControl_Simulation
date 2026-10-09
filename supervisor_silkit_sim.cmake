@@ -8,6 +8,10 @@ if(ENABLE_SILKIT)
 
         ${CMAKE_SOURCE_DIR}/Simulation/supervisor_silkit_main.c
         ${CMAKE_SOURCE_DIR}/Simulation/Storage/trajectory_prefetch.c
+        # Host-only flash model. No change to physical STM32 firmware path.
+        ${CMAKE_SOURCE_DIR}/Simulation/Tests/w25q_nor_model.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Renode/Storage/w25q512jv_flash.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Renode/Storage/qspi_nor_validated_storage.c
         ${CMAKE_SOURCE_DIR}/HMI/hmi_task.c
         ${CMAKE_SOURCE_DIR}/StateMachine/supervisor_task.c
         ${CMAKE_SOURCE_DIR}/StateMachine/supervisor_io.c
@@ -195,6 +199,16 @@ if(ENABLE_SILKIT)
             TIMEOUT 120
             RUN_SERIAL TRUE
         )
+        add_test(
+            NAME supervisor_silkit_flash_sequence
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_supervisor_silkit_flash_sequence.py
+                ${SILKIT_ROOT}/bin/sil-kit-registry
+                $<TARGET_FILE:avatar_m_silkit_motor_bank>
+                $<TARGET_FILE:supervisor_silkit_sim>
+        )
+        set_tests_properties(supervisor_silkit_flash_sequence PROPERTIES
+            TIMEOUT 150 RUN_SERIAL TRUE)
 
     endif()
 
