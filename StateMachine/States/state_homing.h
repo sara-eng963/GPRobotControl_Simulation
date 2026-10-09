@@ -2,7 +2,7 @@
 #define STATE_HOMING_H
 
 #include "../state_machine_types.h"
-#include "../../CANComm/CANopen/canopen_master.h"
+#include "../../ServoDrive/JointDrive/joint_drive_port.h"
 #include "../../ControlCore/Config/robot_config.h"
 #include "../../ControlCore/Math/control_types.h"
 #include "../../ControlCore/Trajectory/joint_trajectory.h"
@@ -75,7 +75,7 @@ StateStepResult state_homing_step(
     HomingState *homing,
     const HomingConfig *config,
     const RobotConfig *robot,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     const AvatarMPositionScale position_scales[ROBOT_DOF],
     uint32_t now_ms
 );
