@@ -1,0 +1,19 @@
+using "platforms/cpus/stm32h7.repl"
+
+//
+// STM32H7 + simulated external Quad-SPI NOR flash.
+//
+// qspiBackingMemory models the bytes physically stored inside the NOR device.
+// 0x04000000 bytes = 64 MiB.
+//
+// The JEDEC manufacturer/type values imitate the W25Q512JV, but the generic Renode
+// SPI-NOR model is not a validated Winbond-specific behavioral model.
+//
+
+qspiBackingMemory: Memory.MappedMemory @ sysbus 0x90000000
+    size: 0x04000000
+
+qspiNor: SPI.GenericSpiFlash @ qspi
+    underlyingMemory: qspiBackingMemory
+    manufacturerId: 0xEF
+    memoryType: 0x40

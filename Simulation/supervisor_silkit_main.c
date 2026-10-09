@@ -6,6 +6,7 @@
 #include "../ServoDrive/CiA402/cia402.h"
 #include "../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../ControlCore/Kinematics/control_fk.h"
+#include "Storage/trajectory_prefetch.h"
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <fcntl.h>
@@ -43,6 +44,10 @@ static Vec3 pv_raw_geometry[SIM_PV_GEOMETRY_CAPACITY], pv_arc_geometry[SIM_PV_GE
 static real_t pv_l_original[SIM_PV_GEOMETRY_CAPACITY], pv_l_arc[SIM_PV_GEOMETRY_CAPACITY];
 static ADLSInfo pv_ik_scratch, guidance_info;
 static RamValidatedStorage validated_storage;
+static TrajectoryPrefetch validated_prefetch;
+static TaskHandle_t prefetch_task_handle;
+static bool prefetch_pause_requested;
+static bool prefetch_pause_acknowledged;
 static PathValidationStorage path_validation_storage;
 static ValidatedTrajectory validated_trajectory;
 static ApproachConfig approach_config;
@@ -235,6 +240,76 @@ static bool sim_apply_guided_joint_vector(
     );
 }
 
+/* Simulated RAM source: physical STM32 firmware will substitute the W25Q
+ * bulk read API. Only the prefill/worker invokes this function. */
+static bool ram_prefetch_read_batch(uint32_t first, PvExecutionSample *out,
+                                    uint32_t count, void *context)
+{
+    RamValidatedStorage *s = (RamValidatedStorage *)context;
+    if (!s || !out || !s->committed || first > s->metadata.sample_count ||
+        count > s->metadata.sample_count - first ||
+        count > s->sample_count - first) return false;
+    memcpy(out, &s->samples[first], (size_t)count * sizeof(*out));
+    return true;
+}
+
+/* Cooperative worker quiescence: unlike vTaskSuspend(), this cannot leave
+ * an in-flight refill half-written. Only used outside active execution. */
+static bool quiesce_prefetch_worker(void)
+{
+    if (prefetch_task_handle == NULL) return true;
+    __atomic_store_n(&prefetch_pause_requested, true, __ATOMIC_RELEASE);
+    const TickType_t started = xTaskGetTickCount();
+    const TickType_t timeout = pdMS_TO_TICKS(1000);
+    for (;;) {
+        if (__atomic_load_n(&prefetch_pause_acknowledged, __ATOMIC_ACQUIRE))
+            return true;
+        if ((TickType_t)(xTaskGetTickCount() - started) >= timeout)
+            return false;
+        vTaskDelay(1); /* Yield to the lower-priority worker. */
+    }
+}
+
+static void resume_prefetch_worker(void)
+{
+    __atomic_store_n(&prefetch_pause_requested, false, __ATOMIC_RELEASE);
+}
+
+static void prefetch_worker_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        if (__atomic_load_n(&prefetch_pause_requested, __ATOMIC_ACQUIRE)) {
+            __atomic_store_n(&prefetch_pause_acknowledged, true, __ATOMIC_RELEASE);
+            do {
+                vTaskDelay(1);
+            } while (__atomic_load_n(&prefetch_pause_requested, __ATOMIC_ACQUIRE));
+            __atomic_store_n(&prefetch_pause_acknowledged, false, __ATOMIC_RELEASE);
+            continue;
+        }
+
+        if (validated_prefetch.armed && !validated_prefetch.read_failed &&
+            validated_prefetch.next_flash_index < validated_prefetch.total_samples &&
+            trajectory_prefetch_buffered(&validated_prefetch) <= TRAJECTORY_PREFETCH_BATCH)
+            (void)trajectory_prefetch_refill(&validated_prefetch);
+
+        /* Re-arm for preview -> production only after all samples are consumed.
+         * This PC-only replay behavior must not reset an active trajectory. */
+        if (validated_prefetch.armed && !validated_prefetch.read_failed &&
+            validated_prefetch.total_samples > 0U &&
+            __atomic_load_n(&validated_prefetch.consumed, __ATOMIC_ACQUIRE)
+              == validated_prefetch.total_samples) {
+            const uint32_t n = validated_prefetch.total_samples;
+            if (trajectory_prefetch_prepare(&validated_prefetch,
+                    ram_prefetch_read_batch, &validated_storage, n)) {
+                (void)trajectory_prefetch_refill(&validated_prefetch);
+                (void)trajectory_prefetch_refill(&validated_prefetch);
+            }
+        }
+        vTaskDelay(1);
+    }
+}
+
 static bool ram_storage_begin(
     void *context
 )
@@ -246,6 +321,10 @@ static bool ram_storage_begin(
     {
         return false;
     }
+
+    /* Validation may reset the buffer only after producer quiescence. */
+    if (!quiesce_prefetch_worker()) return false;
+    trajectory_prefetch_disarm(&validated_prefetch);
 
     storage->sample_count =
         0U;
@@ -328,6 +407,17 @@ static bool ram_storage_commit(
     storage->committed =
         true;
 
+    /* This initial prefill is from PC RAM during VALIDATION COMMIT, never
+     * from QSPI and never during active motion. Worker remains suspended. */
+    if (!trajectory_prefetch_prepare(&validated_prefetch,
+            ram_prefetch_read_batch, storage, metadata->sample_count) ||
+        !trajectory_prefetch_refill(&validated_prefetch) ||
+        !trajectory_prefetch_refill(&validated_prefetch)) {
+        storage->committed = false;
+        trajectory_prefetch_disarm(&validated_prefetch);
+        return false;
+    }
+    resume_prefetch_worker();
     return true;
 }
 
@@ -343,6 +433,12 @@ static void ram_storage_abort(
     {
         return;
     }
+    /* A timeout must never allow concurrent reset/read of a trajectory. */
+    if (!quiesce_prefetch_worker()) {
+        fprintf(stderr, "[PREFETCH] Worker could not quiesce before abort\n");
+        exit(EXIT_FAILURE); /* PC simulation: fail closed. */
+    }
+    trajectory_prefetch_disarm(&validated_prefetch);
 
     storage->writing =
         false;
@@ -381,6 +477,15 @@ static bool approach_read_validated_sample(
     return true;
 }
 
+
+/* This callback executes inside PATH_EXECUTION. It accesses SRAM only;
+ * all source reads are confined to prefill/worker code above. */
+static bool execution_read_prefetched(uint32_t sample_index,
+                                     PvExecutionSample *sample, void *ctx)
+{
+    (void)ctx;
+    return trajectory_prefetch_take(&validated_prefetch, sample_index, sample);
+}
 
 static void configure_robot(void)
 {
@@ -1556,6 +1661,7 @@ static bool configure_silkit_can(void)
 
 static bool start_system(void)
 {
+    if (!trajectory_prefetch_init(&validated_prefetch)) return false;
     configure_robot();configure_state_dependencies();
 
     if (!configure_silkit_can())
@@ -1563,7 +1669,7 @@ static bool start_system(void)
         fprintf(stderr, "Could not initialize SIL Kit CANopen transport.\n");
         return false;
     }
-    execution_services=(PathExecutionServices){approach_read_validated_sample,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
+    execution_services=(PathExecutionServices){execution_read_prefetched,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
     paused_services=(PausedServices){hold,off,NULL};fault_services=(FaultServices){safe,NULL};emergency_services=(EmergencyStopServices){safe,NULL};
     SupervisorTaskConfig c={0};
     c.canopen_master=&can_boot_master;c.avatar_position_scales=avatar_position_scales;c.robot=&robot;c.homing_config=&homing_config;c.teaching_config=&teaching_config;
@@ -1577,7 +1683,9 @@ static bool start_system(void)
     HmiTaskConfig h={udp_event,udp_status,NULL,pdMS_TO_TICKS(10)};
     return supervisor_task_init(&c) && hmi_task_init(&h) &&
         supervisor_task_start(4) && hmi_task_start(2) &&
-        xTaskCreate(input_task,"SimInputs",1024,NULL,3,NULL)==pdPASS;
+        xTaskCreate(input_task,"SimInputs",1024,NULL,3,NULL)==pdPASS &&
+        xTaskCreate(prefetch_worker_task,"TrajPrefetch",1024,NULL,2,
+                    &prefetch_task_handle)==pdPASS;
 }
 int main(void)
 {

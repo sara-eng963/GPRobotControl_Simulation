@@ -7,6 +7,7 @@ if(ENABLE_SILKIT)
         supervisor_silkit_sim
 
         ${CMAKE_SOURCE_DIR}/Simulation/supervisor_silkit_main.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Storage/trajectory_prefetch.c
         ${CMAKE_SOURCE_DIR}/HMI/hmi_task.c
         ${CMAKE_SOURCE_DIR}/StateMachine/supervisor_task.c
         ${CMAKE_SOURCE_DIR}/StateMachine/supervisor_io.c

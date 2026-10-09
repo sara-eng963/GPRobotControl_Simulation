@@ -1,0 +1,57 @@
+# Test 7.4 - PathValidationStorage implemented by QSPI NOR.
+#
+# Run from repository root:
+#   ~/renode_portable/renode --console --disable-gui
+#
+# Then:
+#   include @Simulation/Renode/run_qspi_storage_backend_test.resc
+
+mach create "qspi-storage-backend-test"
+
+machine LoadPlatformDescription @Simulation/Renode/stm32h7_qspi_flash.repl
+
+sysbus LoadELF @Simulation/Renode/Firmware/qspi_storage_backend_test/build/qspi_storage_backend_test.elf
+
+emulation RunFor "0.03"
+pause
+
+echo "Test 7.4 result words:"
+
+echo "magic (expect 0x50563734 = PV74):"
+sysbus ReadDoubleWord 0x24000000
+
+echo "status (expect 0x50415353 = PASS):"
+sysbus ReadDoubleWord 0x24000004
+
+echo "callbacks bound (expect 1):"
+sysbus ReadDoubleWord 0x24000008
+
+echo "written samples (expect 12):"
+sysbus ReadDoubleWord 0x2400000C
+
+echo "committed before reload (expect 1):"
+sysbus ReadDoubleWord 0x24000010
+
+echo "reloaded committed (expect 1):"
+sysbus ReadDoubleWord 0x24000014
+
+echo "metadata OK (expect 1):"
+sysbus ReadDoubleWord 0x24000018
+
+echo "reloaded sample count (expect 12):"
+sysbus ReadDoubleWord 0x2400001C
+
+echo "sample size (expect 24):"
+sysbus ReadDoubleWord 0x24000020
+
+echo "mismatch sample (expect 0xFFFFFFFF):"
+sysbus ReadDoubleWord 0x24000024
+
+echo "mismatch joint (expect 0xFFFFFFFF):"
+sysbus ReadDoubleWord 0x24000028
+
+echo "last sample J1 (expect 11100 = 0x00002B5C):"
+sysbus ReadDoubleWord 0x2400002C
+
+echo "last sample J6 (expect -11150 = 0xFFFFD472):"
+sysbus ReadDoubleWord 0x24000030

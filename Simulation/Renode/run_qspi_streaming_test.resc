@@ -1,0 +1,66 @@
+# Test 7.5 - Persistent QSPI trajectory -> 512-sample SRAM buffer -> consumer.
+#
+# Run from repository root:
+#   ~/renode_portable/renode --console --disable-gui
+#
+# Then:
+#   include @Simulation/Renode/run_qspi_streaming_test.resc
+
+mach create "qspi-streaming-test"
+
+machine LoadPlatformDescription @Simulation/Renode/stm32h7_qspi_flash.repl
+
+sysbus LoadELF @Simulation/Renode/Firmware/qspi_streaming_test/build/qspi_streaming_test.elf
+
+emulation RunFor "0.20"
+pause
+
+echo "Test 7.5 result words:"
+
+echo "magic (expect 0x50563735 = PV75):"
+sysbus ReadDoubleWord 0x24000000
+
+echo "status (expect 0x50415353 = PASS):"
+sysbus ReadDoubleWord 0x24000004
+
+echo "stored samples (expect 1536):"
+sysbus ReadDoubleWord 0x24000008
+
+echo "reloaded samples (expect 1536):"
+sysbus ReadDoubleWord 0x2400000C
+
+echo "buffer capacity (expect 512):"
+sysbus ReadDoubleWord 0x24000010
+
+echo "refill chunk (expect 256):"
+sysbus ReadDoubleWord 0x24000014
+
+echo "refill count (expect 6):"
+sysbus ReadDoubleWord 0x24000018
+
+echo "pushed (expect 1536):"
+sysbus ReadDoubleWord 0x2400001C
+
+echo "popped (expect 1536):"
+sysbus ReadDoubleWord 0x24000020
+
+echo "underruns (expect 0):"
+sysbus ReadDoubleWord 0x24000024
+
+echo "high water (expect 512):"
+sysbus ReadDoubleWord 0x24000028
+
+echo "remaining (expect 0):"
+sysbus ReadDoubleWord 0x2400002C
+
+echo "mismatch sample (expect 0xFFFFFFFF):"
+sysbus ReadDoubleWord 0x24000030
+
+echo "mismatch joint (expect 0xFFFFFFFF):"
+sysbus ReadDoubleWord 0x24000034
+
+echo "final J1 (expect 653500 = 0x0009F8BC):"
+sysbus ReadDoubleWord 0x24000038
+
+echo "final J6 (expect -653535 = 0xFFF60721):"
+sysbus ReadDoubleWord 0x2400003C
