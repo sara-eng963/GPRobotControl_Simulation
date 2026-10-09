@@ -32,8 +32,16 @@ typedef struct {
     bool identified;
 } W25Q512JV;
 
+/* One serialized owner; objects must be initialized/zeroed before use.
+ * Board must establish VCC >= VCC(min), safe /CS and a running monotonic timer
+ * before init. Init waits 5ms then up to 500ms for WIP before reading JEDEC.
+ * No automatic device reset, status-register writes or protection unlocks.
+ * All operations are blocking and belong outside trajectory execution. */
 bool w25q512jv_init(W25Q512JV *flash, const W25Q512JVBus *bus);
 bool w25q512jv_read(W25Q512JV *flash, uint32_t address, void *data, size_t count);
+/* Program/erase success means WIP/WEL cleared and requested contents read back.
+ * Programming 0->1 without erase therefore fails. A failed operation can have
+ * changed flash and is not safe to treat as an unperformed transaction. */
 bool w25q512jv_erase_sector(W25Q512JV *flash, uint32_t address);
 bool w25q512jv_program_page(W25Q512JV *flash, uint32_t address,
                             const void *data, size_t count);

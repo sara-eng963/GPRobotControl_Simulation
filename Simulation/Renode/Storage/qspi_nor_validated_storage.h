@@ -24,6 +24,9 @@ typedef struct {
     uint16_t page_used;
     uint8_t page[QSPI_NOR_STORAGE_PAGE_BYTES];
     ValidatedTrajectory metadata;
+    /* Last discovery's transport failures: bit 0=A, bit 1=B. Runtime only.
+     * A successful degraded load may set this; begin still refuses to erase. */
+    uint8_t scan_io_error_mask;
 } QspiNorValidatedStorage;
 
 /* Supply an initialized, JEDEC-verified transport before init.
@@ -47,6 +50,9 @@ bool qspi_nor_validated_storage_write_sample(uint32_t index,
  * the marker reached flash: abort/reload or the next begin rediscovers it. */
 bool qspi_nor_validated_storage_commit(const ValidatedTrajectory *m, void *context);
 void qspi_nor_validated_storage_abort(void *context);
+/* Existing recovery policy: true accepts any fully validated slot, even if
+ * the other slot had I/O failure. Inspect scan_io_error_mask to report degraded
+ * recovery; the unread slot may contain a newer generation. Policy unchanged. */
 bool qspi_nor_validated_storage_load_committed(QspiNorValidatedStorage *s);
 bool qspi_nor_validated_storage_read_sample(uint32_t index,
                     PvExecutionSample *sample, void *context);

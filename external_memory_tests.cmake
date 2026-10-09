@@ -49,11 +49,20 @@ add_test(NAME w25q512jv_verified_test COMMAND w25q512jv_verified_test)
 
 add_executable(qspi_storage_power_loss_test
     Simulation/Tests/test_qspi_storage_power_loss.c
+    Simulation/Tests/w25q_nor_model.c
     Simulation/Renode/Storage/w25q512jv_flash.c
     Simulation/Renode/Storage/qspi_nor_validated_storage.c)
 target_compile_options(qspi_storage_power_loss_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
 add_test(NAME qspi_storage_power_loss_test COMMAND qspi_storage_power_loss_test)
 set_tests_properties(qspi_storage_power_loss_test PROPERTIES TIMEOUT 60)
+
+add_executable(w25q512jv_protocol_test
+    Simulation/Tests/test_w25q512jv_protocol.c
+    Simulation/Tests/w25q_nor_model.c
+    Simulation/Renode/Storage/w25q512jv_flash.c)
+target_compile_options(w25q512jv_protocol_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+add_test(NAME w25q512jv_protocol_test COMMAND w25q512jv_protocol_test)
+set_tests_properties(w25q512jv_protocol_test PROPERTIES TIMEOUT 60)
 
 add_executable(stm32h7_w25q_fifo_test
     Simulation/Tests/test_stm32h7_w25q_fifo.c

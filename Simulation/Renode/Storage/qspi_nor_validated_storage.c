@@ -256,6 +256,8 @@ static SlotCheck valid_slot(QspiNorValidatedStorage *s, int slot, StorageHeader 
 static bool discover_slots(QspiNorValidatedStorage *s) {
     StorageHeader a,b;
     const SlotCheck sa=valid_slot(s,0,&a), sb=valid_slot(s,1,&b);
+    s->scan_io_error_mask=(uint8_t)((sa == SLOT_IO_ERROR ? 1U : 0U) |
+                                  (sb == SLOT_IO_ERROR ? 2U : 0U));
     const bool complete=sa != SLOT_IO_ERROR && sb != SLOT_IO_ERROR;
     bool va=sa == SLOT_VALID, vb=sb == SLOT_VALID;
     if (!va && !vb) {

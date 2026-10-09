@@ -4,6 +4,7 @@
  */
 #include "../Renode/Storage/qspi_nor_validated_storage.h"
 #include "../Renode/Storage/w25_artifact_crc.h"
+#include "w25q_nor_model.h"
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -11,11 +12,6 @@
 
 #define CAPACITY 512U
 #define COUNT 300U
-#define SECTOR 4096U
-#define PAGE 256U
-#define SLOT_BYTES 16384U
-#define IMAGE_BYTES (2U * SLOT_BYTES)
-#define MAX_EVENTS 512U
 #define MARKER UINT32_C(0x434F4D4D)
 
 /* Independent fixture description of the unchanged persistent format. */
@@ -26,35 +22,6 @@ typedef struct {
     uint32_t header_crc, commit_marker;
 } HeaderFixture;
 
-typedef enum {
-    DISCOVERY, HEADER_ERASE, ERASE_READBACK, PAYLOAD_ERASE, PAYLOAD_PROGRAM,
-    PAYLOAD_VERIFY, HEADER_PROGRAM, HEADER_VERIFY, MARKER_PROGRAM,
-    MARKER_VERIFY, FINAL_PAYLOAD_VERIFY, STAGE_COUNT
-} Stage;
-static const char *const stage_names[] = {
-    "discovery", "header erase", "erase readback", "payload erase", "payload program",
-    "payload verify", "header program", "header verify", "marker program",
-    "marker verify", "final payload verify"
-};
-typedef enum {
-    NO_FAULT, CUT_BEFORE, CUT_DURING, CUT_AFTER, IGNORE_WRITE,
-    TRUNCATE_PROGRAM, SILENT_CORRUPTION, READ_ERROR,
-    CORRUPT_PAYLOAD_AT_MARKER, CORRUPT_HEADER_AT_MARKER
-} Fault;
-typedef struct { uint8_t op; uint32_t at; size_t size; Stage stage; } Event;
-typedef struct {
-    uint8_t bytes[IMAGE_BYTES];
-    bool powered, wel, updating, header_started, marker_started;
-    uint64_t now, busy_until;
-    uint8_t pending_op, pending_data[PAGE];
-    uint32_t pending_at, target_base;
-    size_t pending_size;
-    Event events[MAX_EVENTS];
-    unsigned event_count, fail_event, erase_count;
-    Fault fault;
-    size_t partial;
-    bool fired;
-} Model;
 static Model model;
 static unsigned power_cases, integrity_cases;
 static unsigned stage_cases[STAGE_COUNT];
@@ -70,148 +37,17 @@ static uint32_t crc32(uint32_t crc, const void *data, size_t n)
     return crc;
 }
 
-static void persist(uint8_t op, uint32_t at, const uint8_t *tx, size_t n)
-{
-    if (op == 0x21U) {
-        assert(at % SECTOR == 0 && n <= SECTOR && at + SECTOR <= IMAGE_BYTES);
-        memset(model.bytes+at,0xFF,n);
-    } else {
-        assert(op == 0x12U && n <= PAGE);
-        for (size_t i=0; i<n; ++i) {
-            uint32_t location=(at & ~(PAGE-1U)) | ((at+(uint32_t)i) & (PAGE-1U));
-            assert(location < IMAGE_BYTES);
-            model.bytes[location] &= tx[i];
-        }
-    }
-}
-
-static void finish_pending(void)
-{
-    if (model.pending_op && model.now >= model.busy_until) {
-        persist(model.pending_op,model.pending_at,model.pending_data,model.pending_size);
-        model.pending_op=0;
-        model.wel=false;
-    }
-}
-
-static Stage classify(uint8_t op, uint32_t at)
-{
-    const bool header=(at % SLOT_BYTES) < SECTOR;
-    if (op == 0x21U) return header ? HEADER_ERASE : PAYLOAD_ERASE;
-    if (op == 0x12U) {
-        if (!header) return PAYLOAD_PROGRAM;
-        if (at % SLOT_BYTES == offsetof(HeaderFixture,commit_marker))
-            return MARKER_PROGRAM;
-        return HEADER_PROGRAM;
-    }
-    if (!model.updating) return DISCOVERY;
-    if (header) {
-        if (model.marker_started) return MARKER_VERIFY;
-        return model.header_started ? HEADER_VERIFY : ERASE_READBACK;
-    }
-    return model.marker_started ? FINAL_PAYLOAD_VERIFY : PAYLOAD_VERIFY;
-}
-
-static bool command(void *ctx, uint8_t op, uint32_t at,
-                    const uint8_t *tx, size_t txsz, uint8_t *rx, size_t rxsz)
-{
-    (void)ctx;
-    if (!model.powered) return false;
-    finish_pending();
-    if (op == 0x05U) {
-        assert(rx && rxsz == 1 && txsz == 0);
-        *rx=(model.pending_op ? 1U : 0U) | (model.wel ? 2U : 0U);
-        return true;
-    }
-    if (model.pending_op) return false;
-    if (op == 0x9FU) {
-        assert(rx && rxsz == 3 && txsz == 0);
-        rx[0]=0xEF; rx[1]=0x40; rx[2]=0x20;
-        return true;
-    }
-    if (op == 0x06U) { model.wel=true; return true; }
-    assert(op == 0x13U || op == 0x12U || op == 0x21U);
-    size_t n=op == 0x21U ? SECTOR : (txsz ? txsz : rxsz);
-    assert(at < IMAGE_BYTES && (uint64_t)at+n <= IMAGE_BYTES);
-    Stage stage=classify(op,at);
-    assert(model.event_count < MAX_EVENTS);
-    unsigned number=++model.event_count;
-    model.events[number-1]=(Event){op,at,n,stage};
-    bool inject=model.fault != NO_FAULT && number == model.fail_event;
-    if (inject) model.fired=true;
-    if (inject && (model.fault == CUT_BEFORE || model.fault == READ_ERROR)) {
-        if (model.fault == CUT_BEFORE) model.powered=false;
-        return false;
-    }
-    if (op == 0x13U) {
-        assert(rx && rxsz && !txsz);
-        size_t amount=inject && model.fault == CUT_DURING ? model.partial : rxsz;
-        if (amount > rxsz) amount=rxsz;
-        memcpy(rx,model.bytes+at,amount);
-        if (inject && (model.fault == CUT_DURING || model.fault == CUT_AFTER)) {
-            model.powered=false;
-            return false;
-        }
-        return true;
-    }
-    assert(model.wel);
-    /* Every mutation must target the inactive slot, regardless of reload use. */
-    assert(at / SLOT_BYTES == model.target_base / SLOT_BYTES);
-    if (op == 0x21U) { ++model.erase_count; model.updating=true; }
-    if (stage == HEADER_PROGRAM) model.header_started=true;
-    if (stage == MARKER_PROGRAM) model.marker_started=true;
-    if (inject && model.fault == IGNORE_WRITE) return true;
-    if (op == 0x12U) { assert(tx && txsz && txsz <= PAGE && !rxsz); }
-    if (inject && (model.fault == CUT_DURING || model.fault == CUT_AFTER)) {
-        size_t amount=model.fault == CUT_AFTER ? n : model.partial;
-        if (amount > n) amount=n;
-        persist(op,at,tx,amount);
-        model.powered=false;
-        /* The command was accepted, but power is lost during internal WIP.
-         * Subsequent status polls fail; reboot cancels volatile pending state. */
-        return true;
-    }
-    if (inject && model.fault == TRUNCATE_PROGRAM) {
-        assert(op == 0x12U);
-        n=model.partial < n ? model.partial : n;
-    }
-    if (inject && model.fault == SILENT_CORRUPTION) {
-        persist(op,at,tx,n);
-        model.bytes[at] ^= 0x01U;
-        model.wel=false;
-        return true;
-    }
-    if (inject && model.fault == CORRUPT_PAYLOAD_AT_MARKER) {
-        assert(stage == MARKER_PROGRAM);
-        model.bytes[model.target_base+SECTOR+64] ^= 0x80U;
-    }
-    if (inject && model.fault == CORRUPT_HEADER_AT_MARKER) {
-        assert(stage == MARKER_PROGRAM);
-        model.bytes[model.target_base+offsetof(HeaderFixture,metadata)] ^= 0x80U;
-    }
-    model.pending_op=op;
-    model.pending_at=at;
-    model.pending_size=n;
-    if (op == 0x12U) memcpy(model.pending_data,tx,n);
-    model.busy_until=model.now+(op == 0x21U ? 50000U : 700U);
-    return true;
-}
-
-static uint64_t clock_us(void *ctx) { (void)ctx; return model.now; }
-static void idle(void *ctx) { (void)ctx; model.now+=100; }
 static void boot(QspiNorValidatedStorage *s)
 {
     /* Retain only device bytes across reboot; reset MCU/flash volatile state. */
-    model.powered=true;
-    model.wel=false;
-    model.pending_op=0;
-    model.now=model.busy_until=0;
-    model.event_count=model.erase_count=0;
-    model.updating=model.header_started=model.marker_started=false;
-    model.fault=NO_FAULT;
-    model.fired=false;
+    w25_model_power_cycle(&model);
     memset(s,0xA5,sizeof(*s));
-    W25Q512JVBus bus={command,clock_us,idle,NULL};
+    model.enforce_target=true;
+    model.marker_offset=offsetof(HeaderFixture,commit_marker);
+    model.late_corrupt_header_offset=offsetof(HeaderFixture,metadata);
+    model.jedec_id=0xEF4020;
+    model.program_latency_us=700; model.erase_latency_us=50000;
+    W25Q512JVBus bus={w25_model_command,w25_model_time,w25_model_idle,&model};
     assert(qspi_nor_validated_storage_set_bus(&bus));
     assert(qspi_nor_validated_storage_init(s,0,CAPACITY));
     assert(s->slot_bytes == SLOT_BYTES);
@@ -285,6 +121,10 @@ static uint32_t fixture(uint8_t *snapshot, unsigned active, bool both)
 static void restore(QspiNorValidatedStorage *s, const uint8_t *snapshot, unsigned active)
 {
     memcpy(model.bytes,snapshot,IMAGE_BYTES);
+    /* Restore fixture configuration as well as bytes. Ordinary boot preserves
+     * configured protection, matching nonvolatile protection across resets. */
+    model.protect_begin=model.protect_end=0;
+    model.ignored_clears_wel=model.keep_wel=model.reject_wren=false;
     boot(s);
     model.target_base=(1U-active)*SLOT_BYTES;
     /* Deliberately do NOT load_committed: begin must discover after reboot. */
@@ -436,6 +276,82 @@ static void test_discovery_and_ambiguous_commit(void)
     puts("[PASS] Ambiguous commit/abort rediscovery, consecutive update and corruption fallback");
 }
 
+static void test_degraded_recovery_reporting(void)
+{
+    uint8_t snapshot[IMAGE_BYTES];
+    QspiNorValidatedStorage s;
+    (void)fixture(snapshot,1,true); /* A=program 1, B=program 2 (newer) */
+    for (unsigned failed_slot=0; failed_slot<2; ++failed_slot) {
+        for (unsigned payload=0; payload<2; ++payload) {
+            restore(&s,snapshot,1);
+            assert(qspi_nor_validated_storage_load_committed(&s));
+            unsigned failure=0;
+            uint32_t address=failed_slot*SLOT_BYTES+(payload ? SECTOR : 0U);
+            for (unsigned i=0; i<model.event_count; ++i)
+                if (model.events[i].op == 0x13 && model.events[i].at == address) {
+                    failure=i+1; break;
+                }
+            assert(failure);
+            model.event_count=0; model.fault=READ_ERROR; model.fail_event=failure;
+            assert(qspi_nor_validated_storage_load_committed(&s));
+            assert(s.committed && s.readback_verified && model.fired);
+            assert(s.scan_io_error_mask == (1U << failed_slot));
+            assert(s.metadata.program_id == (failed_slot ? 1U : 2U));
+            PvExecutionSample v, expected=sample(0,failed_slot ? 1U : 2U);
+            assert(qspi_nor_validated_storage_read_sample(0,&v,&s));
+            assert(memcmp(&v,&expected,sizeof(v)) == 0);
+            /* The same failure must block updating even after degraded load. */
+            model.event_count=0; model.fired=false;
+            assert(!qspi_nor_validated_storage_begin(&s));
+            assert(model.fired && model.erase_count == 0);
+            assert(memcmp(model.bytes,snapshot,IMAGE_BYTES) == 0);
+            model.fault=NO_FAULT; model.event_count=0;
+            assert(qspi_nor_validated_storage_load_committed(&s));
+            assert(s.scan_io_error_mask == 0 && s.metadata.program_id == 2);
+        }
+    }
+    puts("[PASS] Degraded A/B header/payload I/O recovery reports mask; updates remain blocked");
+}
+
+static void test_protected_storage_commits(void)
+{
+    uint8_t snapshot[IMAGE_BYTES];
+    QspiNorValidatedStorage s;
+    uint32_t old=fixture(snapshot,0,true);
+    Event trace[MAX_EVENTS];
+    restore(&s,snapshot,0);
+    assert(publish(&s,4));
+    unsigned events=model.event_count;
+    memcpy(trace,model.events,events*sizeof(*trace));
+    for (unsigned clears=0; clears<2; ++clears) {
+        for (unsigned region=0; region<2; ++region) {
+            restore(&s,snapshot,0);
+            model.protect_begin=SLOT_BYTES+(region ? SECTOR : 0U);
+            model.protect_end=model.protect_begin+SECTOR;
+            model.ignored_clears_wel=clears != 0;
+            assert(!publish(&s,4));
+            assert(s.metadata.program_id != 4);
+            assert(memcmp(model.bytes,snapshot,SLOT_BYTES) == 0);
+            assert(model.protect_end > model.protect_begin);
+            assert(model.op_calls[0x98] == 0 && model.unknown_commands == 0);
+            boot(&s); inspect(&s,old);
+        }
+        /* Activate protection specifically at marker write (after erase and
+         * header verification). No driver change may clear this protection. */
+        restore(&s,snapshot,0);
+        model.ignored_clears_wel=clears != 0;
+        for (unsigned i=0; i<events; ++i) {
+            if (trace[i].stage != MARKER_PROGRAM) continue;
+            model.fault=IGNORE_WRITE; model.fail_event=i+1;
+            assert(!publish(&s,4) && model.fired);
+            assert(s.metadata.program_id != 4 && model.op_calls[0x98] == 0);
+            boot(&s); inspect(&s,old);
+            break;
+        }
+    }
+    puts("[PASS] Protected header/payload and ignored marker cannot publish a committed slot");
+}
+
 int main(void)
 {
     assert(sizeof(HeaderFixture) <= SECTOR);
@@ -443,6 +359,8 @@ int main(void)
     test_power_cuts();
     test_integrity_faults();
     test_discovery_and_ambiguous_commit();
+    test_degraded_recovery_reporting();
+    test_protected_storage_commits();
     puts("ALL A/B STORAGE POWER-LOSS TESTS PASS");
     return 0;
 }
