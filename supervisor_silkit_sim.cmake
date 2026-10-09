@@ -30,6 +30,7 @@ if(ENABLE_SILKIT)
         ${CMAKE_SOURCE_DIR}/StateMachine/States/state_approach.c
         ${CMAKE_SOURCE_DIR}/StateMachine/States/state_path_execution.c
         ${CMAKE_SOURCE_DIR}/ServoDrive/JointDrive/canopen_joint_drive_port.c
+        ${CMAKE_SOURCE_DIR}/ServoDrive/JointDrive/canopen_drive_commissioning_port.c
         ${CMAKE_SOURCE_DIR}/StateMachine/States/state_paused.c
         ${CMAKE_SOURCE_DIR}/StateMachine/States/state_fault.c
         ${CMAKE_SOURCE_DIR}/StateMachine/States/state_emergency_stop.c
