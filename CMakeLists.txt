@@ -285,6 +285,7 @@ add_library(
     StateMachine/supervisor_io.c
     StateMachine/States/state_path_execution.c
     ServoDrive/JointDrive/canopen_joint_drive_port.c
+    ServoDrive/JointDrive/canopen_drive_commissioning_port.c
     StateMachine/States/state_paused.c
     StateMachine/States/state_fault.c
     StateMachine/States/state_emergency_stop.c
@@ -362,6 +363,7 @@ add_executable(
 
     CANComm/CANopen/canopen_master.c
     ServoDrive/JointDrive/canopen_joint_drive_port.c
+    ServoDrive/JointDrive/canopen_drive_commissioning_port.c
     CANComm/CANopen/canopen_nmt.c
     CANComm/CANopen/canopen_sdo.c
     CANComm/CANopen/canopen_heartbeat.c
