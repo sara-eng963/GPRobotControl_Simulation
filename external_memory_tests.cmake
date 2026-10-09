@@ -80,3 +80,47 @@ foreach(test_name IN ITEMS file_validated_storage_test validated_stream_buffer_t
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-output/${test_name}"
         TIMEOUT 60)
 endforeach()
+
+# Batch 4: optional, genuine STM32H7/QUADSPI firmware runs in Renode.
+# These remain CTest SKIPPED AT CONFIGURATION (not "passed") when tooling is
+# missing; the build must remain usable without Renode or an ARM cross compiler.
+option(ENABLE_RENODE_TESTS "Register Renode QSPI functional firmware tests when dependencies exist" ON)
+if(ENABLE_RENODE_TESTS)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    find_program(RENODE_EXECUTABLE NAMES renode
+        HINTS "$ENV{HOME}/renode_portable"
+        DOC "Renode executable for STM32H7 QSPI functional tests")
+    find_program(RENODE_ARM_GCC NAMES arm-none-eabi-gcc)
+    find_program(RENODE_ARM_OBJCOPY NAMES arm-none-eabi-objcopy)
+    find_program(RENODE_MAKE NAMES make)
+
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME renode_qspi_runner_self_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_renode_qspi_tests.py" --self-test)
+        set_tests_properties(renode_qspi_runner_self_test PROPERTIES
+            LABELS "renode;external_memory" TIMEOUT 10)
+    endif()
+
+    if(Python3_Interpreter_FOUND AND RENODE_EXECUTABLE AND
+       RENODE_ARM_GCC AND RENODE_ARM_OBJCOPY AND RENODE_MAKE)
+        foreach(case IN ITEMS
+            qspi_jedec_test
+            qspi_rw_test
+            qspi_pv_sample_test
+            qspi_storage_backend_test
+            qspi_streaming_test)
+            add_test(NAME renode_${case}
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_renode_qspi_tests.py"
+                    --renode "${RENODE_EXECUTABLE}" --test "${case}" --timeout 150)
+            set_tests_properties(renode_${case} PROPERTIES
+                LABELS "renode;external_memory" TIMEOUT 210 RUN_SERIAL TRUE)
+        endforeach()
+        message(STATUS "Renode QSPI firmware tests REGISTERED: 5 cases + runner self-test")
+    else()
+        message(STATUS "Renode QSPI firmware tests NOT REGISTERED (missing optional Python3/Renode/arm-none-eabi-gcc/arm-none-eabi-objcopy/make)")
+    endif()
+else()
+    message(STATUS "Renode QSPI firmware tests DISABLED by ENABLE_RENODE_TESTS=OFF")
+endif()
