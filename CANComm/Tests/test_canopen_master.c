@@ -321,6 +321,14 @@ int main(void)
           "JointDrivePort rejects invalid commands");
 
 
+    canopen_master_set_heartbeat_timeout(&master, 300U);
+    CHECK(
+        master.heartbeat_timeout_ms == 300U &&
+        canopen_master_healthy(&master, 121U),
+        "Master heartbeat timeout API updates health deadline"
+    );
+    canopen_master_set_heartbeat_timeout(&master, 20U);
+
     CHECK(
         !canopen_master_healthy(
             &master,

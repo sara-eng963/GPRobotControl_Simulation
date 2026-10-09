@@ -117,6 +117,15 @@ void canopen_master_clear_runtime(
     CanopenMaster *master
 );
 
+/* Change the drive-heartbeat freshness threshold after initialization.
+ * Zero retains the existing semantics of disabling heartbeat age checking.
+ * Only CanopenMaster may mutate its heartbeat timeout configuration.
+ */
+void canopen_master_set_heartbeat_timeout(
+    CanopenMaster *master,
+    uint32_t timeout_ms
+);
+
 /*
  * Drain all currently available RX frames.
  *

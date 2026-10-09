@@ -27,7 +27,7 @@ static void reset_runtime(void *context, uint32_t heartbeat_timeout_ms)
 {
     CanopenMaster *master = (CanopenMaster *)context;
     canopen_master_clear_runtime(master);
-    master->heartbeat_timeout_ms = heartbeat_timeout_ms;
+    canopen_master_set_heartbeat_timeout(master, heartbeat_timeout_ms);
 }
 
 static bool send_network_command(void *context, DriveNetworkCommand command)

@@ -188,6 +188,19 @@ void canopen_master_clear_runtime(
     );
 }
 
+void canopen_master_set_heartbeat_timeout(
+    CanopenMaster *master,
+    uint32_t timeout_ms
+)
+{
+    if (master == NULL || !master->initialized)
+    {
+        return;
+    }
+
+    master->heartbeat_timeout_ms = timeout_ms;
+}
+
 static void process_heartbeat(
     CanopenMaster *master,
     const CanFrame *frame,
