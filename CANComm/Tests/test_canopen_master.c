@@ -1,4 +1,5 @@
 #include "../CANopen/canopen_master.h"
+#include "../../ServoDrive/JointDrive/canopen_joint_drive_port.h"
 #include "../../ServoDrive/AvatarM/avatar_m_pdo.h"
 #include "../../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../../ServoDrive/CiA402/cia402.h"
@@ -288,6 +289,27 @@ int main(void)
         "Fresh OPERATIONAL heartbeats mark communication healthy"
     );
 
+    /* Application-facing adapter must preserve master semantics. */
+    JointDrivePort port = canopen_joint_drive_port_make(&master);
+    CHECK(joint_drive_port_valid(&port), "JointDrivePort accepts six-node CANopen master");
+    CHECK(joint_drive_port_ready(&port, 110U), "JointDrivePort reports ready on valid feedback");
+    CHECK(joint_drive_port_feedback_sequence(&port, 0U) > 0U &&
+          joint_drive_port_feedback_sequence(&port, 5U) > 0U,
+          "JointDrivePort exposes fresh TPDO4 counters");
+    fake_clear_tx(&fake);
+    CHECK(joint_drive_port_poll(&port, 110U), "JointDrivePort polls CANopen coordinator");
+    CHECK(joint_drive_port_send_targets(&port, targets) && fake.tx_count == 7U,
+          "JointDrivePort sends six RPDO4 frames and SYNC");
+    bool port_order_ok = fake.tx_count == 7U;
+    for (size_t i = 0U; i < 6U && port_order_ok; ++i)
+        port_order_ok = fake.tx[i].id == (uint16_t)(0x501U + i);
+    port_order_ok = port_order_ok && fake.tx[6].id == 0x080U;
+    CHECK(port_order_ok, "JointDrivePort retains exact RPDO4/SYNC order");
+    CHECK(!joint_drive_port_send_targets(NULL, targets) &&
+          !joint_drive_port_send_targets(&port, NULL),
+          "JointDrivePort rejects invalid commands");
+
+
     CHECK(
         !canopen_master_healthy(
             &master,
@@ -295,6 +317,9 @@ int main(void)
         ),
         "Heartbeat timeout marks communication unhealthy"
     );
+    CHECK(!joint_drive_port_ready(&port, 121U),
+          "JointDrivePort rejects stale network heartbeat");
+    fake_clear_tx(&fake);
 
     fake_clear_tx(&fake);
     CHECK(
