@@ -122,6 +122,12 @@ typedef struct
     PathExecClearanceFn clearance_verified;
     PathExecControlledStopFn controlled_stop;
     void *context;
+    /* Optional SRAM-only, nonblocking preflight. Called before motion and
+     * before enabling wire feed, including PAUSED resume. Never refill/wait. */
+    bool (*stream_ready)(uint32_t next_index, uint32_t sample_count, void *context);
+    /* Supervisor calls this after execution is no longer dispatched.
+     * PAUSED retains ownership. Never read storage or wait here. */
+    void (*end_stream)(void *context);
 } PathExecutionServices;
 
 typedef struct
@@ -189,6 +195,8 @@ void state_path_execution_resume(
     PathExecutionState *state,
     uint32_t now_ms
 );
+
+void state_path_execution_release_stream(PathExecutionState *state);
 
 const char *state_path_execution_phase_name(PathExecutionPhase phase);
 const char *state_path_execution_error_name(PathExecutionError error);

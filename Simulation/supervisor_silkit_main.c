@@ -49,8 +49,6 @@ static ADLSInfo pv_ik_scratch, guidance_info;
 static RamValidatedStorage validated_storage;
 static TrajectoryPrefetch validated_prefetch;
 static TaskHandle_t prefetch_task_handle;
-static bool prefetch_pause_requested;
-static bool prefetch_pause_acknowledged;
 static PathValidationStorage path_validation_storage;
 static ValidatedTrajectory validated_trajectory;
 static ApproachConfig approach_config;
@@ -250,6 +248,7 @@ static bool ram_prefetch_read_batch(uint32_t first, PvExecutionSample *out,
 {
     RamValidatedStorage *s = (RamValidatedStorage *)context;
     if (!s || !out || !s->committed || first > s->metadata.sample_count ||
+        first > s->sample_count ||
         count > s->metadata.sample_count - first ||
         count > s->sample_count - first) return false;
     memcpy(out, &s->samples[first], (size_t)count * sizeof(*out));
@@ -260,12 +259,13 @@ static bool ram_prefetch_read_batch(uint32_t first, PvExecutionSample *out,
  * an in-flight refill half-written. Only used outside active execution. */
 static bool quiesce_prefetch_worker(void)
 {
-    if (prefetch_task_handle == NULL) return true;
-    __atomic_store_n(&prefetch_pause_requested, true, __ATOMIC_RELEASE);
+    if (!trajectory_prefetch_request_stop(&validated_prefetch)) return false;
+    if (prefetch_task_handle == NULL)
+        (void)trajectory_prefetch_worker_step(&validated_prefetch);
     const TickType_t started = xTaskGetTickCount();
     const TickType_t timeout = pdMS_TO_TICKS(1000);
     for (;;) {
-        if (__atomic_load_n(&prefetch_pause_acknowledged, __ATOMIC_ACQUIRE))
+        if (trajectory_prefetch_stopped(&validated_prefetch))
             return true;
         if ((TickType_t)(xTaskGetTickCount() - started) >= timeout)
             return false;
@@ -273,42 +273,11 @@ static bool quiesce_prefetch_worker(void)
     }
 }
 
-static void resume_prefetch_worker(void)
-{
-    __atomic_store_n(&prefetch_pause_requested, false, __ATOMIC_RELEASE);
-}
-
 static void prefetch_worker_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        if (__atomic_load_n(&prefetch_pause_requested, __ATOMIC_ACQUIRE)) {
-            __atomic_store_n(&prefetch_pause_acknowledged, true, __ATOMIC_RELEASE);
-            do {
-                vTaskDelay(1);
-            } while (__atomic_load_n(&prefetch_pause_requested, __ATOMIC_ACQUIRE));
-            __atomic_store_n(&prefetch_pause_acknowledged, false, __ATOMIC_RELEASE);
-            continue;
-        }
-
-        if (validated_prefetch.armed && !validated_prefetch.read_failed &&
-            validated_prefetch.next_flash_index < validated_prefetch.total_samples &&
-            trajectory_prefetch_buffered(&validated_prefetch) <= TRAJECTORY_PREFETCH_BATCH)
-            (void)trajectory_prefetch_refill(&validated_prefetch);
-
-        /* Re-arm for preview -> production only after all samples are consumed.
-         * This PC-only replay behavior must not reset an active trajectory. */
-        if (validated_prefetch.armed && !validated_prefetch.read_failed &&
-            validated_prefetch.total_samples > 0U &&
-            __atomic_load_n(&validated_prefetch.consumed, __ATOMIC_ACQUIRE)
-              == validated_prefetch.total_samples) {
-            const uint32_t n = validated_prefetch.total_samples;
-            if (trajectory_prefetch_prepare(&validated_prefetch,
-                    ram_prefetch_read_batch, &validated_storage, n)) {
-                (void)trajectory_prefetch_refill(&validated_prefetch);
-                (void)trajectory_prefetch_refill(&validated_prefetch);
-            }
-        }
+        (void)trajectory_prefetch_worker_step(&validated_prefetch);
         vTaskDelay(1);
     }
 }
@@ -420,8 +389,7 @@ static bool ram_storage_commit(
         trajectory_prefetch_disarm(&validated_prefetch);
         return false;
     }
-    resume_prefetch_worker();
-    return true;
+    return trajectory_prefetch_resume_worker(&validated_prefetch);
 }
 
 
@@ -488,6 +456,20 @@ static bool execution_read_prefetched(uint32_t sample_index,
 {
     (void)ctx;
     return trajectory_prefetch_take(&validated_prefetch, sample_index, sample);
+}
+
+static bool execution_stream_ready(uint32_t next_index, uint32_t count, void *ctx)
+{
+    (void)ctx;
+    return trajectory_prefetch_begin_execution(&validated_prefetch, next_index, count);
+}
+
+static void execution_end_stream(void *ctx)
+{
+    (void)ctx;
+    /* Called in the Supervisor task after it stops dispatching execution,
+     * including external transitions from execution/PAUSED into FAULT. */
+    trajectory_prefetch_end_execution(&validated_prefetch);
 }
 
 static void configure_robot(void)
@@ -1675,7 +1657,13 @@ static bool start_system(void)
     /* Reuse the same CANopen coordinator as Supervisor; never reinterpret
      * a CanopenMaster pointer as JointDrivePort during retraction. */
     retraction_drive = canopen_joint_drive_port_make(&can_boot_master);
-    execution_services=(PathExecutionServices){execution_read_prefetched,relay,retract_prepare,retract_step,clearance,hold,&validated_storage};
+    execution_services=(PathExecutionServices){
+        .read_sample=execution_read_prefetched, .set_wire_feed_enabled=relay,
+        .prepare_retraction=retract_prepare, .step_retraction=retract_step,
+        .clearance_verified=clearance, .controlled_stop=hold,
+        .context=&validated_storage, .stream_ready=execution_stream_ready,
+        .end_stream=execution_end_stream
+    };
     paused_services=(PausedServices){hold,off,NULL};fault_services=(FaultServices){safe,NULL};emergency_services=(EmergencyStopServices){safe,NULL};
     SupervisorTaskConfig c={0};
     c.canopen_master=&can_boot_master;c.avatar_position_scales=avatar_position_scales;c.robot=&robot;c.homing_config=&homing_config;c.teaching_config=&teaching_config;

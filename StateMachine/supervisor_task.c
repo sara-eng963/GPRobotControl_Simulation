@@ -64,6 +64,7 @@ typedef struct
     RobotStateId entered_state;
     uint32_t next_program_id;
     bool initialized;
+    bool execution_stream_retained;
 } SupervisorTaskContext;
 
 static SupervisorTaskContext g_supervisor;
@@ -112,6 +113,14 @@ static void enter_active_state(SupervisorTaskContext *context)
         return;
     }
 
+    /* Dispatch and consumption share this task: on exit no take is in flight.
+     * PAUSED retains the stream; sample count is never proof of quiescence. */
+    if (context->execution_stream_retained &&
+        machine->activeState != ROBOT_STATE_PATH_EXECUTION &&
+        machine->activeState != ROBOT_STATE_PAUSED) {
+        state_path_execution_release_stream(&context->path_execution);
+        context->execution_stream_retained = false;
+    }
     context->entered_state = machine->activeState;
     SUPERVISOR_LOG("[SUPERVISOR] Enter %s\n",
                    state_machine_state_name(machine->activeState));
@@ -195,6 +204,7 @@ static void enter_active_state(SupervisorTaskContext *context)
 
         case ROBOT_STATE_PATH_EXECUTION:
         {
+            context->execution_stream_retained = true;
             if (machine->previousState == ROBOT_STATE_PAUSED &&
                 context->path_execution.initialized)
             {

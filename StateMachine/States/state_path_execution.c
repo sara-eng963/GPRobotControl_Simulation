@@ -79,6 +79,19 @@ static bool services_valid(const PathExecutionServices *services)
            services->controlled_stop != NULL;
 }
 
+static bool stream_ready(const PathExecutionState *state)
+{
+    return state->services.stream_ready == NULL ||
+        state->services.stream_ready(state->sample_index,
+            state->request.trajectory->sample_count, state->services.context);
+}
+
+void state_path_execution_release_stream(PathExecutionState *state)
+{
+    if (state != NULL && state->initialized && state->services.end_stream != NULL)
+        state->services.end_stream(state->services.context);
+}
+
 static bool drive_valid(const PathExecutionState *state)
 {
     return state != NULL && joint_drive_port_valid(&state->drive);
@@ -382,6 +395,9 @@ StateStepResult state_path_execution_step(
                 );
             }
 
+            if (!stream_ready(state))
+                return fail(state, PATH_EXEC_ERR_TRAJECTORY_NOT_READY);
+
             enter_phase(
                 state,
                 PATH_EXEC_PHASE_CONFIGURE_WIRE_FEED,
@@ -390,6 +406,10 @@ StateStepResult state_path_execution_step(
             break;
 
         case PATH_EXEC_PHASE_CONFIGURE_WIRE_FEED:
+            /* A refill can fail between phases. Resume must also check SRAM
+             * before re-enabling production wire feed. */
+            if (!stream_ready(state))
+                return fail(state, PATH_EXEC_ERR_TRAJECTORY_NOT_READY);
             if (state->request.mode == ROBOT_EXECUTION_PREVIEW)
             {
                 if (!state->services.set_wire_feed_enabled(

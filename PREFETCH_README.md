@@ -1,47 +1,118 @@
-# SPSC trajectory prefetch: staged CAN/SIL Kit integration
+# Trajectory prefetch ownership and execution readiness
 
-This patch introduces a 512-sample SRAM SPSC ring and a 256-sample staging area.
-The supervisor's execution `read_sample` callback only reads from the SRAM ring; a priority-2
-FreeRTOS task calls the bulk source-reader callback when occupancy drops.
+The CAN/SIL Kit Supervisor consumes six signed 32-bit joint targets per sample
+at the established 2 ms period. A priority-2 worker refills the 512-sample SRAM
+ring in batches of at most 256 through a separate staging array. The current
+source is `RamValidatedStorage`; flash-backed integration remains separate work.
+Execution and preflight callbacks never read storage, take mutexes or wait.
 
-## Verify component in isolation
+## Ownership and publication
+
+One task owns control and consumption: the Supervisor. One worker owns refills.
+`written` release publishes sample bytes; the consumer acquires it. `consumed`
+release publishes reusable slots; the producer acquires it. Fault and armed flags
+also use atomic access consistently. Compile-time assertions require lock-free
+32-bit and flag atomics. This is a single-core contract; STM32H745 M4/M7 memory
+and cache coordination is not established here.
+
+The worker owns `next_flash_index` and `refill_batches` while running. The consumer
+owns `underruns`; the worker resets it only after consumer release. Inspect these
+non-atomic statistics only under their ownership or while STOPPED. Configuration
+and source data are immutable until acknowledged worker quiescence.
+
+## Lifecycle
+
+| State | Allowed behavior |
+|---|---|
+| STOPPED | Worker accesses no source/configuration. Control may prepare/disarm and synchronously prefill. |
+| REFILLING | Worker refills. Fresh consumer acquires only after startup prefill. |
+| EXECUTING | Consumer owns the stream through final feedback, retraction and PAUSED. Worker cannot reset. |
+| REPLAY_PENDING | Consumer explicitly released; worker resets and prepares automatic replay. |
+| STOP_PENDING | Worker acknowledges STOPPED after its previous read/publication returns. |
+
+Initialization starts STOPPED. Validation calls `request_stop`, waits for
+`stopped`, changes storage, calls `prepare`, and performs initial RAM prefill
+before `resume_worker`. Keeping prefill STOPPED avoids two producers. The wait
+is confined to validation, never trajectory execution.
+
+The worker calls `worker_step`, never resets from `consumed == total_samples`,
+and never inspects stream fields directly. Stop during replay reset takes priority:
+compare/exchange prevents overwriting a pending stop. There is no separate stale
+pause acknowledgement to confuse consecutive stops.
+
+`begin_execution` acquires ownership after `min(total_samples,512)` samples are
+buffered at index zero. Short trajectories require only their actual sample count.
+Rechecks/resume require the exact current index and the next sample, if one remains.
+A failed source read blocks readiness even when older samples remain buffered.
+Rejected takes never advance consumption.
+
+Optional `PathExecutionServices.stream_ready` checks SRAM during prerequisites
+and immediately before wire-feed configuration. Missing/failed prefill reports
+`PATH_EXEC_ERR_TRAJECTORY_NOT_READY`; runtime read failure/underrun uses the
+existing `PATH_EXEC_ERR_STORAGE_READ` path. NULL callbacks retain the existing
+behavior for other execution-service users.
+
+The Supervisor retains ownership across PAUSED. On execution exit, including
+external fault/E-stop and abort transitions, the same task stops dispatching
+execution before calling `end_stream`. The worker automatically re-arms. No
+manual re-arm or blocking prefill is needed in the consumer. Interrupted
+executions restart at sample zero; PAUSED resumes at the same index.
+
+## Verification
+
+Scripts use fresh `/tmp` directories by default, preserving existing builds:
 
 ```bash
+./scripts/run_host_flash_tests.sh
+./scripts/run_w25q_fifo_mock_tests.sh
 ./scripts/test_trajectory_prefetch.sh
 ```
 
-## Wire into PC SIL Kit simulator
+Output overrides are `W25Q_TEST_BUILD_DIR`, `W25Q_FIFO_TEST_BUILD_DIR`, and
+`PREFETCH_TEST_BUILD_DIR`; use fresh directories. `PREFETCH_SANITIZERS` defaults
+to `address,undefined` and can select `thread`.
 
-Back up the two touched files first:
+In the managed WSL environment, LeakSanitizer fails under ptrace; verified
+ASan/UBSan runs use `ASAN_OPTIONS=detect_leaks=0`. TSan initially fails with
+`unexpected memory mapping`, including non-PIE builds. Disabling ASLR only for
+the test process allows TSan to run:
 
 ```bash
-cp Simulation/supervisor_silkit_main.c Simulation/supervisor_silkit_main.c.before-prefetch
-cp supervisor_silkit_sim.cmake supervisor_silkit_sim.cmake.before-prefetch
-python3 scripts/apply_trajectory_prefetch_sim.py
-cmake -S . -B build-can-silkit
-cmake --build build-can-silkit --target supervisor_silkit_sim -j "$(nproc)"
-ctest --test-dir build-can-silkit -R '^supervisor_silkit_sequence$' --output-on-failure
+setarch "$(uname -m)" -R env PREFETCH_SANITIZERS=thread \
+  TSAN_OPTIONS=halt_on_error=1 ./scripts/test_trajectory_prefetch.sh
 ```
 
-A possible cleanup is restoring backups and deleting `Simulation/Storage/trajectory_prefetch.{c,h}`.
-The script refuses to edit source if the expected baseline markers have changed.
+CMake/CTest includes existing memory tests and new concurrency/execution tests.
+File-backed tests have separate build-tree working directories. Configure a full
+SIL Kit build without overwriting existing build files:
 
-## Semantics and limitations
+```bash
+prefetch_build_dir=$(mktemp -d /tmp/prefetch-regression.XXXXXX)
+cmake -S . -B "$prefetch_build_dir" -DENABLE_SILKIT=ON \
+  -DSILKIT_ROOT="$HOME/silkit_test/SilKit-5.0.7-ubuntu-24.04-x86_64-gcc/SilKit"
+cmake --build "$prefetch_build_dir" -j "$(nproc)"
+ctest --test-dir "$prefetch_build_dir" --output-on-failure
+```
 
-- The existing SIL Kit simulator uses large `RamValidatedStorage`, *not* flash.
-  The worker is connected to a RAM bulk-reader in the simulator only.
-- Validation commits prefill up to 512 samples *before execution*. This does a
-  bounded RAM copy, not a flash read, and is carried out in the validation path.
-- Worker owns batch refills; supervisor owns sample consumption, with lock-free
-  atomically published counters. `take` never calls a storage callback.
-- A source failure or buffer underrun causes `read_sample` to fail and triggers
-  the existing `PATH_EXEC_ERR_STORAGE_READ` path. Verify the higher-level drive
-  stop response separately before any physical robot application.
-- The producer is suspended during validation `begin`/`abort` and resumed only
-  after commit/preload. The prepare API REQUIRES the worker and consumer quiescent.
-- The worker automatically re-arms once it observes all samples consumed for
-  subsequent executions of the same committed trajectory.
-- Production FLASH: STM32 QSPI bulk-read adapter, DMA/cache coherency if used,
-  real FreeRTOS timing, MCU/M4 coordination, hardware safety response, watchdog,
-  and dual-core ownership still require separate integration and tests.
-- There is no performance guarantee from PC SIL Kit timings or synthetic clocks.
+SIL Kit needs local TCP/Unix/UDP socket access. Sandbox socket denial is an
+environment failure, not a passing simulation or a protocol defect.
+
+Deterministic pthread tests hold reads in flight across stop/restart, retain
+final-sample ownership, inject read failure/starvation and reject wrong indices.
+Concurrent stress checks all six joint values and indices over 392476 samples,
+12 long executions and 32 stop/reconfigure cycles. Execution tests cover final
+feedback, short prefill, preview/production, pause/resume, HOME abort/restart,
+runtime faults and wire-feed gating. The six-motor sequence also aborts active
+production with HOME and repeats production with the same validated trajectory.
+
+## Remaining limits and separate policy review
+
+Batch 1 does not establish physical flash timing, 500 Hz scheduling deadlines,
+electrical behavior or power-loss integrity. Timing, flash-backed CANopen
+integration, persistence and Renode validation remain later batches.
+
+The current storage-fault policy disables wire feed and transitions to FAULT.
+The simulator's FAULT safe-output callback only disables wire feed; it does not
+issue drive hold/stop, and Supervisor heartbeat continues. This behavior is
+preserved and explicitly tested, not certified as a physical stopping policy.
+Any change requires separate control-policy review.

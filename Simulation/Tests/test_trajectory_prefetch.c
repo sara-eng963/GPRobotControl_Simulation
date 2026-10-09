@@ -20,16 +20,26 @@ static void verify(const PvExecutionSample *s, uint32_t i)
     for (unsigned j = 0; j < 6; ++j)
         assert(s->target_position_units[j] == (int32_t)(i*10U+j));
 }
+static void prepare(TrajectoryPrefetch *s, struct Source *src, uint32_t count)
+{
+    trajectory_prefetch_end_execution(s);
+    assert(trajectory_prefetch_request_stop(s));
+    assert(trajectory_prefetch_worker_step(s));
+    assert(trajectory_prefetch_stopped(s));
+    assert(trajectory_prefetch_prepare(s, read_samples, src, count));
+}
 int main(void)
 {
     TrajectoryPrefetch s;
     struct Source src = {0, 100000U, 0};
     PvExecutionSample v;
     assert(trajectory_prefetch_init(&s));
-    assert(trajectory_prefetch_prepare(&s, read_samples, &src, 1536));
+    prepare(&s, &src, 1536);
     assert(trajectory_prefetch_refill(&s));
     assert(trajectory_prefetch_refill(&s));
+    assert(trajectory_prefetch_resume_worker(&s));
     assert(trajectory_prefetch_ready(&s, 512));
+    assert(trajectory_prefetch_begin_execution(&s, 0, 1536));
     assert(trajectory_prefetch_buffered(&s) == 512);
     assert(!trajectory_prefetch_take(&s, 1, &v));
     assert(trajectory_prefetch_buffered(&s) == 512);
@@ -50,9 +60,11 @@ int main(void)
     printf("[PASS] 1536 samples, 6 bulk refills, 0 underruns; execution read never calls storage\n");
 
     /* Intentional starvation: the producer cannot fill after 512 prefill. */
-    assert(trajectory_prefetch_prepare(&s, read_samples, &src, 1024));
+    prepare(&s, &src, 1024);
     assert(trajectory_prefetch_refill(&s));
     assert(trajectory_prefetch_refill(&s));
+    assert(trajectory_prefetch_resume_worker(&s));
+    assert(trajectory_prefetch_begin_execution(&s, 0, 1024));
     for (uint32_t i = 0; i < 512; ++i)
         assert(trajectory_prefetch_take(&s, i, &v));
     assert(!trajectory_prefetch_take(&s, 512, &v));
@@ -60,11 +72,13 @@ int main(void)
     puts("[PASS] Starved buffer reliably fails instead of reading storage in execution");
 
     src.calls = 0; src.fail_after = 512;
-    assert(trajectory_prefetch_prepare(&s, read_samples, &src, 1024));
+    prepare(&s, &src, 1024);
     assert(trajectory_prefetch_refill(&s));
     assert(trajectory_prefetch_refill(&s));
     assert(trajectory_prefetch_refill(&s)); /* Full buffer: no source access. */
     assert(src.calls == 2);
+    assert(trajectory_prefetch_resume_worker(&s));
+    assert(trajectory_prefetch_begin_execution(&s, 0, 1024));
     for (uint32_t i = 0; i < 256; ++i)
         assert(trajectory_prefetch_take(&s, i, &v));
     assert(!trajectory_prefetch_refill(&s)); /* Injected flash read failure. */
@@ -72,9 +86,11 @@ int main(void)
     puts("[PASS] Injected storage fault propagates to nonblocking consumer");
 
     src.fail_after = 100000U;
-    assert(trajectory_prefetch_prepare(&s, read_samples, &src, 3));
+    prepare(&s, &src, 3);
     assert(trajectory_prefetch_refill(&s));
+    assert(trajectory_prefetch_resume_worker(&s));
     assert(trajectory_prefetch_ready(&s, 3));
+    assert(trajectory_prefetch_begin_execution(&s, 0, 3));
     for (uint32_t i = 0; i < 3; ++i) {
         assert(trajectory_prefetch_take(&s, i, &v));
         verify(&v, i);

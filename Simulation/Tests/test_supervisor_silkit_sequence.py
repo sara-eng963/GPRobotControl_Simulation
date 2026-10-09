@@ -315,6 +315,22 @@ try:
         flush=True,
     )
 
+    # The real Supervisor must release a partially consumed stream on HOME,
+    # and automatically prepare it again for the next production execution.
+    send(9)
+    wait_for(
+        lambda w: w[3] == 6 and w[55] >= sequence and as_float(w[33]) > 0,
+        10,
+    )
+    send(13)
+    wait_for(lambda w: w[3] == 2 and w[55] >= sequence, 15)
+    print("EXECUTION HOME ABORT DONE", flush=True)
+
+    send(9)
+    wait_for(lambda w: w[3] == 6 and w[55] >= sequence and w[32] == 0, 10)
+    wait_for(lambda w: w[3] == 2 and w[55] >= sequence, 25)
+    print("REPEATED PRODUCTION AFTER ABORT DONE", flush=True)
+
     send(0x80000002)
     wait_for(
         lambda w: w[3] == 12,
