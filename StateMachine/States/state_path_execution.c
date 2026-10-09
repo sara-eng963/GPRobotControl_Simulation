@@ -111,7 +111,7 @@ static bool fresh_feedback_arrived(
 )
 {
     for (size_t axis = 0U;
-         axis < CANOPEN_MASTER_MAX_NODES;
+         axis < JOINT_DRIVE_AXES;
          ++axis)
     {
         if (
@@ -261,7 +261,7 @@ StateStepResult state_path_execution_step(
     }
 
     if (
-        !master_valid(state->master) ||
+        !drive_valid(state) ||
         !joint_drive_port_poll(&state->drive, inputs->now_ms)
     )
     {
