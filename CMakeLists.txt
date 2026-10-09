@@ -296,6 +296,11 @@ target_compile_features(
     c_std_11
 )
 
+target_compile_options(
+    supervisor_task_compile_check PRIVATE
+    -Werror=incompatible-pointer-types
+)
+
 target_include_directories(
     supervisor_task_compile_check
     PRIVATE
