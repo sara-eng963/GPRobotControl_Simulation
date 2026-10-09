@@ -284,6 +284,7 @@ add_library(
     StateMachine/supervisor_task.c
     StateMachine/supervisor_io.c
     StateMachine/States/state_path_execution.c
+    ServoDrive/JointDrive/canopen_joint_drive_port.c
     StateMachine/States/state_paused.c
     StateMachine/States/state_fault.c
     StateMachine/States/state_emergency_stop.c
