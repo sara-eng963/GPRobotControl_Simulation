@@ -43,6 +43,10 @@ typedef struct
     StateMachine machine;
     SupervisorInputSnapshot gpio_inputs;
     SupervisorDriveSnapshot drive_snapshot;
+    uint32_t last_m4_ipc_sequence;
+    uint32_t m7_status_ipc_sequence;
+    uint32_t last_m7_ipc_status_ms;
+    bool m7_ipc_status_sent;
     SupervisorTaskConfig config;
 
     BootState boot;
@@ -544,6 +548,44 @@ static void publish_drive_snapshot(SupervisorTaskContext *context)
     taskEXIT_CRITICAL();
 }
 
+/* Only M7 consumes the M4->M7 ring. No shared FreeRTOS queue or mutex. */
+static void consume_m4_ipc(SupervisorTaskContext *context)
+{
+    if (context->config.ipc == NULL) return;
+    GpIpcMessage msg;
+    for (uint32_t count = 0U; count < 8U; ++count) {
+        if (!gp_ipc_m7_receive(context->config.ipc, &msg)) break;
+        if (msg.type != GP_IPC_HMI_COMMAND || msg.sequence == 0U ||
+            (int32_t)(msg.sequence - context->last_m4_ipc_sequence) <= 0 ||
+            msg.data[0] >= (uint32_t)SUP_HMI_COMMAND_COUNT) continue;
+        context->last_m4_ipc_sequence = msg.sequence;
+        handle_hmi_command(context, (SupervisorHmiCommand)msg.data[0]);
+    }
+}
+
+/* Status is best-effort. Never wait when a slow M4 fills the telemetry ring. */
+static void publish_m7_ipc_status(SupervisorTaskContext *context)
+{
+    if (context->config.ipc == NULL) return;
+    const uint32_t now = supervisor_now_ms();
+    if (context->m7_ipc_status_sent &&
+        (uint32_t)(now - context->last_m7_ipc_status_ms) < 10U) return;
+    GpIpcMessage msg = {0};
+    msg.type = GP_IPC_CONTROLLER_STATUS;
+    msg.sequence = ++context->m7_status_ipc_sequence;
+    msg.timestamp_ms = now;
+    msg.data[0] = (uint32_t)context->machine.activeState;
+    msg.data[1] = (uint32_t)context->machine.safety.motionPermitted;
+    msg.data[2] = context->machine.activeFaultCode;
+    msg.data[3] = context->machine.transitionCount;
+    msg.data[4] = (uint32_t)context->machine.safety.estopActive;
+    msg.data[5] = context->last_m4_ipc_sequence; /* receipt, not acceptance */
+    msg.data[6] = context->machine.rejectedEventCount;
+    (void)gp_ipc_m7_send(context->config.ipc, &msg);
+    context->last_m7_ipc_status_ms = now;
+    context->m7_ipc_status_sent = true;
+}
+
 static void handle_message(
     SupervisorTaskContext *context,
     const SupervisorMessage *message
@@ -946,6 +988,8 @@ static void supervisor_task_entry(void *argument)
             if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
         }
 
+        consume_m4_ipc(context);
+
         /*
          * Keep producing Node 127's heartbeat even while PAUSED, FAULT,
          * or EMERGENCY_STOP. A dead/stalled supervisor sends nothing, so
@@ -976,6 +1020,7 @@ static void supervisor_task_entry(void *argument)
             run_active_state(context);
         }
         publish_drive_snapshot(context);
+        publish_m7_ipc_status(context);
         if (context->config.io.write_outputs != NULL)
         {
             SupervisorOutputSnapshot outputs;
@@ -1009,7 +1054,8 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
         (config->fault_services == NULL) ||
         (config->emergency_stop_services == NULL) ||
         (config->validation_sample_budget == 0U) ||
-        (config->period_ticks == 0U))
+        (config->period_ticks == 0U) ||
+        (config->ipc != NULL && !gp_ipc_valid(config->ipc)))
     {
         return false;
     }
@@ -1169,6 +1215,7 @@ TaskHandle_t supervisor_task_handle(void)
     return g_task;
 }
 
+/* Only safe for same-scheduler readers. M4 must use shared IPC. */
 bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out)
 {
     if (out == NULL || !g_supervisor.initialized) return false;
