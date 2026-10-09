@@ -915,8 +915,7 @@ static void supervisor_task_entry(void *argument)
         configASSERT(owner_bound);
         if (!owner_bound) {
             /* Never run an unowned CANopen control loop in release builds. */
-            vTaskSuspend(NULL);
-            for (;;) { }
+            for (;;) { vTaskDelay(1); }
         }
     }
 
