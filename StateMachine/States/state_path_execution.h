@@ -3,7 +3,7 @@
 
 #include "../state_machine_types.h"
 #include "state_path_validation.h"
-#include "../../CANComm/CANopen/canopen_master.h"
+#include "../../ServoDrive/JointDrive/joint_drive_port.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -113,9 +113,8 @@ typedef struct
     PathExecReadSampleFn read_sample;
 
     /*
-     * Non-drive services remain callbacks. Six-axis motion targets are sent
-     * directly through CanopenMaster so PATH EXECUTION owns the same RPDO4 /
-     * SYNC / fresh-TPDO4 contract as APPROACH.
+     * Non-drive services remain callbacks. The JointDrivePort owns the
+     * six-axis command transaction; PATH_EXECUTION enforces feedback freshness.
      */
     PathExecSetWireFeedFn set_wire_feed_enabled;
     PathExecPrepareRetractionFn prepare_retraction;
@@ -146,7 +145,7 @@ typedef struct
     PathExecutionError error;
     PathExecutionAbortReason abort_reason;
 
-    CanopenMaster *master;
+    JointDrivePort drive;
 
     PathExecutionRequest request;
     PathExecutionConfig config;
@@ -160,7 +159,7 @@ typedef struct
     uint32_t last_command_ms;
     bool command_clock_started;
     bool awaiting_feedback;
-    uint32_t command_tpdo_count[CANOPEN_MASTER_MAX_NODES];
+    uint32_t command_tpdo_count[JOINT_DRIVE_AXES];
 
     bool wire_feed_commanded;
     bool initialized;
@@ -168,7 +167,7 @@ typedef struct
 
 void state_path_execution_enter(
     PathExecutionState *state,
-    CanopenMaster *master,
+    const JointDrivePort *drive,
     const PathExecutionRequest *request,
     const PathExecutionConfig *config,
     const PathExecutionServices *services
