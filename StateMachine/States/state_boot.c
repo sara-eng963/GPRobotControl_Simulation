@@ -121,7 +121,8 @@ StateStepResult state_boot_step(
     if (
         boot == NULL ||
         !drive_commissioning_port_valid(commissioning) ||
-        !joint_drive_port_valid(drive_port)
+        !commissioning->is_initialized(commissioning->context) ||
+        drive_port == NULL
     )
     {
         if (boot != NULL)
@@ -135,6 +136,15 @@ StateStepResult state_boot_step(
 
         return STATE_STEP_FAILED;
     }
+
+    /* Preserve the original distinction between an uninitialized
+     * coordinator and an incorrect six-axis node layout. */
+    if (boot->phase == BOOT_PHASE_INIT &&
+        !commissioning->is_configured(commissioning->context))
+        return boot_fail(boot, BOOT_ERROR_NODE_COUNT, 0);
+
+    if (!joint_drive_port_valid(drive_port))
+        return boot_fail(boot, BOOT_ERROR_MASTER_INIT, 0);
 
     if (!joint_drive_port_poll(drive_port, now_ms))
     {
