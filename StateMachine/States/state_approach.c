@@ -1,6 +1,5 @@
 #include "state_approach.h"
 
-#include "../../ServoDrive/CiA402/cia402.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -283,7 +282,7 @@ static bool joint_vector_in_limits(
 
 
 /* ============================================================================
- * CANOPEN / AVATAR HARDWARE ACCESS
+ * DRIVE-SERVICE ACCESS AND AVATAR JOINT-UNIT CONVERSION
  * ============================================================================ */
 
 static bool position_scales_valid(
@@ -308,14 +307,9 @@ static bool position_scales_valid(
 }
 
 
-static bool master_layout_valid(
-    const CanopenMaster *master
-)
+static bool drive_port_valid(const ApproachState *state)
 {
-    return
-        master != NULL &&
-        master->initialized &&
-        master->node_count == ROBOT_DOF;
+    return state != NULL && joint_drive_port_valid(&state->drive);
 }
 
 
@@ -329,16 +323,14 @@ static bool read_feedback_ready(
     if (
         state == NULL ||
         actual_q == NULL ||
-        !master_layout_valid(state->master) ||
+        !drive_port_valid(state) ||
         !position_scales_valid(state->position_scales)
     )
     {
         return false;
     }
 
-    if (!canopen_master_healthy(
-            state->master,
-            now_ms))
+    if (!joint_drive_port_healthy(&state->drive, now_ms))
     {
         state->error =
             APPROACH_ERR_COMMUNICATION;
@@ -353,16 +345,9 @@ static bool read_feedback_ready(
          axis < ROBOT_DOF;
          ++axis)
     {
-        const AvatarMDrive *drive =
-            canopen_master_drive(
-                state->master,
-                axis
-            );
-
-        if (
-            drive == NULL ||
-            !drive->feedback_valid
-        )
+        JointDriveAxisFeedback feedback;
+        if (!joint_drive_port_read_axis(&state->drive, axis, &feedback) ||
+            !feedback.feedback_valid)
         {
             state->error =
                 APPROACH_ERR_FEEDBACK;
@@ -373,10 +358,7 @@ static bool read_feedback_ready(
             return false;
         }
 
-        if (
-            drive->cia402_state !=
-            CIA402_STATE_OPERATION_ENABLED
-        )
+        if (!feedback.operation_enabled)
         {
             state->error =
                 APPROACH_ERR_DRIVE_NOT_READY;
@@ -391,7 +373,7 @@ static bool read_feedback_ready(
 
         if (!avatar_m_position_units_to_joint_rad(
                 &state->position_scales[axis],
-                drive->feedback.actual_position,
+                feedback.actual_position_units,
                 &q) ||
             !isfinite(q))
         {
@@ -410,7 +392,7 @@ static bool read_feedback_ready(
         if (actual_units != NULL)
         {
             actual_units[axis] =
-                drive->feedback.actual_position;
+                feedback.actual_position_units;
         }
     }
 
@@ -427,10 +409,7 @@ static void capture_tpdo_counts(
          ++axis)
     {
         state->command_tpdo_count[axis] =
-            canopen_master_tpdo_rx_count(
-                state->master,
-                axis
-            );
+            joint_drive_port_feedback_sequence(&state->drive, axis);
     }
 }
 
@@ -444,10 +423,7 @@ static bool command_feedback_arrived(
          ++axis)
     {
         if (
-            canopen_master_tpdo_rx_count(
-                state->master,
-                axis
-            )
+            joint_drive_port_feedback_sequence(&state->drive, axis)
             <=
             state->command_tpdo_count[axis]
         )
@@ -484,7 +460,7 @@ static bool write_target_units(
     if (
         state == NULL ||
         target_units == NULL ||
-        !master_layout_valid(state->master)
+        !drive_port_valid(state)
     )
     {
         return false;
@@ -492,10 +468,7 @@ static bool write_target_units(
 
     capture_tpdo_counts(state);
 
-    if (!canopen_master_send_target_cycle(
-            state->master,
-            target_units,
-            ROBOT_DOF))
+    if (!joint_drive_port_send_targets(&state->drive, target_units))
     {
         state->error =
             APPROACH_ERR_COMMUNICATION;
@@ -1237,7 +1210,7 @@ void state_approach_get_outputs(
 void state_approach_enter(
     ApproachState *state,
     const RobotConfig *robot,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     const AvatarMPositionScale position_scales[ROBOT_DOF],
     const ApproachRequest *request,
     const ApproachConfig *config,
@@ -1272,7 +1245,7 @@ void state_approach_enter(
 
     if (
         robot == NULL ||
-        master == NULL ||
+        drive_port == NULL ||
         position_scales == NULL ||
         request == NULL ||
         config == NULL ||
@@ -1295,8 +1268,8 @@ void state_approach_enter(
     state->robot =
         robot;
 
-    state->master =
-        master;
+    state->drive =
+        *drive_port;
 
     state->position_scales =
         position_scales;
@@ -1378,12 +1351,9 @@ StateStepResult state_approach_step(
 
 
     if (
-        !master_layout_valid(state->master) ||
+        !drive_port_valid(state) ||
         !position_scales_valid(state->position_scales) ||
-        !canopen_master_poll(
-            state->master,
-            now_ms
-        )
+        !joint_drive_port_poll(&state->drive, now_ms)
     )
     {
         const StateStepResult result =
@@ -1585,9 +1555,7 @@ StateStepResult state_approach_step(
                     state->robot
                 )
                 ||
-                !master_layout_valid(
-                    state->master
-                )
+                !drive_port_valid(state)
                 ||
                 !position_scales_valid(
                     state->position_scales
