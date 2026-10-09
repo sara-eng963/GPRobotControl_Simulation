@@ -1,5 +1,4 @@
 #include "state_homing.h"
-#include "../../ServoDrive/CiA402/cia402.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -76,34 +75,20 @@ static bool position_scales_valid(
     return true;
 }
 
-static bool master_layout_valid(const CanopenMaster *master)
-{
-    return
-        master != NULL &&
-        master->initialized &&
-        master->node_count == ROBOT_DOF;
-}
-
-static int first_disabled_axis(const CanopenMaster *master)
+static int first_disabled_axis(const JointDrivePort *drive_port)
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
-        const AvatarMDrive *drive = canopen_master_drive(master, i);
-
-        if (
-            drive == NULL ||
-            drive->cia402_state != CIA402_STATE_OPERATION_ENABLED
-        )
-        {
+        JointDriveAxisFeedback feedback;
+        if (!joint_drive_port_read_axis(drive_port, i, &feedback) ||
+            !feedback.operation_enabled)
             return (int)i + 1;
-        }
     }
-
     return 0;
 }
 
 static HomingError network_status_error(
-    const CanopenMaster *master,
+    const JointDrivePort *drive_port,
     uint32_t now_ms,
     int *failed_axis
 )
@@ -111,19 +96,19 @@ static HomingError network_status_error(
     *failed_axis = 0;
 
     if (
-        !master_layout_valid(master) ||
-        !canopen_master_healthy(master, now_ms)
+        !joint_drive_port_valid(drive_port) ||
+        !joint_drive_port_healthy(drive_port, now_ms)
     )
     {
         return HOMING_ERROR_COMMUNICATION;
     }
 
-    if (!canopen_master_all_feedback_valid(master))
+    if (!joint_drive_port_all_feedback_valid(drive_port))
     {
         return HOMING_ERROR_POSITION_FEEDBACK;
     }
 
-    const int disabled_axis = first_disabled_axis(master);
+    const int disabled_axis = first_disabled_axis(drive_port);
 
     if (disabled_axis != 0)
     {
@@ -136,25 +121,25 @@ static HomingError network_status_error(
 
 static void capture_tpdo_counts(
     HomingState *homing,
-    const CanopenMaster *master
+    const JointDrivePort *drive_port
 )
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
         homing->commandTpdoCount[i] =
-            canopen_master_tpdo_rx_count(master, i);
+            joint_drive_port_feedback_sequence(drive_port, i);
     }
 }
 
 static bool all_command_feedback_arrived(
     const HomingState *homing,
-    const CanopenMaster *master
+    const JointDrivePort *drive_port
 )
 {
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
     {
         if (
-            canopen_master_tpdo_rx_count(master, i) <=
+            joint_drive_port_feedback_sequence(drive_port, i) <=
             homing->commandTpdoCount[i]
         )
         {
@@ -167,7 +152,7 @@ static bool all_command_feedback_arrived(
 
 static StateStepResult wait_for_command_feedback(
     HomingState *homing,
-    const CanopenMaster *master,
+    const JointDrivePort *drive_port,
     uint32_t now_ms,
     bool *ready
 )
@@ -180,7 +165,7 @@ static StateStepResult wait_for_command_feedback(
         return STATE_STEP_RUNNING;
     }
 
-    if (all_command_feedback_arrived(homing, master))
+    if (all_command_feedback_arrived(homing, drive_port))
     {
         homing->awaitingFeedback = false;
         *ready = true;
@@ -237,7 +222,7 @@ static bool build_target_positions(
 
 static StateStepResult send_joint_cycle(
     HomingState *homing,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     const JointVector *q,
     const AvatarMPositionScale position_scales[ROBOT_DOF],
     uint32_t now_ms,
@@ -260,12 +245,9 @@ static StateStepResult send_joint_cycle(
         );
     }
 
-    capture_tpdo_counts(homing, master);
+    capture_tpdo_counts(homing, drive_port);
 
-    if (!canopen_master_send_target_cycle(
-            master,
-            targets,
-            ROBOT_DOF))
+    if (!joint_drive_port_send_targets(drive_port, targets))
     {
         return homing_fail(
             homing,
@@ -302,7 +284,7 @@ StateStepResult state_homing_step(
     HomingState *homing,
     const HomingConfig *config,
     const RobotConfig *robot,
-    CanopenMaster *master,
+    const JointDrivePort *drive_port,
     const AvatarMPositionScale position_scales[ROBOT_DOF],
     uint32_t now_ms
 )
@@ -310,7 +292,7 @@ StateStepResult state_homing_step(
     if (
         homing == NULL ||
         robot == NULL ||
-        master == NULL ||
+        drive_port == NULL ||
         position_scales == NULL
     )
     {
@@ -326,7 +308,7 @@ StateStepResult state_homing_step(
         return STATE_STEP_FAILED;
     }
 
-    if (!canopen_master_poll(master, now_ms))
+    if (!joint_drive_port_poll(drive_port, now_ms))
     {
         return homing_fail(
             homing,
@@ -342,7 +324,7 @@ StateStepResult state_homing_step(
             if (
                 !homing_config_valid(config, &homing->commandPeriodMs) ||
                 !position_scales_valid(position_scales) ||
-                !master_layout_valid(master)
+                !joint_drive_port_valid(drive_port)
             )
             {
                 return homing_fail(
@@ -389,7 +371,7 @@ StateStepResult state_homing_step(
         {
             int failed_axis = 0;
             const HomingError status =
-                network_status_error(master, now_ms, &failed_axis);
+                network_status_error(drive_port, now_ms, &failed_axis);
 
             if (status != HOMING_ERROR_NONE)
             {
@@ -398,12 +380,9 @@ StateStepResult state_homing_step(
 
             for (size_t i = 0U; i < ROBOT_DOF; ++i)
             {
-                const AvatarMDrive *drive = canopen_master_drive(master, i);
-
-                if (
-                    drive == NULL ||
-                    !drive->feedback_valid
-                )
+                JointDriveAxisFeedback feedback;
+                if (!joint_drive_port_read_axis(drive_port, i, &feedback) ||
+                    !feedback.feedback_valid)
                 {
                     return homing_fail(
                         homing,
@@ -416,7 +395,7 @@ StateStepResult state_homing_step(
 
                 if (!avatar_m_position_units_to_joint_rad(
                         &position_scales[i],
-                        drive->feedback.actual_position,
+                        feedback.actual_position_units,
                         &q_actual))
                 {
                     return homing_fail(
@@ -487,7 +466,7 @@ StateStepResult state_homing_step(
         {
             int failed_axis = 0;
             const HomingError status =
-                network_status_error(master, now_ms, &failed_axis);
+                network_status_error(drive_port, now_ms, &failed_axis);
 
             if (status != HOMING_ERROR_NONE)
             {
@@ -498,7 +477,7 @@ StateStepResult state_homing_step(
             const StateStepResult feedback_result =
                 wait_for_command_feedback(
                     homing,
-                    master,
+                    drive_port,
                     now_ms,
                     &feedback_ready
                 );
@@ -534,7 +513,7 @@ StateStepResult state_homing_step(
 
             return send_joint_cycle(
                 homing,
-                master,
+                drive_port,
                 &sample.q,
                 position_scales,
                 now_ms,
@@ -546,7 +525,7 @@ StateStepResult state_homing_step(
         {
             int failed_axis = 0;
             const HomingError status =
-                network_status_error(master, now_ms, &failed_axis);
+                network_status_error(drive_port, now_ms, &failed_axis);
 
             if (status != HOMING_ERROR_NONE)
             {
@@ -559,7 +538,7 @@ StateStepResult state_homing_step(
                 const StateStepResult feedback_result =
                     wait_for_command_feedback(
                         homing,
-                        master,
+                        drive_port,
                         now_ms,
                         &feedback_ready
                     );
@@ -578,14 +557,15 @@ StateStepResult state_homing_step(
 
                 for (size_t i = 0U; i < ROBOT_DOF; ++i)
                 {
-                    const AvatarMDrive *drive =
-                        canopen_master_drive(master, i);
+                    JointDriveAxisFeedback feedback;
+                    const bool feedback_ok =
+                        joint_drive_port_read_axis(drive_port, i, &feedback);
 
                     double q_actual = 0.0;
 
                     if (
-                        drive == NULL ||
-                        !drive->feedback_valid
+                        !feedback_ok ||
+                        !feedback.feedback_valid
                     )
                     {
                         return homing_fail(
@@ -597,7 +577,7 @@ StateStepResult state_homing_step(
 
                     if (!avatar_m_position_units_to_joint_rad(
                             &position_scales[i],
-                            drive->feedback.actual_position,
+                            feedback.actual_position_units,
                             &q_actual))
                     {
                         return homing_fail(
@@ -656,7 +636,7 @@ StateStepResult state_homing_step(
 
             return send_joint_cycle(
                 homing,
-                master,
+                drive_port,
                 &homing->qHome,
                 position_scales,
                 now_ms,
