@@ -305,6 +305,17 @@ int main(void)
         port_order_ok = fake.tx[i].id == (uint16_t)(0x501U + i);
     port_order_ok = port_order_ok && fake.tx[6].id == 0x080U;
     CHECK(port_order_ok, "JointDrivePort retains exact RPDO4/SYNC order");
+    JointDriveAxisFeedback axis0 = {0};
+    CHECK(joint_drive_port_healthy(&port, 110U) &&
+          joint_drive_port_all_feedback_valid(&port),
+          "JointDrivePort exposes network and feedback health");
+    CHECK(joint_drive_port_read_axis(&port, 0U, &axis0) &&
+          axis0.feedback_valid && axis0.operation_enabled &&
+          axis0.actual_position_units == 1000,
+          "JointDrivePort returns actual position and enable state");
+    CHECK(!joint_drive_port_read_axis(&port, 6U, &axis0) &&
+          !joint_drive_port_read_axis(&port, 0U, NULL),
+          "JointDrivePort rejects invalid axis feedback requests");
     CHECK(!joint_drive_port_send_targets(NULL, targets) &&
           !joint_drive_port_send_targets(&port, NULL),
           "JointDrivePort rejects invalid commands");
