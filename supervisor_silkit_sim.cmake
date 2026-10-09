@@ -209,6 +209,21 @@ if(ENABLE_SILKIT)
         )
         set_tests_properties(supervisor_silkit_flash_sequence PROPERTIES
             TIMEOUT 150 RUN_SERIAL TRUE)
+        # Host-only erase-delay/cancellation and transport-failure tests.
+        foreach(case_name IN ITEMS cancel program_fail)
+            add_test(
+                NAME supervisor_silkit_flash_${case_name}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_supervisor_silkit_flash_worker_faults.py
+                    ${SILKIT_ROOT}/bin/sil-kit-registry
+                    $<TARGET_FILE:avatar_m_silkit_motor_bank>
+                    $<TARGET_FILE:supervisor_silkit_sim>
+                    ${case_name}
+            )
+            set_tests_properties(supervisor_silkit_flash_${case_name}
+                PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+        endforeach()
+
 
     endif()
 

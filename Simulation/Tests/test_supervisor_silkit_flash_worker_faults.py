@@ -7,12 +7,15 @@ import sys
 import tempfile
 import time
 
-if len(sys.argv) != 4:
+if len(sys.argv) != 5:
     raise SystemExit(
         "usage: test_supervisor_silkit_sequence.py "
         "<sil-kit-registry> <motor-bank> <supervisor>"
     )
 
+TEST_MODE = sys.argv[4]
+if TEST_MODE not in ("cancel", "program_fail"):
+    raise SystemExit("Expected cancel or program_fail")
 registry_bin = str(pathlib.Path(sys.argv[1]).resolve())
 motor_bin = str(pathlib.Path(sys.argv[2]).resolve())
 supervisor_bin = str(pathlib.Path(sys.argv[3]).resolve())
@@ -30,6 +33,7 @@ def start(name, command):
     env = os.environ.copy()
     if name == "supervisor":
         env["GP_STORAGE_BACKEND"] = "flash"
+        env["GP_FLASH_TEST_MODE"] = TEST_MODE
     processes[name] = subprocess.Popen(
         command,
         env=env,
@@ -264,174 +268,94 @@ try:
     )
     print("REC2", flush=True)
 
+    # First validation is deliberately interrupted or fails at the flash bus.
     send(5)
-    words = wait_for(
-        lambda w: w[3] == 2,
-        25,
-        monitor_validation=True,
-    )
-    print(
-        "VALIDATION",
-        words[23:25],
-        flush=True,
-    )
+    if TEST_MODE == "cancel":
+        wait_for(lambda w: w[3] == 4 and w[55] >= sequence, 8)
+        # Observe the actual delayed-erase entry in the child's file without
+        # disturbing its write offset (pread reads at an explicit position).
+        deadline = time.monotonic() + 5.0
+        while True:
+            require_alive("supervisor")
+            size = os.fstat(logs["supervisor"].fileno()).st_size
+            data = os.pread(logs["supervisor"].fileno(), size, 0)
+            if b"[FLASH_TEST] delayed erase entered" in data:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("flash erase delay was not entered")
+            time.sleep(0.02)
+        send(12)
+        sent_at = time.monotonic()
+        wait_for(lambda w: w[3] == 2 and w[55] >= sequence, 5)
+        if time.monotonic() - sent_at > 0.5:
+            raise RuntimeError("RESET acknowledgement took >500ms")
+        print("[PASS] RESET processed while flash worker erase was in flight", flush=True)
+        # Give the old worker time to complete its transaction and to cancel.
+        time.sleep(0.8)
+    else:
+        words = wait_for(lambda w: w[3] == 2 and w[23] == 3 and
+                         w[24] != 0 and w[55] >= sequence, 12)
+        print("[PASS] flash page-program failure rejected trajectory, error=",
+              words[24], flush=True)
+        send(12)   # Clear invalid program before a new Teaching session.
+        wait_for(lambda w: w[3] == 2 and w[55] >= sequence, 5)
 
-    if words[23] != 2:
-        raise RuntimeError(
-            "invalid path"
+    # Re-teach a new program and validate again. This demonstrates that a
+    # canceled/failed worker did not leave flash or its owner permanently busy.
+    send(1)
+    words = wait_for(
+        lambda w: w[3] == 3 and w[20],
+    )
+    print("TEACH", flush=True)
+
+    send(4)
+    words = wait_for(
+        lambda w: w[45] == 1,
+    )
+    print("REC1", flush=True)
+
+    xyz = [
+        as_float(value)
+        for value in words[34:37]
+    ]
+
+    xyz[0] += 0.01
+
+    guidance_deadline = time.time() + 10.0
+
+    while True:
+        send(
+            0x80000001,
+            *xyz,
         )
 
+        try:
+            words = wait_for(
+                lambda w:
+                    abs(as_float(w[34]) - xyz[0]) < 0.0003,
+                0.25,
+            )
+            break
+        except RuntimeError:
+            if time.time() >= guidance_deadline:
+                raise
+            # Re-send the same teaching request so TPDO4 feedback continues
+            # to update while the virtual actuator follower converges.
+
+    print("GUIDED", flush=True)
+
+    send(4)
+    words = wait_for(
+        lambda w: w[21],
+    )
+    print("REC2", flush=True)
+
     send(5)
-    words = wait_for(
-        lambda w:
-            w[31] == 1 and
-            w[3] == 2,
-        20,
-    )
-    print(
-        "PREVIEW DONE",
-        flush=True,
-    )
-
-    send(9)
-    words = wait_for(
-        lambda w: w[3] == 6,
-        10,
-    )
-    print(
-        "PRODUCTION ENTER",
-        flush=True,
-    )
-
-    send(10)
-    wait_for(
-        lambda w: w[3] == 9,
-    )
-    print("PAUSE", flush=True)
-
-    send(10)
-    time.sleep(0.1)
-    wait_for(
-        lambda w: w[3] == 9,
-    )
-    print(
-        "DUPLICATE PAUSE REMAINS PAUSED",
-        flush=True,
-    )
-
-    send(11)
-    wait_for(
-        lambda w: w[3] == 6,
-    )
-    print("RESUME", flush=True)
-
-    wait_for(
-        lambda w: w[3] == 2,
-        25,
-    )
-    print(
-        "PRODUCTION DONE",
-        flush=True,
-    )
-
-    # The real Supervisor must release a partially consumed stream on HOME,
-    # and automatically prepare it again for the next production execution.
-    send(9)
-    wait_for(
-        lambda w: w[3] == 6 and w[55] >= sequence and as_float(w[33]) > 0,
-        10,
-    )
-    send(13)
-    wait_for(lambda w: w[3] == 2 and w[55] >= sequence, 15)
-    print("EXECUTION HOME ABORT DONE", flush=True)
-
-    send(9)
-    wait_for(lambda w: w[3] == 6 and w[55] >= sequence and w[32] == 0, 10)
-    wait_for(lambda w: w[3] == 2 and w[55] >= sequence, 25)
-    print("REPEATED PRODUCTION AFTER ABORT DONE", flush=True)
-
-    send(0x80000002)
-    wait_for(
-        lambda w: w[3] == 12,
-    )
-    print("ESTOP", flush=True)
-
-    send(0x80000002)
-    time.sleep(0.1)
-    wait_for(
-        lambda w: w[3] == 12,
-    )
-    print(
-        "RELEASE REMAINS LATCHED",
-        flush=True,
-    )
-
-    send(12)
-    time.sleep(0.1)
-    wait_for(
-        lambda w: w[3] == 12,
-    )
-    print(
-        "RESET WAITS FOR HOME",
-        flush=True,
-    )
-
-    send(13)
-    wait_for(
-        lambda w: w[3] == 2,
-        15,
-    )
-    print(
-        "HOME RECOVERY DONE",
-        flush=True,
-    )
-
-    send(
-        0x80000003,
-        1,
-    )
-    wait_for(
-        lambda w: w[3] == 11,
-    )
-    print(
-        "EXTERNAL FAULT LATCHED",
-        flush=True,
-    )
-
-    send(
-        0x80000003,
-        0,
-    )
-    time.sleep(0.1)
-    wait_for(
-        lambda w: w[3] == 11,
-    )
-    print(
-        "CLEAR ALONE DOES NOT RECOVER",
-        flush=True,
-    )
-
-    send(12)
-    time.sleep(0.1)
-    wait_for(
-        lambda w: w[3] == 11,
-    )
-
-    send(13)
-    wait_for(
-        lambda w: w[3] == 2,
-        15,
-    )
-    print(
-        "FAULT RESET/HOME RECOVERY DONE",
-        flush=True,
-    )
-
-    print(
-        "PASS: full Supervisor sequence over SIL Kit CAN1",
-        flush=True,
-    )
-
+    words = wait_for(lambda w: w[3] == 2 and w[23] == 2 and
+                     w[55] >= sequence, 25, monitor_validation=True)
+    if words[31] != 0 or words[32] != 0:
+        raise RuntimeError("recovery returned unexpectedly in preview/execution")
+    print("[PASS] second validation committed after", TEST_MODE, flush=True)
     passed = True
 
 except Exception as error:
@@ -462,15 +386,14 @@ finally:
 if not passed:
     raise SystemExit(1)
 
-if "wire_feed=ON" not in supervisor_text:
-    raise SystemExit(
-        "FAIL: production never enabled wire feed"
-    )
-
 if "AVATAR SIL Kit motor bank ready" not in motor_text:
-    raise SystemExit(
-        "FAIL: SIL Kit motor bank did not report ready"
-    )
-
-if "[FLASH_SIM] committed+recovered" not in supervisor_text:
-    raise SystemExit("FAIL: host flash storage was not committed and reloaded")
+    raise SystemExit("FAIL: motor bank not ready")
+if supervisor_text.count("[FLASH_SIM] committed+recovered") != 1:
+    raise SystemExit("FAIL: expected exactly one successful recovered flash commit")
+required = ("[FLASH_TEST] delayed erase entered" if TEST_MODE == "cancel"
+            else "[FLASH_TEST] injected page-program transport failure")
+if required not in supervisor_text:
+    raise SystemExit("FAIL: requested bus-level injection did not execute")
+if "wire_feed=ON" in supervisor_text:
+    raise SystemExit("FAIL: test unexpectedly enabled production wire feed")
+print("PASS: async flash worker", TEST_MODE, "fault-injection recovery", flush=True)

@@ -29,7 +29,15 @@
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
 
+/* The SIL Kit POSIX host runs an additional 4096-word validation task.
+ * Reserve a larger host-only heap for task stacks and queues. This does NOT
+ * allocate additional SRAM on STM32 targets; the MCU still uses 64 KiB here.
+ * MCU task stacks and memory placement require separate measurement. */
+#if defined(GP_POSIX_ASYNC_VALIDATION_HEAP)
+#define configTOTAL_HEAP_SIZE                   (128 * 1024)
+#else
 #define configTOTAL_HEAP_SIZE                   (64 * 1024)
+#endif
 
 #define configUSE_IDLE_HOOK                     0
 #define configUSE_TICK_HOOK                     0

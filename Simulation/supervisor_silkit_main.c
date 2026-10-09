@@ -55,6 +55,7 @@ static Model host_flash_model;
 static uint8_t *host_flash_image;
 static PvExecutionSample host_flash_first_sample;
 static bool host_flash_mode, host_flash_first_valid;
+static TaughtProgram host_flash_validation_snapshot;
 static TrajectoryPrefetch validated_prefetch;
 static TaskHandle_t prefetch_task_handle;
 static PathValidationStorage path_validation_storage;
@@ -263,22 +264,15 @@ static bool ram_prefetch_read_batch(uint32_t first, PvExecutionSample *out,
     return true;
 }
 
-/* Cooperative worker quiescence: unlike vTaskSuspend(), this cannot leave
- * an in-flight refill half-written. Only used outside active execution. */
-static bool quiesce_prefetch_worker(void)
+/* Validation entry is retried by the Supervisor every millisecond.
+ * Worker acknowledges STOPPED after any currently in-flight flash read.
+ * No sleep or wait on the control task. */
+static bool prefetch_ready_for_validation(void *ignored)
 {
+    (void)ignored;
+    if (trajectory_prefetch_stopped(&validated_prefetch)) return true;
     if (!trajectory_prefetch_request_stop(&validated_prefetch)) return false;
-    if (prefetch_task_handle == NULL)
-        (void)trajectory_prefetch_worker_step(&validated_prefetch);
-    const TickType_t started = xTaskGetTickCount();
-    const TickType_t timeout = pdMS_TO_TICKS(1000);
-    for (;;) {
-        if (trajectory_prefetch_stopped(&validated_prefetch))
-            return true;
-        if ((TickType_t)(xTaskGetTickCount() - started) >= timeout)
-            return false;
-        vTaskDelay(1); /* Yield to the lower-priority worker. */
-    }
+    return trajectory_prefetch_stopped(&validated_prefetch);
 }
 
 static void prefetch_worker_task(void *arg)
@@ -302,8 +296,8 @@ static bool ram_storage_begin(
         return false;
     }
 
-    /* Validation may reset the buffer only after producer quiescence. */
-    if (!quiesce_prefetch_worker()) return false;
+    /* Supervisor already waited nonblockingly for STOPPED at entry. */
+    if (!trajectory_prefetch_stopped(&validated_prefetch)) return false;
     trajectory_prefetch_disarm(&validated_prefetch);
 
     storage->sample_count =
@@ -412,10 +406,12 @@ static void ram_storage_abort(
     {
         return;
     }
-    /* A timeout must never allow concurrent reset/read of a trajectory. */
-    if (!quiesce_prefetch_worker()) {
-        fprintf(stderr, "[PREFETCH] Worker could not quiesce before abort\n");
-        exit(EXIT_FAILURE); /* PC simulation: fail closed. */
+    /* Abort occurs during validation, when the entry gate holds the
+     * prefetch worker STOPPED. Fail closed on any violated ownership rule;
+     * never block the Supervisor or race an in-flight read. */
+    if (!trajectory_prefetch_stopped(&validated_prefetch)) {
+        fprintf(stderr, "[PREFETCH] Unexpected active worker on abort\n");
+        exit(EXIT_FAILURE); /* PC simulation only. */
     }
     trajectory_prefetch_disarm(&validated_prefetch);
 
@@ -442,7 +438,7 @@ static bool host_flash_read_batch(uint32_t first, PvExecutionSample *out,
 
 static bool host_flash_begin(void *ctx)
 {
-    if (!quiesce_prefetch_worker()) return false;
+    if (!trajectory_prefetch_stopped(&validated_prefetch)) return false;
     trajectory_prefetch_disarm(&validated_prefetch);
     host_flash_first_valid=false;
     return qspi_nor_validated_storage_begin(ctx);
@@ -486,22 +482,54 @@ static bool host_flash_commit(const ValidatedTrajectory *metadata, void *ctx)
 
 static void host_flash_abort(void *ctx)
 {
-    if (!quiesce_prefetch_worker()) {
-        fprintf(stderr,"[FLASH_SIM] worker did not quiesce before abort\n");
-        exit(EXIT_FAILURE);
+    if (!trajectory_prefetch_stopped(&validated_prefetch)) {
+        fprintf(stderr,"[FLASH_SIM] Unexpected active worker on abort\n");
+        exit(EXIT_FAILURE); /* PC simulation: fail closed, never wait. */
     }
     trajectory_prefetch_disarm(&validated_prefetch);
     host_flash_first_valid=false;
     qspi_nor_validated_storage_abort(ctx);
 }
 
+/* Host-only fault injection. No STM32 firmware or CANopen configuration uses
+ * these switches. Executed by the low-priority flash validation worker. */
+static int host_flash_test_mode;
+static bool host_flash_test_fired;
+static bool host_flash_test_command(void *ctx, uint8_t op, uint32_t addr,
+                                    const uint8_t *tx, size_t nt,
+                                    uint8_t *rx, size_t nr)
+{
+    if (!host_flash_test_fired && host_flash_test_mode == 1 &&
+        op == W25_CMD_ERASE4K4) {
+        host_flash_test_fired = true;
+        puts("[FLASH_TEST] delayed erase entered");
+        fflush(stdout);
+        /* Simulator-only artificial wait AFTER validation worker ownership;
+         * controller must continue publishing status while erase is blocked. */
+        vTaskDelay(pdMS_TO_TICKS(700));
+    }
+    if (!host_flash_test_fired && host_flash_test_mode == 2 &&
+        op == W25_CMD_PROG4) {
+        host_flash_test_fired = true;
+        puts("[FLASH_TEST] injected page-program transport failure");
+        fflush(stdout);
+        return false;
+    }
+    return w25_model_command(ctx, op, addr, tx, nt, rx, nr);
+}
+
 static bool host_flash_initialize(void)
 {
+    /* Tests only: one-shot error/delay. Normal runs retain strict NOR model. */
+    const char *test_mode = getenv("GP_FLASH_TEST_MODE");
+    host_flash_test_mode = test_mode != NULL && strcmp(test_mode,"cancel")==0
+        ? 1 : (test_mode != NULL && strcmp(test_mode,"program_fail")==0 ? 2 : 0);
+    host_flash_test_fired = false;
     host_flash_image=malloc(W25Q512JV_SIZE_BYTES);
     if (!host_flash_image) return false;
     w25_model_init(&host_flash_model,host_flash_image,W25Q512JV_SIZE_BYTES);
     host_flash_model.suppress_event_trace=true;
-    W25Q512JVBus bus={w25_model_command,w25_model_time,w25_model_idle,
+    W25Q512JVBus bus={host_flash_test_command,w25_model_time,w25_model_idle,
                       &host_flash_model};
     if (!qspi_nor_validated_storage_set_bus(&bus) ||
         !qspi_nor_validated_storage_init(&host_flash_storage,0U,
@@ -1783,13 +1811,50 @@ static bool start_system(void)
     c.path_execution_config=&execution_config;c.path_execution_services=&execution_services;
     c.paused_services=&paused_services;c.fault_services=&fault_services;c.emergency_stop_services=&emergency_services;
     c.validation_sample_budget=4;c.first_program_id=1;c.period_ticks=pdMS_TO_TICKS(1);
+    c.validation_enter_ready=prefetch_ready_for_validation;
+    /* Flash erase/program/CRC reads run only in low-priority task.
+     * No persistent artifact is published until the worker commits it. */
+    c.validation_run_in_worker=host_flash_mode;
+    c.validation_worker_priority=1U;
+    c.validation_worker_program=&host_flash_validation_snapshot;
     c.io=(SupervisorIoServices){NULL,read_inputs,write_outputs};
     HmiTaskConfig h={udp_event,udp_status,NULL,pdMS_TO_TICKS(10)};
-    return supervisor_task_init(&c) && hmi_task_init(&h) &&
-        supervisor_task_start(4) && hmi_task_start(2) &&
-        xTaskCreate(input_task,"SimInputs",1024,NULL,3,NULL)==pdPASS &&
-        xTaskCreate(prefetch_worker_task,"TrajPrefetch",1024,NULL,2,
-                    &prefetch_task_handle)==pdPASS;
+    /* Give a precise startup failure instead of hiding which task
+     * allocation failed behind a chained boolean expression. */
+    if (!supervisor_task_init(&c)) {
+        fprintf(stderr, "[STARTUP] supervisor_task_init failed\n");
+        return false;
+    }
+    if (!hmi_task_init(&h)) {
+        fprintf(stderr, "[STARTUP] hmi_task_init failed\n");
+        return false;
+    }
+    if (!supervisor_task_start(4)) {
+        fprintf(stderr, "[STARTUP] supervisor_task_start failed; "
+                "FreeRTOS heap remaining=%zu bytes\n",
+                (size_t)xPortGetFreeHeapSize());
+        return false;
+    }
+    if (!hmi_task_start(2)) {
+        fprintf(stderr, "[STARTUP] hmi_task_start failed; "
+                "heap remaining=%zu bytes\n",
+                (size_t)xPortGetFreeHeapSize());
+        return false;
+    }
+    if (xTaskCreate(input_task,"SimInputs",1024,NULL,3,NULL)!=pdPASS) {
+        fprintf(stderr, "[STARTUP] SimInputs allocation failed; "
+                "heap remaining=%zu bytes\n",
+                (size_t)xPortGetFreeHeapSize());
+        return false;
+    }
+    if (xTaskCreate(prefetch_worker_task,"TrajPrefetch",1024,NULL,2,
+                    &prefetch_task_handle)!=pdPASS) {
+        fprintf(stderr, "[STARTUP] TrajPrefetch allocation failed; "
+                "heap remaining=%zu bytes\n",
+                (size_t)xPortGetFreeHeapSize());
+        return false;
+    }
+    return true;
 }
 int main(void)
 {

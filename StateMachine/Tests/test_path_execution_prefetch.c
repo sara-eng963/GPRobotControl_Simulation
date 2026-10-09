@@ -14,7 +14,7 @@ typedef struct {
     ValidatedTrajectory metadata;
     uint32_t fail_at, read_calls, next_ms;
     unsigned wire_enables, releases, stop_calls;
-    bool wire;
+    bool wire, stop_error;
 } Test;
 
 static int32_t value(uint32_t index, unsigned joint)
@@ -71,9 +71,11 @@ static StateStepResult retract_step(void *ctx) { (void)ctx; return STATE_STEP_CO
 static bool clearance(void *ctx) { (void)ctx; return true; }
 static bool stop(bool *stopped, void *ctx)
 {
-    ++((Test *)ctx)->stop_calls;
-    *stopped = true;
-    return true;
+    Test *t = ctx;
+    assert(!t->wire); /* welding must be OFF before hold is requested */
+    ++t->stop_calls;
+    *stopped = !t->stop_error;
+    return !t->stop_error;
 }
 
 static void enter(Test *t, RobotExecutionMode mode)
@@ -243,7 +245,7 @@ static void test_runtime_faults(void)
         /* Fault-phase steps cannot read/advance another trajectory sample. */
         assert(step(&t, false) == STATE_STEP_FAILED);
         assert(t.drive.commands == commands);
-        assert(t.stop_calls == 0); /* existing storage-fault motor policy preserved */
+        assert(t.stop_calls == 1); /* request one controlled hold before FAULT */
         state_path_execution_release_stream(&t.execution);
     }
     Test t;
@@ -254,7 +256,18 @@ static void test_runtime_faults(void)
     unsigned enables = t.wire_enables;
     assert(step(&t, false) == STATE_STEP_FAILED);
     assert(t.wire_enables == enables && !t.wire);
-    puts("[PASS] Runtime read failure/starvation stop progression; empty resume cannot enable relay");
+    init(&t, 1024, 2, UINT32_MAX);
+    while (t.execution.sample_index < 512U)
+        assert(step(&t, false) == STATE_STEP_RUNNING);
+    t.stop_error = true;
+    StateStepResult stop_failure = STATE_STEP_RUNNING;
+    for (unsigned i = 0; i < 10U && stop_failure == STATE_STEP_RUNNING; ++i)
+        stop_failure = step(&t, false);
+    assert(stop_failure == STATE_STEP_FAILED);
+    assert(t.execution.error == PATH_EXEC_ERR_COMMUNICATION);
+    assert(t.stop_calls == 1U && !t.wire);
+    assert(step(&t, false) == STATE_STEP_FAILED && t.stop_calls == 1U);
+    puts("[PASS] Runtime read failure/starvation request one hold; rejected hold fails closed");
 }
 
 int main(void)

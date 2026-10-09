@@ -78,6 +78,21 @@ typedef struct
     const FaultServices *fault_services;
     const EmergencyStopServices *emergency_stop_services;
 
+    /* Optional nonblocking entry gate. If false, Supervisor retries next
+     * tick rather than sleeping while the prefetch worker is reading. */
+    bool (*validation_enter_ready)(void *context);
+    void *validation_enter_context;
+
+    /* If enabled, ALL validation (including blocking storage begin/write/
+     * commit) runs in a lower-priority task, not the 1 kHz Supervisor.
+     * Never report VALID until that worker completed durable commit.
+     * The worker priority must be strictly below Supervisor priority. */
+    bool validation_run_in_worker;
+    UBaseType_t validation_worker_priority;
+    /* Caller-provided persistent snapshot; avoids forcing another ~KB-sized
+     * TaughtProgram into MCU SRAM when async mode is disabled. */
+    TaughtProgram *validation_worker_program;
+
     uint16_t validation_sample_budget;
     uint32_t first_program_id;
     TickType_t period_ticks;

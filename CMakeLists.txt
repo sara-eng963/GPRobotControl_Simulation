@@ -31,6 +31,11 @@ target_include_directories(freertos_config SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_compile_definitions(freertos_config INTERFACE projCOVERAGE_TEST=0)
+# Host simulation needs space for the dedicated non-real-time flash writer.
+# This definition is NOT enabled in the STM32 firmware/toolchain.
+if(ENABLE_SILKIT)
+    target_compile_definitions(freertos_config INTERFACE GP_POSIX_ASYNC_VALIDATION_HEAP=1)
+endif()
 set(FREERTOS_PORT GCC_POSIX CACHE STRING "")
 set(FREERTOS_HEAP "4" CACHE STRING "")
 add_subdirectory(../FreeRTOS-Kernel FreeRTOS-Kernel)

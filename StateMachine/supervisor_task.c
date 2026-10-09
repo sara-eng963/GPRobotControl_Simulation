@@ -17,7 +17,15 @@
 
 #define SUPERVISOR_QUEUE_LENGTH       32U
 #define SUPERVISOR_TASK_STACK_WORDS   4096U
+#define VALIDATION_TASK_STACK_WORDS   4096U
 #define SUPERVISOR_MAX_MESSAGES_CYCLE 16U
+
+typedef enum {
+    VALIDATION_WORKER_IDLE = 0,
+    VALIDATION_WORKER_QUEUED,
+    VALIDATION_WORKER_RUNNING,
+    VALIDATION_WORKER_DONE
+} ValidationWorkerState;
 
 static uint32_t supervisor_now_ms(void)
 {
@@ -65,6 +73,12 @@ typedef struct
     uint32_t next_program_id;
     bool initialized;
     bool execution_stream_retained;
+
+    /* Only the validation worker mutates 'validation' or flash storage when
+     * async mode is enabled. Supervisor reads exclusively a copied result.
+     * The draft is frozen here until the worker acknowledges cancellation. */
+    ValidationWorkerState validation_worker_state;
+    bool validation_worker_cancel;
 } SupervisorTaskContext;
 
 static SupervisorTaskContext g_supervisor;
@@ -82,6 +96,82 @@ static StaticTask_t g_task_control;
 static StackType_t g_task_stack[SUPERVISOR_TASK_STACK_WORDS];
 #endif
 static TaskHandle_t g_task;
+static TaskHandle_t g_validation_task;
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+static StaticTask_t g_validation_task_control;
+static StackType_t g_validation_task_stack[VALIDATION_TASK_STACK_WORDS];
+#endif
+
+/* Validation worker owns the PathValidationState and all flash I/O.
+ * It MUST run below Supervisor priority so erase/program/verification cannot
+ * monopolize control cycles. Cancellation is cooperative between calls: an
+ * in-flight NOR command is not interrupted or reset mid-transaction. */
+static void validation_worker_entry(void *argument)
+{
+    SupervisorTaskContext *context = (SupervisorTaskContext *)argument;
+    for (;;) {
+        bool start = false;
+        taskENTER_CRITICAL();
+        if (context->validation_worker_state == VALIDATION_WORKER_QUEUED) {
+            if (context->validation_worker_cancel) {
+                context->validation_worker_state = VALIDATION_WORKER_IDLE;
+            } else {
+                context->validation_worker_state = VALIDATION_WORKER_RUNNING;
+                start = true;
+            }
+        }
+        taskEXIT_CRITICAL();
+        if (!start) {
+            vTaskDelay(1);
+            continue;
+        }
+
+        state_path_validation_enter(
+            &context->validation,
+            context->config.robot,
+            context->config.avatar_position_scales,
+            context->config.validation_config,
+            context->config.validation_services,
+            context->config.validation_workspace,
+            context->config.validation_storage,
+            context->config.validated_trajectory,
+            context->config.validation_worker_program,
+            context->config.validation_worker_program->draft_revision,
+            context->config.validation_worker_program->draft_crc);
+
+        for (;;) {
+            bool cancel;
+            taskENTER_CRITICAL();
+            cancel = context->validation_worker_cancel;
+            taskEXIT_CRITICAL();
+            if (cancel) {
+                /* Never race the same flash device with another validation.
+                 * Abort is called by this sole storage owner, not Supervisor. */
+                state_path_validation_cancel(&context->validation);
+                taskENTER_CRITICAL();
+                context->validation_worker_state = VALIDATION_WORKER_IDLE;
+                taskEXIT_CRITICAL();
+                break;
+            }
+
+            PathValidationOutputs snapshot = {0};
+            StateStepResult result = state_path_validation_step(
+                &context->validation,
+                context->config.validation_sample_budget,
+                &snapshot);
+            taskENTER_CRITICAL();
+            context->validation_outputs = snapshot;
+            if (result != STATE_STEP_RUNNING)
+                context->validation_worker_state = VALIDATION_WORKER_DONE;
+            taskEXIT_CRITICAL();
+            if (result != STATE_STEP_RUNNING)
+                break;
+            /* Yield after at most one bounded batch of samples. NOR erase or
+             * page-program latency stays in THIS low-priority thread. */
+            vTaskDelay(1);
+        }
+    }
+}
 
 static uint32_t state_error_code(RobotStateId state, uint32_t detail)
 {
@@ -121,6 +211,38 @@ static void enter_active_state(SupervisorTaskContext *context)
         state_path_execution_release_stream(&context->path_execution);
         context->execution_stream_retained = false;
     }
+    /* An exited validation must be allowed to finish/cancel on its owner.
+     * Do not reset its storage from another task or overwrite its draft. */
+    if (context->config.validation_run_in_worker &&
+        context->entered_state == ROBOT_STATE_PATH_VALIDATION &&
+        machine->activeState != ROBOT_STATE_PATH_VALIDATION) {
+        taskENTER_CRITICAL();
+        if (context->validation_worker_state == VALIDATION_WORKER_QUEUED ||
+            context->validation_worker_state == VALIDATION_WORKER_RUNNING)
+            context->validation_worker_cancel = true;
+        taskEXIT_CRITICAL();
+    }
+
+    /* A subsequent validation is deferred until the previous worker has
+     * reached a safe quiescent boundary, with no Supervisor-side waiting. */
+    if (context->config.validation_run_in_worker &&
+        machine->activeState == ROBOT_STATE_PATH_VALIDATION) {
+        bool busy;
+        taskENTER_CRITICAL();
+        busy = context->validation_worker_state == VALIDATION_WORKER_QUEUED ||
+               context->validation_worker_state == VALIDATION_WORKER_RUNNING;
+        taskEXIT_CRITICAL();
+        if (busy) return;
+    }
+
+    /* Stop acknowledgment may take an arbitrary flash read duration.
+     * Never block this control task while waiting for it. */
+    if (machine->activeState == ROBOT_STATE_PATH_VALIDATION &&
+        context->config.validation_enter_ready != NULL &&
+        !context->config.validation_enter_ready(
+            context->config.validation_enter_context))
+        return;
+
     context->entered_state = machine->activeState;
     SUPERVISOR_LOG("[SUPERVISOR] Enter %s\n",
                    state_machine_state_name(machine->activeState));
@@ -149,6 +271,19 @@ static void enter_active_state(SupervisorTaskContext *context)
             break;
 
         case ROBOT_STATE_PATH_VALIDATION:
+            if (context->config.validation_run_in_worker) {
+                /* State, workspace and QSPI transport have one owner: the
+                 * validation worker. Publish request after draft copy. */
+                *context->config.validation_worker_program = context->submitted_program;
+                taskENTER_CRITICAL();
+                memset(&context->validation_outputs, 0,
+                       sizeof(context->validation_outputs));
+                context->validation_outputs.report.result = PV_RESULT_RUNNING;
+                context->validation_worker_cancel = false;
+                context->validation_worker_state = VALIDATION_WORKER_QUEUED;
+                taskEXIT_CRITICAL();
+                break;
+            }
             state_path_validation_enter(
                 &context->validation,
                 context->config.robot,
@@ -516,6 +651,30 @@ static void run_active_state(SupervisorTaskContext *context)
             break;
 
         case ROBOT_STATE_PATH_VALIDATION:
+            /* Entry waits for producer ownership release across ticks. */
+            if (context->entered_state != ROBOT_STATE_PATH_VALIDATION)
+                break;
+            if (context->config.validation_run_in_worker) {
+                ValidationWorkerState worker_status;
+                PathValidationOutputs snapshot;
+                taskENTER_CRITICAL();
+                worker_status = context->validation_worker_state;
+                snapshot = context->validation_outputs;
+                taskEXIT_CRITICAL();
+                if (worker_status != VALIDATION_WORKER_DONE)
+                    break;
+                /* DONE publishes a completed flash commit or a failure;
+                 * no PREVIEW/WELD can run on a queued write. */
+                SupervisorEventType type =
+                    (snapshot.report.result == PV_RESULT_VALID)
+                    ? SUPERVISOR_EVENT_STATE_COMPLETE
+                    : SUPERVISOR_EVENT_VALIDATION_REJECTED;
+                SupervisorEvent event = make_result_event(
+                    type, ROBOT_STATE_PATH_VALIDATION,
+                    ROBOT_FAULT_SEVERITY_NONE, ROBOT_FAULT_CODE_NONE);
+                handle_policy_event(context, &event);
+                break;
+            }
             step = state_path_validation_step(
                 &context->validation,
                 context->config.validation_sample_budget,
@@ -747,6 +906,9 @@ static void supervisor_task_entry(void *argument)
         {
             emit_step_failure(context, 0xE001U);
         }
+        /* Retries a deferred validation entry without waiting or sleeping.
+         * No-op in an already entered state. */
+        enter_active_state(context);
         if (controller_hb_ok ||
             context->machine.activeState == ROBOT_STATE_FAULT ||
             context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)
@@ -828,6 +990,26 @@ bool supervisor_task_start(UBaseType_t priority)
     if (!g_supervisor.initialized || (g_task != NULL))
     {
         return false;
+    }
+
+    if (g_supervisor.config.validation_run_in_worker) {
+        if (g_supervisor.config.validation_worker_program == NULL)
+            return false;
+        const UBaseType_t worker_priority =
+            g_supervisor.config.validation_worker_priority;
+        if (worker_priority >= priority) return false;
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+        g_validation_task = xTaskCreateStatic(
+            validation_worker_entry, "StorageValidate",
+            VALIDATION_TASK_STACK_WORDS, &g_supervisor, worker_priority,
+            g_validation_task_stack, &g_validation_task_control);
+#else
+        if (xTaskCreate(validation_worker_entry, "StorageValidate",
+                        VALIDATION_TASK_STACK_WORDS, &g_supervisor,
+                        worker_priority, &g_validation_task) != pdPASS)
+            g_validation_task = NULL;
+#endif
+        if (g_validation_task == NULL) return false;
     }
 
 #if (configSUPPORT_STATIC_ALLOCATION == 1)

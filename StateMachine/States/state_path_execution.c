@@ -27,6 +27,11 @@ static StateStepResult fail(
 {
     if (state != NULL)
     {
+        /* A failure already latched must not resend motor commands. */
+        if (state->phase == PATH_EXEC_PHASE_FAILED)
+            return STATE_STEP_FAILED;
+
+        /* Welding relay OFF precedes all stop/hold requests. */
         if (state->services.set_wire_feed_enabled != NULL)
         {
             (void)state->services.set_wire_feed_enabled(
@@ -36,6 +41,25 @@ static StateStepResult fail(
         }
 
         state->wire_feed_commanded = false;
+
+        /* Software hold for a runtime storage failure only. Preflight
+         * rejection issued no motion, so do not send an unsolicited target.
+         * A successful callback acknowledges issuing the command, NOT
+         * verified deceleration, and is never a certified safety stop. */
+        if ((error == PATH_EXEC_ERR_STORAGE_READ ||
+             error == PATH_EXEC_ERR_TRAJECTORY_NOT_READY) &&
+            state->phase == PATH_EXEC_PHASE_FOLLOW_TRAJECTORY)
+        {
+            bool acknowledged = false;
+            if (state->services.controlled_stop == NULL ||
+                !state->services.controlled_stop(
+                    &acknowledged, state->services.context) ||
+                !acknowledged)
+            {
+                /* Remain fail-closed; report the unacknowledged hold. */
+                error = PATH_EXEC_ERR_COMMUNICATION;
+            }
+        }
         state->error = error;
         state->result = PATH_EXEC_RESULT_FAILED;
         state->phase = PATH_EXEC_PHASE_FAILED;
