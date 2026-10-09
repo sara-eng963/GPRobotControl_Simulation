@@ -1,18 +1,9 @@
 /* Host-only HOMING state test: no CANopen, SIL Kit or motor hardware. */
 #include "../States/state_homing.h"
+#include "fake_joint_drive.h"
 
 #include <stdio.h>
 #include <string.h>
-
-typedef struct {
-    bool configured, network_ok, feedback_ok, send_ok, auto_feedback;
-    bool pending_feedback;
-    bool fail_axis_read;
-    uint32_t sequence[JOINT_DRIVE_AXES];
-    JointDriveAxisFeedback axis[JOINT_DRIVE_AXES];
-    int32_t last_targets[JOINT_DRIVE_AXES];
-    unsigned commands;
-} FakeDrive;
 
 static int failures;
 
@@ -21,79 +12,11 @@ static int failures;
     else { printf("[FAIL] %s\n", message); ++failures; } \
 } while (0)
 
-static bool configured(void *context)
-{ return ((FakeDrive *)context)->configured; }
-
-static bool poll(void *context, uint32_t now_ms)
-{
-    (void)now_ms;
-    FakeDrive *f = (FakeDrive *)context;
-    if (f->pending_feedback && f->auto_feedback) {
-        for (size_t i = 0; i < JOINT_DRIVE_AXES; ++i) {
-            f->axis[i].actual_position_units = f->last_targets[i];
-            ++f->sequence[i];
-        }
-        f->pending_feedback = false;
-    }
-    return true;
-}
-static bool healthy(void *context, uint32_t now_ms)
-{
-    (void)now_ms;
-    return ((FakeDrive *)context)->network_ok;
-}
-static bool all_feedback_valid(void *context)
-{ return ((FakeDrive *)context)->feedback_ok; }
-
-static bool read_axis(void *context, size_t axis, JointDriveAxisFeedback *out)
-{
-    FakeDrive *f = (FakeDrive *)context;
-    if (axis >= JOINT_DRIVE_AXES || out == NULL ||
-        (f->fail_axis_read && axis == 2U)) return false;
-    *out = f->axis[axis];
-    return true;
-}
-static bool send_targets(void *context, const int32_t *targets, size_t count)
-{
-    FakeDrive *f = (FakeDrive *)context;
-    if (!f->send_ok || count != JOINT_DRIVE_AXES || targets == NULL)
-        return false;
-    memcpy(f->last_targets, targets, sizeof(f->last_targets));
-    ++f->commands;
-    f->pending_feedback = true;
-    return true;
-}
-static uint32_t feedback_sequence(void *context, size_t axis)
-{ return ((FakeDrive *)context)->sequence[axis]; }
-
-static JointDrivePort make_port(FakeDrive *f)
-{
-    const JointDrivePort port = {
-        .context = f,
-        .is_configured = configured,
-        .poll = poll,
-        .ready_for_motion = healthy,
-        .healthy = healthy,
-        .all_feedback_valid = all_feedback_valid,
-        .read_axis = read_axis,
-        .send_targets = send_targets,
-        .feedback_sequence = feedback_sequence
-    };
-    return port;
-}
 static void reset_drive(FakeDrive *f)
 {
-    memset(f, 0, sizeof(*f));
-    f->configured = true;
-    f->network_ok = true;
-    f->feedback_ok = true;
-    f->send_ok = true;
-    for (size_t i = 0; i < JOINT_DRIVE_AXES; ++i) {
-        f->axis[i].feedback_valid = true;
-        f->axis[i].operation_enabled = true;
-        f->sequence[i] = 1U;
-    }
+    fake_joint_drive_reset(f);
 }
+
 static void initialize_robot(RobotConfig *robot, AvatarMPositionScale *scale)
 {
     robot_config_init_ur5(robot);
@@ -141,7 +64,7 @@ int main(void)
     HomingState h;
 
     reset_drive(&fake);
-    JointDrivePort port = make_port(&fake);
+    JointDrivePort port = fake_joint_drive_make_port(&fake);
     to_execution(&h, &c, &robot, &port, scale);
     CHECK(h.phase == HOMING_PHASE_EXECUTE_TRAJECTORY,
           "HOMING enters trajectory execution through the port");
