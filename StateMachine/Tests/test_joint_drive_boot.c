@@ -36,6 +36,8 @@ static int failures;
     else { printf("[FAIL] %s\n",desc); ++failures; } \
 } while (0)
 
+static bool motion_initialized(void *ctx)
+{ return ((FakeSystem *)ctx)->initialized; }
 static bool motion_configured(void *ctx)
 { return ((FakeSystem *)ctx)->initialized && ((FakeSystem *)ctx)->node_layout_ok; }
 static bool motion_poll(void *ctx,uint32_t now_ms)
@@ -182,6 +184,7 @@ static DriveCommissioningPort make_commissioning(FakeSystem *f)
 {
     DriveCommissioningPort p={
         .context=f,
+        .is_initialized=motion_initialized,
         .is_configured=motion_configured,
         .reset_runtime=reset_runtime,
         .send_network_command=network,
@@ -232,6 +235,20 @@ int main(void)
           "BOOT configures heartbeat timeout");
     CHECK(fake.transactions>=50U,
           "BOOT performs per-drive identities, heartbeat and mode transactions");
+
+    fake_init(&fake);
+    fake.node_layout_ok=false;
+    state_boot_enter(&boot);
+    CHECK(simulate(&boot,&commissioning,&motion,10U)==STATE_STEP_FAILED &&
+          boot.error==BOOT_ERROR_NODE_COUNT,
+          "BOOT reports incorrect six-axis node layout");
+
+    fake_init(&fake);
+    fake.initialized=false;
+    state_boot_enter(&boot);
+    CHECK(simulate(&boot,&commissioning,&motion,10U)==STATE_STEP_FAILED &&
+          boot.error==BOOT_ERROR_MASTER_INIT,
+          "BOOT distinguishes uninitialized network master");
 
     fake_init(&fake);
     fake.allow_reset=false;
