@@ -387,6 +387,21 @@ bool canopen_master_service_heartbeat(
     return true;
 }
 
+/*
+ * TODO(FreeRTOS hardware integration): enforce single-task ownership of the
+ * CANopen coordinator for polling, SDO/NMT and synchronized target writes.
+ *
+ * Do not bind ownership in canopen_master_init(): initialization currently
+ * runs before the supervisor task starts, so the initializing task is not
+ * necessarily the runtime owner. A bool/magic tag cannot detect competing
+ * task callers. When the MCU task architecture is finalized, explicitly
+ * claim a FreeRTOS TaskHandle_t in the drive-owning task, check it in all
+ * mutating master entry points in debug builds, and route other tasks through
+ * a queue. Guard FreeRTOS-specific code so standalone host tests remain usable.
+ *
+ * Until then, exclusive ownership is a caller-side precondition, NOT an
+ * invariant verified by canopen_master_poll().
+ */
 bool canopen_master_poll(
     CanopenMaster *master,
     uint32_t now_ms
