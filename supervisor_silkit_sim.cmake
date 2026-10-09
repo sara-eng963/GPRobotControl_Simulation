@@ -81,6 +81,7 @@ if(ENABLE_SILKIT)
         freertos_kernel
         freertos_config
         control_core
+        intercore_ipc
         pthread
         m
     )
