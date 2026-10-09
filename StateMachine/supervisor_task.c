@@ -1,5 +1,6 @@
 #include "supervisor_task.h"
 #include "../ServoDrive/JointDrive/canopen_joint_drive_port.h"
+#include "../ServoDrive/JointDrive/canopen_drive_commissioning_port.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -43,6 +44,7 @@ typedef struct
     ApproachState approach;
     PathExecutionState path_execution;
     JointDrivePort joint_drive;
+    DriveCommissioningPort commissioning;
     PausedState paused;
     FaultState fault;
     EmergencyStopState emergency_stop;
@@ -442,7 +444,8 @@ static void run_active_state(SupervisorTaskContext *context)
         case ROBOT_STATE_BOOT:
             step = state_boot_step(
                 &context->boot,
-                context->config.canopen_master,
+                &context->commissioning,
+                &context->joint_drive,
                 supervisor_now_ms()
             );
             if (step == STATE_STEP_FAILED)
@@ -801,6 +804,8 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
 
     g_supervisor.joint_drive =
         canopen_joint_drive_port_make(config->canopen_master);
+    g_supervisor.commissioning =
+        canopen_drive_commissioning_port_make(config->canopen_master);
     state_machine_init(&g_supervisor.machine);
     state_machine_enable_unified_execution(&g_supervisor.machine);
     g_supervisor.initialized = true;
