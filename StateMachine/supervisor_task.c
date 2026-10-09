@@ -1,4 +1,5 @@
 #include "supervisor_task.h"
+#include "../ServoDrive/JointDrive/canopen_joint_drive_port.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -41,6 +42,7 @@ typedef struct
     PathValidationState validation;
     ApproachState approach;
     PathExecutionState path_execution;
+    JointDrivePort execution_drive;
     PausedState paused;
     FaultState fault;
     EmergencyStopState emergency_stop;
@@ -215,7 +217,7 @@ static void enter_active_state(SupervisorTaskContext *context)
                    sizeof(context->path_execution_inputs));
             state_path_execution_enter(
                 &context->path_execution,
-                context->config.canopen_master,
+                &context->execution_drive,
                 &request,
                 context->config.path_execution_config,
                 context->config.path_execution_services
@@ -797,6 +799,8 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
         return false;
     }
 
+    g_supervisor.execution_drive =
+        canopen_joint_drive_port_make(config->canopen_master);
     state_machine_init(&g_supervisor.machine);
     state_machine_enable_unified_execution(&g_supervisor.machine);
     g_supervisor.initialized = true;
