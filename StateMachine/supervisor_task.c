@@ -908,10 +908,16 @@ static void supervisor_task_entry(void *argument)
     SupervisorMessage message;
     if (context->config.canopen_master->initialized) {
         /* Initialization is pre-scheduler; bind only from the true owner. */
-        configASSERT(canopen_master_bind_runtime_owner(
+        const bool owner_bound = canopen_master_bind_runtime_owner(
             context->config.canopen_master,
             supervisor_is_canopen_owner,
-            xTaskGetCurrentTaskHandle()));
+            xTaskGetCurrentTaskHandle());
+        configASSERT(owner_bound);
+        if (!owner_bound) {
+            /* Never run an unowned CANopen control loop in release builds. */
+            vTaskSuspend(NULL);
+            for (;;) { }
+        }
     }
 
     for (;;)
