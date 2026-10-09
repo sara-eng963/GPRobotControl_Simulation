@@ -17,6 +17,8 @@
 #include "States/state_emergency_stop.h"
 #include "States/state_teaching.h"
 
+#include "../Intercore/ipc_mailbox.h"
+
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "task.h"
@@ -110,6 +112,10 @@ typedef struct
     uint16_t validation_sample_budget;
     uint32_t first_program_id;
     TickType_t period_ticks;
+    /* Optional cross-core mailbox: M4 never touches this task's private
+     * FreeRTOS objects. NULL keeps the existing PC runtime unchanged. */
+    GpIpcShared *ipc;
+
     /* Optional board adapter; NULL callbacks allow incremental integration. */
     SupervisorIoServices io;
 } SupervisorTaskConfig;
