@@ -25,6 +25,16 @@ endif()
 set(CMAKE_C_STANDARD 11)
 enable_testing()
 
+# Portable, nonblocking M7/M4 mailbox; hardware MPU mapping is separate.
+add_library(intercore_ipc STATIC Intercore/ipc_mailbox.c)
+target_compile_features(intercore_ipc PUBLIC c_std_11)
+target_include_directories(intercore_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Intercore)
+add_executable(ipc_mailbox_test Intercore/Tests/test_ipc_mailbox.c)
+target_link_libraries(ipc_mailbox_test PRIVATE intercore_ipc pthread)
+target_compile_options(ipc_mailbox_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME ipc_mailbox_test COMMAND ipc_mailbox_test)
+set_tests_properties(ipc_mailbox_test PROPERTIES TIMEOUT 15)
+
 # FreeRTOS runs with its existing POSIX host port.
 add_library(freertos_config INTERFACE)
 target_include_directories(freertos_config SYSTEM INTERFACE
@@ -164,6 +174,7 @@ target_link_libraries(supervisor_task_compile_check PRIVATE
     freertos_config
     control_core
     canopen_stack
+    intercore_ipc
 )
 
 # The simulator retains its existing SIL Kit, HMI, and virtual-drive wiring.
