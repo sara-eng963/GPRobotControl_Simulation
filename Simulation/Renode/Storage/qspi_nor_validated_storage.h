@@ -34,9 +34,17 @@ bool qspi_nor_validated_storage_init(QspiNorValidatedStorage *s,
                                      uint32_t base_address, uint32_t capacity_samples);
 void qspi_nor_validated_storage_bind(QspiNorValidatedStorage *s,
                                      PathValidationStorage *out);
+/* All operations require one serialized storage/flash owner. begin discovers
+ * both slots before every update (even without an explicit reboot reload) and
+ * refuses to erase if discovery has a transport error. It verifies the target
+ * header sector erased before writing. Keep these blocking operations outside
+ * execution: scans/CRC readback are proportional to stored trajectory length. */
 bool qspi_nor_validated_storage_begin(void *context);
 bool qspi_nor_validated_storage_write_sample(uint32_t index,
                     const PvExecutionSample *sample, void *context);
+/* Commit publishes the new slot only after payload CRC, full header readback,
+ * marker readback and final payload CRC succeed. Failure can be ambiguous if
+ * the marker reached flash: abort/reload or the next begin rediscovers it. */
 bool qspi_nor_validated_storage_commit(const ValidatedTrajectory *m, void *context);
 void qspi_nor_validated_storage_abort(void *context);
 bool qspi_nor_validated_storage_load_committed(QspiNorValidatedStorage *s);

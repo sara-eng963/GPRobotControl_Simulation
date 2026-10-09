@@ -24,6 +24,11 @@ _Static_assert(sizeof(StorageHeader) <= W25Q512JV_SECTOR_BYTES,
 static W25Q512JV flash;
 static bool flash_ready;
 
+/* A transport failure is not evidence that a slot is empty/corrupt. Updates
+ * require a complete scan; reload may still recover a separately valid slot. */
+typedef enum { SLOT_INVALID, SLOT_VALID, SLOT_IO_ERROR } SlotCheck;
+static bool discover_slots(QspiNorValidatedStorage *s);
+
 static uint32_t slot_address(const QspiNorValidatedStorage *s, int slot) {
     return s->base_address + (uint32_t)slot * s->slot_bytes;
 }
@@ -36,6 +41,26 @@ static uint32_t header_crc(const StorageHeader *h) {
 }
 static bool read_bytes(uint32_t at, void *dst, size_t n) {
     return flash_ready && w25q512jv_read(&flash, at, dst, n);
+}
+static bool verify_bytes(uint32_t at, const uint8_t *expected, size_t n) {
+    uint8_t buf[256];
+    while (n > 0U) {
+        size_t take = n < sizeof(buf) ? n : sizeof(buf);
+        if (!read_bytes(at,buf,take)) return false;
+        for (size_t i=0; i<take; ++i)
+            if (buf[i] != expected[i]) return false;
+        at += (uint32_t)take; expected += take; n -= take;
+    }
+    return true;
+}
+static bool verify_erased_sector(uint32_t at) {
+    uint8_t buf[256];
+    for (uint32_t offset=0; offset<W25Q512JV_SECTOR_BYTES; offset+=sizeof(buf)) {
+        if (!read_bytes(at+offset,buf,sizeof(buf))) return false;
+        for (size_t i=0; i<sizeof(buf); ++i)
+            if (buf[i] != 0xFFU) return false;
+    }
+    return true;
 }
 static bool write_bytes(uint32_t at, const uint8_t *src, size_t n) {
     while (n > 0) {
@@ -97,8 +122,12 @@ void qspi_nor_validated_storage_bind(QspiNorValidatedStorage *s,
 bool qspi_nor_validated_storage_begin(void *context) {
     QspiNorValidatedStorage *s = (QspiNorValidatedStorage *)context;
     if (s == NULL || !flash_ready || s->writing) return false;
+    /* Always rediscover before choosing a write target. This covers reboot
+     * without load_committed and an ambiguous previous commit/abort result. */
+    if (!discover_slots(s)) return false;
     s->write_slot = s->active_slot == 0 ? 1 : 0;
-    if (!w25q512jv_erase_sector(&flash, slot_address(s,s->write_slot))) {
+    if (!w25q512jv_erase_sector(&flash, slot_address(s,s->write_slot)) ||
+        !verify_erased_sector(slot_address(s,s->write_slot))) {
         s->write_slot = INVALID_SLOT;
         return false;
     }
@@ -145,17 +174,17 @@ bool qspi_nor_validated_storage_write_sample(uint32_t index,
     return true;
 }
 
-static bool verify_data(uint32_t base, uint32_t count, uint32_t expected_crc) {
+static SlotCheck verify_data(uint32_t base, uint32_t count, uint32_t expected_crc) {
     uint8_t buf[256];
     uint32_t state=UINT32_C(0xFFFFFFFF);
     uint64_t remaining=(uint64_t)count*sizeof(PvExecutionSample);
     while (remaining) {
         uint32_t take=remaining>sizeof(buf)?sizeof(buf):(uint32_t)remaining;
-        if (!read_bytes(base,buf,take)) return false;
+        if (!read_bytes(base,buf,take)) return SLOT_IO_ERROR;
         state=w25q512jv_crc32(state,buf,take);
         base+=take; remaining-=take;
     }
-    return ~state == expected_crc;
+    return ~state == expected_crc ? SLOT_VALID : SLOT_INVALID;
 }
 
 bool qspi_nor_validated_storage_commit(const ValidatedTrajectory *m, void *context) {
@@ -168,7 +197,7 @@ bool qspi_nor_validated_storage_commit(const ValidatedTrajectory *m, void *conte
         m->sample_period_us != PATH_VALIDATION_SAMPLE_PERIOD_US ||
         !flush_page(s)) return false;
     const uint32_t dat=data_address(s,s->write_slot);
-    if (!verify_data(dat,s->sample_count,m->sample_data_crc)) return false;
+    if (verify_data(dat,s->sample_count,m->sample_data_crc) != SLOT_VALID) return false;
     StorageHeader h;
     memset(&h,0xFF,sizeof(h));
     h.magic=STORAGE_MAGIC; h.version=STORAGE_VERSION;
@@ -177,12 +206,17 @@ bool qspi_nor_validated_storage_commit(const ValidatedTrajectory *m, void *conte
     h.generation=s->next_generation;
     h.metadata=*m;
     h.header_crc=header_crc(&h);
-    h.commit_marker=STORAGE_COMMIT_MARKER;
+    h.commit_marker=UINT32_MAX;
     uint32_t at=slot_address(s,s->write_slot);
-    /* The final marker is programmed only after header and data verification. */
+    /* Compare the entire header, including the still-erased marker and any
+     * trailing padding. Bus success/WIP-clear do not prove program success. */
     if (!write_bytes(at,(const uint8_t *)&h,offsetof(StorageHeader,commit_marker)) ||
-        !write_bytes(at+offsetof(StorageHeader,commit_marker),
-            (const uint8_t *)&h.commit_marker,sizeof(h.commit_marker))) return false;
+        !verify_bytes(at,(const uint8_t *)&h,sizeof(h))) return false;
+    h.commit_marker=STORAGE_COMMIT_MARKER;
+    if (!write_bytes(at+offsetof(StorageHeader,commit_marker),
+            (const uint8_t *)&h.commit_marker,sizeof(h.commit_marker)) ||
+        !verify_bytes(at,(const uint8_t *)&h,sizeof(h)) ||
+        verify_data(dat,s->sample_count,m->sample_data_crc) != SLOT_VALID) return false;
     const int8_t new_slot=s->write_slot;
     s->write_slot=INVALID_SLOT;
     s->writing=false;
@@ -203,8 +237,8 @@ void qspi_nor_validated_storage_abort(void *context) {
     memset(&s->metadata,0,sizeof(s->metadata));
 }
 
-static bool valid_slot(QspiNorValidatedStorage *s, int slot, StorageHeader *h) {
-    if (!read_bytes(slot_address(s,slot),h,sizeof(*h))) return false;
+static SlotCheck valid_slot(QspiNorValidatedStorage *s, int slot, StorageHeader *h) {
+    if (!read_bytes(slot_address(s,slot),h,sizeof(*h))) return SLOT_IO_ERROR;
     if (h->magic != STORAGE_MAGIC || h->version != STORAGE_VERSION ||
         h->header_size != sizeof(*h) ||
         h->sample_size != sizeof(PvExecutionSample) ||
@@ -215,18 +249,21 @@ static bool valid_slot(QspiNorValidatedStorage *s, int slot, StorageHeader *h) {
         h->metadata.segment_count > TEACHING_MAX_SEGMENTS ||
         h->metadata.artifact_crc != w25_artifact_crc(&h->metadata) ||
         h->commit_marker != STORAGE_COMMIT_MARKER ||
-        h->header_crc != header_crc(h)) return false;
+        h->header_crc != header_crc(h)) return SLOT_INVALID;
     return verify_data(data_address(s,slot), h->sample_count, h->metadata.sample_data_crc);
 }
 
-bool qspi_nor_validated_storage_load_committed(QspiNorValidatedStorage *s) {
-    if (s == NULL || s->writing || !flash_ready) return false;
+static bool discover_slots(QspiNorValidatedStorage *s) {
     StorageHeader a,b;
-    bool va=valid_slot(s,0,&a);
-    bool vb=valid_slot(s,1,&b);
+    const SlotCheck sa=valid_slot(s,0,&a), sb=valid_slot(s,1,&b);
+    const bool complete=sa != SLOT_IO_ERROR && sb != SLOT_IO_ERROR;
+    bool va=sa == SLOT_VALID, vb=sb == SLOT_VALID;
     if (!va && !vb) {
         s->committed=false; s->readback_verified=false;
-        s->active_slot=INVALID_SLOT; return false;
+        s->active_slot=INVALID_SLOT; s->sample_count=0;
+        s->next_generation=1;
+        memset(&s->metadata,0,sizeof(s->metadata));
+        return complete;
     }
     int chosen=va?0:1;
     if (va && vb && (int32_t)(b.generation-a.generation)>0) chosen=1;
@@ -237,7 +274,13 @@ bool qspi_nor_validated_storage_load_committed(QspiNorValidatedStorage *s) {
     s->next_generation=h->generation+1U;
     s->committed=true;
     s->readback_verified=true;
-    return true;
+    return complete;
+}
+
+bool qspi_nor_validated_storage_load_committed(QspiNorValidatedStorage *s) {
+    if (s == NULL || s->writing || !flash_ready) return false;
+    (void)discover_slots(s);
+    return s->committed;
 }
 
 bool qspi_nor_validated_storage_read_samples(uint32_t index,

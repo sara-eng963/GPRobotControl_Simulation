@@ -107,6 +107,11 @@ production with HOME and repeats production with the same validated trajectory.
 
 ## Remaining limits and separate policy review
 
+The validation path still waits in the Supervisor for worker quiescence, with a
+1-second timeout. Even outside PATH_EXECUTION, this can delay Supervisor queue
+and heartbeat servicing. Moving that wait to asynchronous coordination remains
+separate work; Batch 2 does not change task ownership or stopping policy.
+
 Batch 1 does not establish physical flash timing, 500 Hz scheduling deadlines,
 electrical behavior or power-loss integrity. Timing, flash-backed CANopen
 integration, persistence and Renode validation remain later batches.
