@@ -323,10 +323,38 @@ visibility. No actual STM32H745 was flashed or tested.
    measurements. A build or simulator does not prove dual-core runtime
    correctness or functional safety.
 
-**Current implementation state:** Step 5's obsolete application-level
-FreeRTOS guard and ARM probe shims were removed and committed. Steps 2–4
-are **not yet integrated into the production firmware**. Do not
-describe Stage 2E as complete.
+**Current implementation state:** the nonstandard FreeRTOS guard and
+ARM probe shims have been removed. The first production **M7-owned typed
+object definitions** have now been committed as
+`CM7/Core/Src/gp_shared_objects.c`. They use the existing `NOLOAD`
+sections, 32-byte alignment and exact ABI size checks. M4 must **not**
+define duplicate physical storage. Full CM7/CM4 firmware linking, M7
+initialization-before-HSEM-0-release and peer notification are pending.
+
+**Stage 2E-1 verification commands:**
+
+```bash
+bash Firmware/Tests/check_production_shared_objects.sh
+```
+
+The new test cross-compiles the actual production source and checks its
+symbol addresses and NOBITS sections using the existing M7 Flash/RAM
+linker scripts. This is not a full CubeIDE build.
+
+**Separate CubeIDE verifier:** the canonical
+`Intercore/ipc_mailbox.h` and `Intercore/trajectory_stream.h` live
+outside `Firmware/STM32H745`. Before compiling the new M7 source in
+the standalone Windows verifier, stage exact copies using:
+
+```bash
+bash Firmware/Tests/stage_intercore_headers.sh "<verification-project-root>"
+```
+
+These copied headers are build inputs **only**, not a second source
+of truth. Re-stage after any IPC header change. The script deliberately
+does not install new RTOS sources, reset handlers or board drivers.
+The next gate is a clean M7 build with symbols present in its map.
+Do not describe Stage 2E as complete.
 
 ## 4. Follow-up implementation checkpoints
 
