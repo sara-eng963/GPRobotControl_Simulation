@@ -9,6 +9,23 @@ BUILD_DIR="${BUILD_DIR:-$ROOT/build-can-silkit}"
 LOG_DIR="${TIMING_RESULTS_DIR:-$ROOT/.simulation-logs/timing-benchmark}"
 mkdir -p "$LOG_DIR"
 
+# Resume a completed baseline without repeating the 66-second scenario.
+FLASH_ONLY=0
+INCLUDE_FAULTS=0
+NO_PLOTS=0
+for arg in "$@"; do
+    case "$arg" in
+        --flash-only) FLASH_ONLY=1 ;;
+        --include-faults) INCLUDE_FAULTS=1 ;;
+        --no-plots) NO_PLOTS=1 ;;
+        *)
+            echo "Usage: bash scripts/run_timing_benchmark.sh [--flash-only] [--include-faults] [--no-plots]" >&2
+            exit 2 ;;
+    esac
+done
+PLOT_ARGS=()
+if ((NO_PLOTS)); then PLOT_ARGS+=(--no-plots); fi
+
 echo "[TIMING] CMake configure"
 cmake -S . -B "$BUILD_DIR"
 
@@ -40,21 +57,24 @@ run_scenario() {
         exit 1
     fi
     python3 scripts/analyze_timing_csv.py "$csv" \
-        --output-dir "$analysis_dir"
+        --output-dir "$analysis_dir" "${PLOT_ARGS[@]}"
     echo "[TIMING] Raw: $csv"
     echo "[TIMING] Summary: $analysis_dir/summary_metrics.csv"
     echo "[TIMING] Report: $analysis_dir/timing_report.md"
 }
 
-run_scenario baseline supervisor_silkit_sequence
+if ((!FLASH_ONLY)); then
+    run_scenario baseline supervisor_silkit_sequence
+elif [[ -s "$LOG_DIR/baseline.csv" ]]; then
+    echo "[TIMING] Reusing previous baseline.csv (not rerunning)."
+else
+    echo "[WARN] --flash-only requested but baseline.csv does not exist." >&2
+fi
 run_scenario flash supervisor_silkit_flash_sequence
 
-if [[ "${1:-}" == "--include-faults" ]]; then
+if ((INCLUDE_FAULTS)); then
     run_scenario flash_cancel supervisor_silkit_flash_cancel
     run_scenario flash_program_fail supervisor_silkit_flash_program_fail
-elif [[ $# -gt 0 ]]; then
-    echo "Usage: bash scripts/run_timing_benchmark.sh [--include-faults]" >&2
-    exit 2
 fi
 
 echo "[TIMING] Complete. Compare baseline-analysis and flash-analysis."
