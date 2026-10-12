@@ -35,6 +35,21 @@ target_compile_options(ipc_mailbox_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME ipc_mailbox_test COMMAND ipc_mailbox_test)
 set_tests_properties(ipc_mailbox_test PROPERTIES TIMEOUT 15)
 
+# Reusable STM32H745 target-only compile smoke test; independent of the POSIX
+# kernel build. No HAL/board firmware or target hardware is required here.
+find_program(GP_ARM_NONE_EABI_GCC arm-none-eabi-gcc)
+find_program(GP_BASH_EXECUTABLE bash)
+if(GP_ARM_NONE_EABI_GCC AND GP_BASH_EXECUTABLE)
+    add_test(NAME intercore_ipc_arm_compile_test
+        COMMAND "${GP_BASH_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Intercore/Tests/test_ipc_freertos_compile.sh")
+    set_tests_properties(intercore_ipc_arm_compile_test PROPERTIES
+        TIMEOUT 60
+        ENVIRONMENT "ARM_NONE_EABI_GCC=${GP_ARM_NONE_EABI_GCC}")
+else()
+    message(STATUS "IPC ARM compile test not registered (bash or arm-none-eabi-gcc unavailable)")
+endif()
+
 # M4 owns the flash producer/staging; M7 owns the 500 Hz consumer.
 # Only GpTrajectoryShared crosses the inter-core SRAM boundary.
 add_library(intercore_trajectory_stream STATIC Intercore/trajectory_stream.c)

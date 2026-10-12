@@ -281,3 +281,27 @@ upstream APIs and are project-owned. Their runtime behavior depends on the
 FreeRTOS version selected when the MCU project is created. STM32CubeH7's
 software license and FreeRTOS's MIT licensing apply to the eventual vendored
 components, not to separately authored glue code.
+
+### Repeatable cross-compile test (WSL)
+
+Run `bash Intercore/Tests/test_ipc_freertos_compile.sh` from any working
+directory. Or, after configuring CMake, run
+`ctest --test-dir build-can-silkit -R '^intercore_ipc_arm_compile_test$' --output-on-failure`.
+The test uses the installed `../FreeRTOS-Kernel`, or `FREERTOS_KERNEL_ROOT`
+when explicitly set. It verifies that the STM32-only FreeRTOS IPC backend
+compiles for both **Cortex-M7** and **Cortex-M4**, with warnings as errors.
+
+The repository's existing `FreeRTOSConfig.h` is a POSIX host configuration
+and intentionally has no ARM interrupt-priority definitions. The script
+creates a temporary modified copy with static allocation, four implemented
+NVIC priority bits, and test-only interrupt priorities (15 lowest / 5 max
+syscall). This corrects the expected ARM port header failure
+(`configMAX_SYSCALL_INTERRUPT_PRIORITY` undeclared) without silently
+modifying the production or host configuration. These placeholder values
+must be explicitly rechecked against STM32H745 and target FreeRTOS settings
+when creating the two firmware projects. The temporary file is deleted.
+
+This test does **not** link or run FreeRTOS, validate a target linker script,
+test HSEM interrupt/callback code, place the mailbox in shared SRAM, check
+cache behavior, or demonstrate physical timing correctness. Run the existing
+`ipc_mailbox_test` and other regressions separately for the host transport.
