@@ -25,9 +25,10 @@ FIELDS = (
 OUTPUT_FIELDS = (
     "source", "kind", "samples", "span_s", "period_us",
     "duration_p50_us", "duration_p95_us", "duration_p99_us", "duration_max_us",
-    "start_late_p95_us", "start_late_p99_us", "start_late_max_us",
-    "interval_mean_us", "interval_abs_jitter_p99_us",
-    "deadline_misses", "deadline_miss_pct", "operation_failures",
+    "execution_budget_overruns", "execution_budget_overrun_pct",
+    "interval_samples", "interval_mean_us", "interval_p99_us",
+    "interval_max_us", "interval_abs_jitter_p99_us",
+    "intervals_over_150pct_period", "operation_failures",
     "logger_dropped", "missing_sequences",
 )
 
@@ -72,19 +73,29 @@ def parse(path: Path) -> dict[str, list[dict]]:
 
 
 def summarize(source: str, values: list[dict]) -> dict:
+    """Host-only observations. DO NOT trust schema-v1 missed_deadline.
+
+    Old raw CSVs calculated missed_deadline against first_start + n*period,
+    accumulating WSL FreeRTOS/POSIX clock drift. Recompute robust metrics
+    from observed execution durations and consecutive wall-clock starts.
+    """
     starts = [r["start_us"] for r in values]
     durations = [r["duration_us"] for r in values]
     period = values[0]["period_us"]
-    intervals = [r["interval_us"] for r in values if r["sequence"] > 0]
+    # Only compare genuinely consecutive recorded events. A dropped row or
+    # interrupted trace must never masquerade as a one-period interval.
+    intervals = [b["start_us"] - a["start_us"]
+                 for a, b in zip(values, values[1:])
+                 if b["sequence"] == a["sequence"] + 1
+                 and b["start_us"] >= a["start_us"]]
     if period:
         jitter = [abs(interval - period) for interval in intervals]
-        late = [r["start_lateness_us"] for r in values
-                if r["start_lateness_us"] is not None]
-        misses = sum(r["missed_deadline"] or 0 for r in values)
+        overruns = sum(duration > period for duration in durations)
+        long_gaps = sum(interval > period * 1.5 for interval in intervals)
     else:
         jitter = []
-        late = []
-        misses = None
+        overruns = None
+        long_gaps = None
     missing = sum(max(0, b["sequence"] - a["sequence"] - 1)
                   for a, b in zip(values, values[1:]))
     return {
@@ -96,13 +107,18 @@ def summarize(source: str, values: list[dict]) -> dict:
         "duration_p95_us": percentile(durations, 95),
         "duration_p99_us": percentile(durations, 99),
         "duration_max_us": max(durations),
-        "start_late_p95_us": percentile(late, 95),
-        "start_late_p99_us": percentile(late, 99),
-        "start_late_max_us": max(late) if late else float("nan"),
-        "interval_mean_us": statistics.fmean(intervals) if intervals else float("nan"),
+        "execution_budget_overruns": overruns if overruns is not None else "",
+        "execution_budget_overrun_pct":
+            (100.0 * overruns / len(values)) if overruns is not None
+            else float("nan"),
+        "interval_samples": len(intervals),
+        "interval_mean_us": statistics.fmean(intervals) if intervals
+            else float("nan"),
+        "interval_p99_us": percentile(intervals, 99),
+        "interval_max_us": max(intervals) if intervals else float("nan"),
         "interval_abs_jitter_p99_us": percentile(jitter, 99),
-        "deadline_misses": misses if misses is not None else "",
-        "deadline_miss_pct": (100.0 * misses / len(values)) if misses is not None else float("nan"),
+        "intervals_over_150pct_period":
+            long_gaps if long_gaps is not None else "",
         "operation_failures": sum(r["success"] == 0 for r in values),
         "logger_dropped": max(r["dropped_total"] for r in values),
         "missing_sequences": missing,
@@ -175,13 +191,20 @@ def make_plots(groups: dict[str, list[dict]], folder: Path) -> list[Path]:
         if items[0]["period_us"]:
             fig, ax = plt.subplots(figsize=(9, 4))
             x = [(i["start_us"] - items[0]["start_us"]) / 1e6 for i in items]
-            lateness = [i["start_lateness_us"] for i in items]
-            ax.plot(x, lateness, linewidth=0.7)
-            ax.axhline(0, linestyle="--")
-            ax.set(title=f"{source}: release lateness vs initial periodic schedule",
-                   xlabel="Elapsed time (s)", ylabel="Start lateness (us)")
+            xs = [((b["start_us"] - items[0]["start_us"]) / 1e6,
+                   b["start_us"] - a["start_us"])
+                  for a, b in zip(items, items[1:])
+                  if b["sequence"] == a["sequence"] + 1 and
+                  b["start_us"] >= a["start_us"]]
+            if xs:
+                ax.plot([p[0] for p in xs], [p[1] for p in xs], linewidth=0.7)
+            ax.axhline(items[0]["period_us"], linestyle="--",
+                       label="Nominal period")
+            ax.legend()
+            ax.set(title=f"{source}: observed interval between starts",
+                   xlabel="Elapsed time (s)", ylabel="Start-to-start interval (us)")
             fig.tight_layout()
-            path = folder / f"{source}_start_lateness.png"
+            path = folder / f"{source}_start_interval.png"
             fig.savefig(path, dpi=160)
             plt.close(fig)
             generated.append(path)
@@ -210,33 +233,46 @@ def main() -> None:
         "",
         "Source: " + str(args.csv_file),
         "",
-        "**These measurements are host observations, NOT STM32H745 WCET "
-        "certification or physical CAN deadline guarantees.**",
-        "The recorder itself adds timestamp/queue overhead. All deadlines "
-        "are measured against a 1 kHz or 100 Hz nominal clock derived from "
-        "the first observed start; catch-up and OS scheduling matter.",
+        "**Host observations only — not STM32H745 worst-case execution time "
+        "or hardware deadline certification.**",
         "",
-        "| Task | Rows | P99 exec (us) | Max exec (us) | P99 start lateness (us) | Misses | Lost log rows |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "**Schema-v1 warning:** the raw CSV fields missed_deadline, "
+        "scheduled_us and start/finish_lateness_us use a first-sample-anchored "
+        "ideal timeline. They accumulate POSIX/WSL tick drift and are deliberately "
+        "**ignored** when producing this report.",
+        "",
+        "Execution-budget overrun means a measured task BODY took longer than "
+        "its nominal period after it started. It does not determine whether "
+        "the task woke at its actual RTOS release instant.",
+        "A long start interval means consecutive recorded starts were spaced "
+        "by more than 1.5x the nominal period; it is NOT a proven deadline miss.",
+        "",
+        "| Task | Rows | P99 exec (us) | Max exec (us) | P99 interval (us) | Body overruns | Long intervals (>1.5x) | Lost rows |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for s in summaries:
-        misses = str(s["deadline_misses"]) if s["period_us"] else "N/A"
+        over = str(s["execution_budget_overruns"]) if s["period_us"] else "N/A"
+        gap = str(s["intervals_over_150pct_period"]) if s["period_us"] else "N/A"
         lines.append(
             f"| {s['source']} | {s['samples']} | "
             f"{pretty(s['duration_p99_us'])} | "
             f"{pretty(float(s['duration_max_us']))} | "
-            f"{pretty(s['start_late_p99_us'])} | {misses} | "
+            f"{pretty(s['interval_p99_us'])} | {over} | {gap} | "
             f"{s['logger_dropped']} |"
         )
     lines.extend(["", "## Interpretation", ""])
     for s in summaries:
         if s["period_us"]:
             lines.append(
-                f"- **{s['source']}**: {s['deadline_misses']} observed nominal "
-                f"period deadline misses / {s['samples']} samples "
-                f"({pretty(s['deadline_miss_pct'], 3)}%). "
-                f"P99 start lateness {pretty(s['start_late_p99_us'])} us; "
-                f"maximum execution {pretty(float(s['duration_max_us']))} us."
+                f"- **{s['source']}**: {s['execution_budget_overruns']} measured "
+                f"body overruns / {s['samples']} invocations "
+                f"({pretty(s['execution_budget_overrun_pct'], 3)}%). "
+                f"Start intervals >1.5x nominal: "
+                f"{s['intervals_over_150pct_period']} / {s['interval_samples']}; "
+                f"mean actual interval {pretty(s['interval_mean_us'])} us "
+                f"versus target {s['period_us']} us. "
+                f"These are separate indicators, NOT an exact count of "
+                f"missed RTOS deadlines."
             )
         else:
             lines.append(
@@ -268,7 +304,7 @@ def main() -> None:
     lines.extend([
         "", "## What to conclude",
         "",
-        "A pass on WSL means only that the observed host run stayed within "
+        "A test pass means only that the measured host run was functionally successful; observed timing must be reviewed separately. It does NOT imply it stayed within the nominal budget. "
         "the selected nominal bounds under this workload. "
         "It cannot prove worst-case STM32 timing, Cortex-M7/M4 contention, "
         "QSPI cache effects, or 1 Mbit/s CAN on-wire latency. "
@@ -279,12 +315,17 @@ def main() -> None:
     report = out_dir / "timing_report.md"
     report.write_text("\n".join(lines), encoding="utf-8")
     charts = [] if args.no_plots else make_plots(groups, out_dir)
+    print("[TIMING] Ignoring flawed schema-v1 cumulative 'missed_deadline' field.")
+    print("[TIMING] Body overruns != actual RTOS deadline misses.")
     for s in summaries:
-        flag = "WARN" if (s["deadline_misses"] or s["logger_dropped"]) else "INFO"
+        flag = "WARN" if (s["execution_budget_overruns"] or s["logger_dropped"]) else "INFO"
+        overruns = (s["execution_budget_overruns"]
+                    if s["period_us"] else "N/A")
         print(f"[{flag}] {s['source']:<14} N={s['samples']:<7} "
               f"p99={pretty(s['duration_p99_us']):>9}us "
               f"max={pretty(float(s['duration_max_us'])):>9}us "
-              f"misses={s['deadline_misses'] if s['period_us'] else 'N/A'} "
+              f"body_overruns={overruns} "
+              f"p99_interval={pretty(s['interval_p99_us'])}us "
               f"log_drops={s['logger_dropped']}")
     if "can_targets" in groups:
         print("CAN event-burst analysis:", can_bursts(groups["can_targets"]))
