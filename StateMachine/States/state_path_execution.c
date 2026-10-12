@@ -11,10 +11,15 @@
 } while (0)
 #define PATH_TIMING_BEGIN(source) gp_timing_begin(source)
 #define PATH_TIMING_END(source, ok) gp_timing_end(source, ok)
+#define PATH_TIMING_SKIP(n) gp_timing_value(GP_TIMING_PATH_SAMPLES_SKIPPED, (n))
+#define PATH_TIMING_FEEDBACK_AGE(axis, age) gp_timing_value( \
+    (GpTimingSource)(GP_TIMING_PATH_FEEDBACK_AGE_AXIS_1 + (axis)), (age))
 #else
 #define PATH_TIMING_EVENT(source) ((void)0)
 #define PATH_TIMING_BEGIN(source) ((void)0)
 #define PATH_TIMING_END(source, ok) ((void)0)
+#define PATH_TIMING_SKIP(n) ((void)0)
+#define PATH_TIMING_FEEDBACK_AGE(axis, age) ((void)0)
 #endif
 
 /* Ten missed 2-ms updates; provisional until physical PDO latency is measured.
@@ -166,6 +171,7 @@ static bool feedback_watchdog(PathExecutionState *s, uint64_t now_us)
             ? feedback.timestamp_us : s->feedback_watch_started_us;
         if (now_us < reference) return false;
         s->feedback_age_us[axis] = now_us - reference;
+        PATH_TIMING_FEEDBACK_AGE(axis, s->feedback_age_us[axis]);
         if (s->feedback_age_us[axis] > PATH_EXEC_FEEDBACK_MAX_AGE_US)
             return false;
     }
@@ -504,7 +510,7 @@ StateStepResult state_path_execution_step(
                         return fail(state, PATH_EXEC_ERR_STORAGE_READ);
                     state->skipped_samples += skip;
                     state->sample_index += skip;
-                    PATH_TIMING_EVENT(GP_TIMING_PATH_SAMPLE_SKIPPED);
+                    PATH_TIMING_SKIP(skip);
                 }
             }
 

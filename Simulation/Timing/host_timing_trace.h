@@ -24,6 +24,13 @@ typedef enum {
     GP_TIMING_PATH_FEEDBACK_LATE,
     GP_TIMING_PATH_PERIOD_WAIT,
     GP_TIMING_PATH_COMMAND,
+    GP_TIMING_PATH_SAMPLES_SKIPPED,
+    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_1,
+    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_2,
+    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_3,
+    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_4,
+    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_5,
+    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_6,
     GP_TIMING_SOURCE_COUNT
 } GpTimingSource;
 
@@ -38,5 +45,7 @@ bool gp_timing_init(const char *csv_path);
  */
 void gp_timing_begin(GpTimingSource source);
 void gp_timing_end(GpTimingSource source, bool success);
+/* Nonblocking numeric diagnostic; value is NOT an elapsed duration. */
+void gp_timing_value(GpTimingSource source, uint64_t value);
 
 #endif

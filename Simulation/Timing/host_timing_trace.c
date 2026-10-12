@@ -18,6 +18,8 @@ typedef struct {
     uint64_t finish_us;
     uint64_t duration_us;
     uint64_t interval_us;
+    uint64_t value;
+    bool has_value;
     /* Measured body overrun only; actual RTOS release timestamps unavailable. */
     uint32_t dropped_total;
     uint8_t execution_budget_overrun;
@@ -53,6 +55,13 @@ static const GpTimingDefinition defs[GP_TIMING_SOURCE_COUNT] = {
     {"path_feedback_late", "event", 0U},
     {"path_period_wait",   "event", 0U},
     {"path_commands",      "event", 0U},
+    {"path_samples_skipped", "counter", 0U},
+    {"path_feedback_age_axis_1", "gauge", 0U},
+    {"path_feedback_age_axis_2", "gauge", 0U},
+    {"path_feedback_age_axis_3", "gauge", 0U},
+    {"path_feedback_age_axis_4", "gauge", 0U},
+    {"path_feedback_age_axis_5", "gauge", 0U},
+    {"path_feedback_age_axis_6", "gauge", 0U},
 };
 static GpTimingRing rings[GP_TIMING_SOURCE_COUNT];
 static FILE *output;
@@ -74,7 +83,7 @@ static void write_sample(unsigned source, const GpTimingSample *s)
 {
     const GpTimingDefinition *def = &defs[source];
     fprintf(output,
-        "2,%s,%s,%" PRIu64 ",%u,%" PRIu64 ",%" PRIu64 ","
+        "3,%s,%s,%" PRIu64 ",%u,%" PRIu64 ",%" PRIu64 ","
         "%" PRIu64 ",%" PRIu64 ",",
         def->name, def->kind, s->sequence, def->period_us,
         s->start_us, s->finish_us, s->duration_us, s->interval_us);
@@ -82,7 +91,11 @@ static void write_sample(unsigned source, const GpTimingSample *s)
         fprintf(output, "%u,", (unsigned)s->execution_budget_overrun);
     else
         fputs(",", output); /* No periodic execution budget. */
-    fprintf(output, "%u,%u\n", (unsigned)s->success, s->dropped_total);
+    fprintf(output, "%u,%u,", (unsigned)s->success, s->dropped_total);
+    if (s->has_value)
+        fprintf(output, "%" PRIu64 "\n", s->value);
+    else
+        fputc('\n', output);
 }
 
 static void *writer_entry(void *unused)
@@ -124,7 +137,7 @@ bool gp_timing_init(const char *csv_path)
     }
     fputs("schema_version,source,kind,sequence,period_us,start_us,finish_us,"
           "duration_us,interval_us,execution_budget_overrun,"
-          "success,dropped_total\n", output);
+          "success,dropped_total,value\n", output);
     if (fflush(output) != 0) {
         fclose(output);
         output = NULL;
@@ -184,6 +197,35 @@ void gp_timing_end(GpTimingSource source, bool success)
         __atomic_load_n(&ring->tail, __ATOMIC_ACQUIRE);
     if ((uint32_t)(head - tail) >= GP_TIMING_RING_CAPACITY) {
         ++ring->dropped; /* Never block control tasks to log. */
+        return;
+    }
+    sample.dropped_total = ring->dropped;
+    ring->samples[head & GP_TIMING_RING_MASK] = sample;
+    __atomic_store_n(&ring->head, head + 1U, __ATOMIC_RELEASE);
+}
+
+/* Numeric diagnostics reuse single-producer rings and their async writer. */
+void gp_timing_value(GpTimingSource source, uint64_t value)
+{
+    if ((unsigned)source >= GP_TIMING_SOURCE_COUNT ||
+        !__atomic_load_n(&enabled, __ATOMIC_ACQUIRE)) return;
+    GpTimingRing *ring = &rings[source];
+    const uint64_t now = monotonic_us() - epoch_us;
+    const uint64_t sequence = ring->count++;
+    const uint64_t previous = ring->last_start;
+    ring->last_start = now;
+    GpTimingSample sample = {0};
+    sample.sequence = sequence;
+    sample.start_us = now;
+    sample.finish_us = now;
+    sample.interval_us = sequence > 0U && now >= previous ? now - previous : 0U;
+    sample.success = 1U;
+    sample.value = value;
+    sample.has_value = true;
+    const uint32_t head = __atomic_load_n(&ring->head, __ATOMIC_RELAXED);
+    const uint32_t tail = __atomic_load_n(&ring->tail, __ATOMIC_ACQUIRE);
+    if ((uint32_t)(head - tail) >= GP_TIMING_RING_CAPACITY) {
+        ++ring->dropped;
         return;
     }
     sample.dropped_total = ring->dropped;
