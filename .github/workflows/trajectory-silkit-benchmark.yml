@@ -5,6 +5,9 @@ on:
       - fix/trajectory-time-paced-scheduling
     paths:
       - '.github/workflows/trajectory-silkit-benchmark.yml'
+      - 'StateMachine/States/state_path_execution.*'
+      - 'StateMachine/Tests/test_path_execution_prefetch.c'
+      - 'StateMachine/supervisor_task.c'
   workflow_dispatch:
 jobs:
   six-run-path-timing:

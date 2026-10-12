@@ -36,6 +36,14 @@ typedef enum {
     VALIDATION_WORKER_DONE
 } ValidationWorkerState;
 
+/* All shared state code receives monotonic microseconds through inputs;
+ * replace this RTOS-tick adapter with an MCU timer in hardware builds. */
+static uint64_t supervisor_now_us(void)
+{
+    return (uint64_t)xTaskGetTickCount() * UINT64_C(1000000) /
+           (uint64_t)configTICK_RATE_HZ;
+}
+
 static uint32_t supervisor_now_ms(void)
 {
     const TickType_t ticks =
@@ -861,9 +869,7 @@ static void run_active_state(SupervisorTaskContext *context)
         case ROBOT_STATE_PATH_EXECUTION:
             /* Incoming operator messages never own trajectory clock time. */
             context->path_execution_inputs.now_ms = supervisor_now_ms();
-            context->path_execution_inputs.now_us =
-                (uint64_t)xTaskGetTickCount() * UINT64_C(1000000) /
-                (uint64_t)configTICK_RATE_HZ;
+            context->path_execution_inputs.now_us = supervisor_now_us();
             context->path_execution_inputs.motion_permission =
                 context->machine.safety.motionPermitted;
             context->path_execution_inputs.estop_active =

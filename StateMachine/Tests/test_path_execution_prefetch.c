@@ -343,6 +343,23 @@ static void test_delayed_axis_feedback(void)
     puts("[PASS] Delayed single-axis TPDO does not gate cadence below age limit");
 }
 
+static void test_expired_final_target_fails_closed(void)
+{
+    Test t;
+    init(&t, 4U, 2U, UINT32_MAX);
+    assert(step_at(&t, 0) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 1) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 2) == STATE_STEP_RUNNING);
+    const unsigned commands = t.drive.commands;
+    /* t0=2ms; last index 3 deadline=8ms; at 11ms it expired. */
+    assert(step_at(&t, 11) == STATE_STEP_FAILED);
+    assert(t.execution.error == PATH_EXEC_ERR_MISSED_DEADLINE);
+    assert(t.execution.skipped_samples == 3U);
+    assert(t.drive.commands == commands);
+    assert(t.stop_calls == 1U && !t.wire);
+    puts("[PASS] Expired final target cannot be transmitted; counted and held");
+}
+
 static void test_missing_axis_fault_and_reentry(void)
 {
     Test t;
@@ -386,6 +403,7 @@ int main(void)
     test_time_paced_feedback_and_skips();
     test_delayed_axis_feedback();
     test_missing_axis_fault_and_reentry();
+    test_expired_final_target_fails_closed();
     test_startup();
     test_final_feedback_replay_pause_abort();
     test_runtime_faults();

@@ -63,13 +63,14 @@ static StateStepResult fail(
 
         state->wire_feed_commanded = false;
 
-        /* Software hold for a runtime storage failure only. Preflight
-         * rejection issued no motion, so do not send an unsolicited target.
+        /* Software hold for runtime storage/communication/deadline faults.
+         * Preflight rejection issued no motion: no unsolicited target. 
          * A successful callback acknowledges issuing the command, NOT
          * verified deceleration, and is never a certified safety stop. */
         if ((error == PATH_EXEC_ERR_STORAGE_READ ||
              error == PATH_EXEC_ERR_TRAJECTORY_NOT_READY ||
-             error == PATH_EXEC_ERR_CYCLIC_FEEDBACK) &&
+             error == PATH_EXEC_ERR_CYCLIC_FEEDBACK ||
+             error == PATH_EXEC_ERR_MISSED_DEADLINE) &&
             state->phase == PATH_EXEC_PHASE_FOLLOW_TRAJECTORY)
         {
             bool acknowledged = false;
@@ -484,6 +485,22 @@ StateStepResult state_path_execution_step(
             const uint64_t raw_due =
                 (uint64_t)state->segment_start_index + due_relative;
             const uint32_t count = state->request.trajectory->sample_count;
+            /* The final sample is not exempt from expiration. If even
+             * its deadline is >1 period old, never transmit that stale
+             * position as if the trajectory completed correctly. */
+            const uint64_t last_deadline = state->trajectory_t0_us +
+                (uint64_t)(count - 1U - state->segment_start_index) * period_us;
+            if (inputs->now_us > last_deadline + period_us) {
+                const uint32_t skip = count - state->sample_index;
+                if (state->services.skip_samples == NULL ||
+                    !state->services.skip_samples(state->sample_index,
+                                                  skip, state->services.context))
+                    return fail(state, PATH_EXEC_ERR_STORAGE_READ);
+                state->skipped_samples += skip;
+                state->sample_index += skip;
+                PATH_TIMING_SKIP(skip);
+                return fail(state, PATH_EXEC_ERR_MISSED_DEADLINE);
+            }
             const uint32_t due_index =
                 raw_due >= count ? count - 1U : (uint32_t)raw_due;
             if (due_index < state->sample_index) {
@@ -795,11 +812,12 @@ const char *state_path_execution_error_name(PathExecutionError error)
         "ESTOP",
         "RESET_REQUESTED",
         "HOME_REQUESTED",
-        "CYCLIC_FEEDBACK"
+        "CYCLIC_FEEDBACK",
+        "MISSED_DEADLINE"
     };
 
     return
-        (error <= PATH_EXEC_ERR_CYCLIC_FEEDBACK)
+        (error <= PATH_EXEC_ERR_MISSED_DEADLINE)
         ? names[error]
         : "UNKNOWN";
 }
