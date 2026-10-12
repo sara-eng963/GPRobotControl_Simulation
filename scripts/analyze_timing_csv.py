@@ -145,6 +145,10 @@ def write_csv(path: Path, summaries: list[dict]) -> None:
 
 def make_plots(groups: dict[str, list[dict]], folder: Path) -> list[Path]:
     try:
+        # Force a headless renderer BEFORE importing pyplot. WSL/X11 display
+        # probing can hang even when the user only wants saved PNG files.
+        import matplotlib
+        matplotlib.use("Agg", force=True)
         import matplotlib.pyplot as plt
     except ImportError:
         print("Charts skipped: install matplotlib with 'python3 -m pip install matplotlib'.")
