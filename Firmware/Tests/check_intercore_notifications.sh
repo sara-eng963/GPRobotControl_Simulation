@@ -8,6 +8,14 @@ CC="${ARM_NONE_EABI_GCC:-arm-none-eabi-gcc}"
 command -v "$CC" >/dev/null || { echo "FAIL: $CC missing"; exit 1; }
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
+# The STM32H745 vendor CMSIS device header defines DUAL_CORE for this MCU.
+# Never add -DDUAL_CORE: doing so causes a warning (fatal under -Werror).
+DEVICE_HEADER="$FW/Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h745xx.h"
+grep -Eq '^[[:space:]]*#[[:space:]]*define[[:space:]]+DUAL_CORE([[:space:]]|$)' "$DEVICE_HEADER" || {
+    echo "FAIL: selected ST device header no longer defines DUAL_CORE" >&2
+    exit 1
+}
+echo "PASS: DUAL_CORE is provided by the STM32H745 CMSIS device header"
 for core in CM7 CM4; do
     if [[ "$core" == CM7 ]]; then
         cpu=cortex-m7
@@ -19,7 +27,7 @@ for core in CM7 CM4; do
     echo "[Stage 2E-4] Compiling $core ST-HAL EXTI notification adapter..."
     flags=(-std=gnu11 -O0 -Wall -Wextra -Werror
         -mcpu="$cpu" -mthumb -mfpu="$fpu" -mfloat-abi=hard
-        -DSTM32H745xx -DDUAL_CORE=1 -DUSE_HAL_DRIVER -D"CORE_$core=1"
+        -DSTM32H745xx -DUSE_HAL_DRIVER -D"CORE_$core=1"
         -I"$FW/$core/Core/Inc" -I"$FW/Common/Inc"
         -I"$ROOT/Intercore"
         -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
@@ -47,7 +55,7 @@ assert 'gp_ipc_set_notifier' in notify
 for core, irq, other in [('CM7', 'EXTI1_IRQHandler', 'EXTI0_IRQHandler'),
                          ('CM4', 'EXTI0_IRQHandler', 'EXTI1_IRQHandler')]:
     project = (fw/core/".cproject").read_text()
-    assert project.count('value="DUAL_CORE"') >= 2, "both CubeIDE build configurations must define DUAL_CORE"
+    assert 'value="DUAL_CORE"' not in project, "do not redefine device-header DUAL_CORE in CubeIDE"
     main = (fw/core/"Core/Src/main.c").read_text()
     it = (fw/core/"Core/Src/stm32h7xx_it.c").read_text()
     assert 'intercore_notifications_initialize()' in main
