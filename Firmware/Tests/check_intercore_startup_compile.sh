@@ -65,4 +65,40 @@ assert "Error_Handler();" in boot[initialize:hsem_release], "Failed initializati
 print("PASS: CubeMX user-code region initializes IPC before HSEM-0 M4 wakeup")
 PY
 echo "PASS: Stage 2E-2 CM7 source integration checks"
+echo "[Stage 2E-3] Compiling CM4 shared-memory validation and native modules..."
+M4_FLAGS=(-std=gnu11 -O0 -Wall -Wextra -Werror
+    -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
+    -DSTM32H745xx -DUSE_HAL_DRIVER -DCORE_CM4=1)
+M4_INCLUDE_FLAGS=(-I"$FW/CM4/Core/Inc" "${INCLUDE_FLAGS[@]:1}")
+for f in \
+    "$FW/CM4/Core/Src/intercore_startup_validation.c" \
+    "$ROOT/Intercore/ipc_mailbox_freertos.c" \
+    "$ROOT/Intercore/trajectory_stream.c"; do
+    "$CC" "${M4_FLAGS[@]}" "${M4_INCLUDE_FLAGS[@]}" -c "$f" \
+        -o "$OUT/CM4-$(basename "$f").o"
+    echo "PASS: $(basename "$f") compiles for CM4"
+done
+"$NM" "$OUT/CM4-intercore_startup_validation.c.o" |
+    grep -Eq ' T intercore_startup_validate || {
+    echo "FAIL: CM4 validation function not exported" >&2; exit 1;
+}
+python3 - "$FW/CM4/Core/Src/main.c" <<'PY'
+from pathlib import Path
+import sys
+s = Path(sys.argv[1]).read_text()
+assert '#include "intercore_startup_validation.h"' in s, "CM4 startup header absent"
+assert s.count('intercore_startup_validate()') == 1, "CM4 validation call missing or duplicated"
+assert "HAL_PWREx_EnterSTOPMode(" in s, "ST HSEM-0 STOP sequence missing"
+assert "HAL_Init();" in s and "osKernelInitialize();" in s, "CM4 HAL/kernel boot missing"
+start = s.index("/* USER CODE BEGIN 2 */")
+end = s.index("/* USER CODE END 2 */", start)
+block = s[start:end]
+assert "intercore_startup_validate()" in block, "CM4 validation must be in CubeMX user code"
+assert "Error_Handler();" in block, "CM4 must fail closed on invalid shared objects"
+assert s.index("HAL_PWREx_EnterSTOPMode(") < s.index("HAL_Init();") \
+    < s.index("intercore_startup_validate()") \
+    < s.index("osKernelInitialize();"), "CM4 validation must follow wakeup and precede scheduler"
+print("PASS: CM4 validates M7-created buffers after HSEM-0 wakeup and before scheduler")
+PY
+echo "PASS: Stage 2E-3 CM4 source integration checks"
 echo "NOTE: full CubeIDE linking and physical dual-core runtime remain pending."
