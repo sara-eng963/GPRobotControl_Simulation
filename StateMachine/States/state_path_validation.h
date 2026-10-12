@@ -158,6 +158,25 @@ typedef bool (*PvStorageWriteFn)(
     void *context
 );
 
+/* Optional nonblocking storage callbacks. BUSY is backpressure, not an
+ * invalid path. Legacy synchronous begin/write/commit remain supported. */
+typedef enum {
+    PV_STORAGE_TRY_ACCEPTED = 0,
+    PV_STORAGE_TRY_BUSY,
+    PV_STORAGE_TRY_FAILED
+} PvStorageTryResult;
+
+typedef PvStorageTryResult (*PvStorageTryWriteFn)(
+    uint32_t sample_index,
+    const PvExecutionSample *sample,
+    void *context
+);
+
+typedef PvStorageTryResult (*PvStorageTryCommitFn)(
+    const ValidatedTrajectory *metadata,
+    void *context
+);
+
 typedef bool (*PvStorageCommitFn)(
     const ValidatedTrajectory *metadata,
     void *context
@@ -172,6 +191,8 @@ typedef struct
     PvStorageWriteFn write_sample;
     PvStorageCommitFn commit;
     PvStorageAbortFn abort;
+    PvStorageTryWriteFn try_write_sample; /* optional asynchronous backpressure */
+    PvStorageTryCommitFn try_commit;      /* only ACCEPTED after durable commit */
 
     uint32_t capacity_samples;
     void *context;
@@ -355,6 +376,13 @@ typedef struct
     bool previous_qd_valid;
 
     real_t previous_time_s;
+
+    /* One generated sample is retained when the M7->M4 storage queue is full.
+     * Do not call ControlCore's stateful stream generator again on retry. */
+    bool sample_pending;
+    JointVector pending_generated_q;
+    Vec3 pending_desired_position;
+    Quat pending_desired_orientation;
 
     uint32_t sample_crc_state;
 
