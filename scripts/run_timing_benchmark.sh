@@ -3,10 +3,10 @@
 # Each scenario writes its own raw CSV and analyzed summary/plots.
 set -Eeuo pipefail
 
-ROOT="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-BUILD_DIR="\${BUILD_DIR:-$ROOT/build-can-silkit}"
-LOG_DIR="\${TIMING_RESULTS_DIR:-$ROOT/.simulation-logs/timing-benchmark}"
+BUILD_DIR="${BUILD_DIR:-$ROOT/build-can-silkit}"
+LOG_DIR="${TIMING_RESULTS_DIR:-$ROOT/.simulation-logs/timing-benchmark}"
 mkdir -p "$LOG_DIR"
 
 echo "[TIMING] CMake configure"
@@ -27,13 +27,13 @@ ctest --test-dir "$BUILD_DIR" \
 run_scenario() {
     local name="$1"
     local test="$2"
-    local csv="$LOG_DIR/\${name}.csv"
-    local analysis_dir="$LOG_DIR/\${name}-analysis"
+    local csv="$LOG_DIR/${name}.csv"
+    local analysis_dir="$LOG_DIR/${name}-analysis"
     rm -f "$csv"
     echo "[TIMING] Scenario: $name ($test)"
     GP_TIMING_CSV="$csv" \
         ctest --test-dir "$BUILD_DIR" \
-        -R "^\${test}$" \
+        -R "^${test}$" \
         --output-on-failure
     if [[ ! -s "$csv" ]]; then
         echo "[FAIL] Scenario produced no timing CSV: $csv" >&2
@@ -49,7 +49,7 @@ run_scenario() {
 run_scenario baseline supervisor_silkit_sequence
 run_scenario flash supervisor_silkit_flash_sequence
 
-if [[ "\${1:-}" == "--include-faults" ]]; then
+if [[ "${1:-}" == "--include-faults" ]]; then
     run_scenario flash_cancel supervisor_silkit_flash_cancel
     run_scenario flash_program_fail supervisor_silkit_flash_program_fail
 elif [[ $# -gt 0 ]]; then
