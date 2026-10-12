@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "intercore_shared_memory.h"
+#include "intercore_notifications.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -126,6 +127,11 @@ int main(void)
 /* Follow STM32CubeH7 FreeRTOS_AMP_Dual_RTOS: create shared message
    buffers while CM4 is in STOP, before releasing HSEM-0. */
 if (!intercore_shared_memory_initialize())
+{
+  Error_Handler();
+}
+/* Configure ST EXTI IPC delivery before HSEM-0 releases CM4. */
+if (!intercore_notifications_initialize())
 {
   Error_Handler();
 }
