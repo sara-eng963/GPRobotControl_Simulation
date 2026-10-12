@@ -110,3 +110,59 @@ protocol correctness under the tested host thread schedules. Re-run the
 original `supervisor_silkit_sequence`, `trajectory_prefetch_concurrent_test`,
 `path_execution_prefetch_test`, and `flash_prefetch_500hz_test` before
 replacing any real control path.
+
+## Asynchronous validation storage (Issue 4)
+
+The flash-backed host path now models **three independent responsibilities**:
+- M7 Supervisor (priority 4): 1 kHz state machine, safety decisions only.
+- M7 numerical validator (priority 1): IK, trajectory generation, checks,
+  quantization and CRC. Its storage adapter never calls QSPI.
+- M4-role flash task (priority 1 in the POSIX model): transaction begin,
+  sequential sample program, durable commit/recovery and abort. Its backend
+  callbacks are the only operations allowed to touch NOR storage.
+
+Implementation: `validation_storage_bridge.{h,c}`.
+A 64-element SPSC queue (32 bytes per slot) lives in shared SRAM alongside a
+commit metadata snapshot. M7 publishes complete sample commands; M4 consumes
+them in order. The **storage callbacks are NOT shared**: only M4's private
+worker descriptor holds the actual flash driver function pointers.
+
+The validator's optional `try_write_sample` and `try_commit` callbacks
+return ACCEPTED / BUSY / FAILED. When BUSY, it retains the generated sample
+and does not call the stateful ControlCore stream generator again. A queued
+COMMIT returns BUSY until M4 has completed the actual backend commit; only
+then may Supervisor receive VALID. Flash failure causes abort/reject, never
+"VALID because the data was queued."
+
+Cancellation sets a nonblocking request; M4 owns backend.abort and does not
+acknowledge while an erase/program/read callback is in flight. The next
+validation is gated by `gp_validation_m4_idle()`, which requires queue drain,
+released/aborted flash transaction, and acknowledged cancellation.
+
+**Compatibility:** Legacy RAM storage and existing single-core prefetch
+are preserved. Host `GP_STORAGE_BACKEND=flash` now uses the new bridge;
+the SIL Kit hardware model still runs on one POSIX FreeRTOS scheduler.
+This is functional separation, **not** a deployed pair of STM32 firmware
+images and not a proven 1 ms worst-case timing result.
+
+**Important hardware constraints:** Both cores must use non-cacheable
+shared SRAM and a defined MPU/HSEM boot handshake. The storage metadata
+`ValidatedTrajectory` must have the same ABI/layout in both firmware
+builds. Cache coherence, linker placement, physical QSPI ownership,
+power-failure durability, fault/abort recovery and worst-case deadlines
+must be verified separately on the STM32H745. A committed NOR record may
+not be reversible if cancellation races with an already durable commit;
+authorization to execute must remain with Supervisor and must check the
+expected validated artifact identity.
+
+Host regressions:
+- `intercore_validation_storage_test` checks bounded queue backpressure,
+  no premature commit, sequential reads, flash write failure and cancellation
+  of an in-flight flash callback.
+- `path_validation_test` now also runs the real numerical validator over
+  the async adapter; compares stored sample/metadata CRC against synchronous
+  output and checks BUSY/retry and durable-commit gating.
+- `supervisor_silkit_flash_sequence`,
+  `supervisor_silkit_flash_cancel`, and
+  `supervisor_silkit_flash_program_fail` exercise the flash-backed whole
+  simulator when built on the host.
