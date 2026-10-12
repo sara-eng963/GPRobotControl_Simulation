@@ -93,6 +93,7 @@ TEACH_LOG="$LOG_DIR/teaching-sim.log"
 CAN_MONITOR_LOG="$LOG_DIR/can-monitor.log"
 CAN_FRAME_LOG="$LOG_DIR/can-frames.csv"
 CAN_METRICS_LOG="$LOG_DIR/can-metrics.csv"
+TIMING_CSV="$LOG_DIR/timing-metrics.csv"
 
 PIDS=()
 
@@ -244,6 +245,7 @@ SILKIT_REGISTRY_URI="$REGISTRY_URI" \
 MATLAB_IP="$MATLAB_IP" \
 SIM_EVENT_LOG="$EVENT_LOG" \
 SIM_TRACE_FILE="$TRACE_LOG" \
+GP_TIMING_CSV="$TIMING_CSV" \
     "$SUPERVISOR_BIN" \
     >"$SUPERVISOR_LOG" 2>&1 &
 SUPERVISOR_PID=$!
@@ -303,6 +305,10 @@ echo "   $TRACE_LOG"
 echo
 echo " CAN frame log:"
 echo "   $CAN_FRAME_LOG"
+echo " Host timing CSV:"
+echo "   $TIMING_CSV"
+echo " Analyze: python3 scripts/analyze_timing_csv.py $TIMING_CSV"
+echo
 echo " CAN metrics log:"
 echo "   $CAN_METRICS_LOG"
 echo " CAN monitor console log:"
