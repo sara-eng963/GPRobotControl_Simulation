@@ -80,5 +80,5 @@ printf '  Trajectory:   0x38001000..0x38004FFF 16384 B (%d B occupied)\n' "$traj
 echo "  Shared spare: 0x38005000..0x38007FFF 12288 B (reserved)"
 echo "  Upper SRAM4:  0x38008000..0x3800FFFF 32768 B (unallocated)"
 echo 'PENDING: Neither core places the objects in SRAM4 yet; no MPU validation.'
-echo 'NOTE: probe-only configUSE_STREAM_BUFFERS=1 does not modify target config.'
+echo 'PASS: native FreeRTOS 10.6.2 message_buffer.h compiled without custom feature shim.'
 echo 'PASS: Stage 2A CM7/CM4 ABI equality and SRAM4 gross-capacity check'
