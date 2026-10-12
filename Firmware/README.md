@@ -112,15 +112,20 @@ or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
   0 warnings). Actual firmware ELF contained
   `intercore_ipc_shared` at `0x38000000` and
   `intercore_trajectory_shared` at `0x38001000`, both `NOBITS`.
-- **2E-2 (code integrated, awaiting build):** M7 initializes static
-  FreeRTOS Message Buffers and the trajectory region before HSEM-0
-  releases M4, using the published ST `FreeRTOS_AMP_Dual_RTOS`
-  cold-boot ordering. Run
-  `bash Firmware/Tests/check_intercore_startup_compile.sh`, stage the
-  canonical `Intercore/*.c` sources with
-  `bash Firmware/Tests/stage_intercore_sources.sh "<verifier>"`, then
-  complete a clean CM7 firmware build. CM4 validation, EXTI notification,
-  fault/recovery testing and hardware operation remain pending.
+- **2E-2 (verified at build level):** M7 creates the static
+  FreeRTOS Message Buffers and initializes trajectory storage before
+  releasing HSEM-0, following ST's `FreeRTOS_AMP_Dual_RTOS`
+  cold-start example. Full CM7 CubeIDE build: 0 errors, 0 warnings;
+  actual firmware ELF contains the native initialization functions
+  and both shared objects at the expected `NOBITS` SRAM4 addresses.
+- **2E-3 (code committed, awaiting tests):** M4 now checks M7-created
+  shared buffers through canonical IPC/trajectory validation functions
+  after HSEM-0 wakeup and before its own FreeRTOS scheduler. Run
+  `bash Firmware/Tests/check_intercore_startup_compile.sh` and
+  `bash Firmware/Tests/stage_intercore_sources.sh "<verifier>"`
+  after syncing the tracked M4 source/header. A clean M4 firmware build,
+  real two-core startup, EXTI notifications, reset recovery and hardware
+  checks remain pending.
 
 See the [Stage 2 engineering record](STAGE2_SHARED_SRAM4_MPU.md)
 for detailed decision rationale, test evidence and remaining risks.
