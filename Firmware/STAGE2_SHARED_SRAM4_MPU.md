@@ -340,18 +340,29 @@ application-file changes.
   user inspected its actual ELF: `intercore_ipc_shared` at
   `0x38000000` (0x8a0 B) and `intercore_trajectory_shared` at
   `0x38001000` (0x3040 B), both aligned and `NOBITS`.
-- **Stage 2E-2 — code committed, awaiting validation:** M7
-  `intercore_shared_memory_initialize()` uses existing
-  `gp_ipc_initialize()` (FreeRTOS `xMessageBufferCreateStatic()`) and
-  `gp_traj_shared_initialize()`, checking both valid before M7's
-  HSEM-0 wakeup. The generated M7 `main.c` calls this function inside
-  `Boot_Mode_Sequence_2` *after* `SystemClock_Config()` and *before*
-  `HAL_HSEM_FastTake/Release(HSEM_ID_0)`. On failure `Error_Handler()`
-  prevents the CM4 wake. No new protocol or scheduler code was introduced.
-- **Still pending:** compilation of the new boot-initialization sources
-  on the user's ARM toolchain; clean integrated CM7 build and ELF check
-  after source staging; CM4 validation, EXTI/FreeRTOS notifications,
-  reset handling, and physical MCU execution.
+- **Stage 2E-2 — verified at CM7 build level:** M7
+  `intercore_shared_memory_initialize()` calls the existing native
+  FreeRTOS `gp_ipc_initialize()` and trajectory initializer before
+  releasing HSEM-0. The user ran
+  `check_intercore_startup_compile.sh` successfully, then completed
+  a full CM7 CubeIDE build with 0 errors and 0 warnings. The resulting
+  ELF contains `intercore_shared_memory_initialize`,
+  `gp_ipc_initialize`, `gp_traj_shared_initialize` and
+  `xStreamBufferGenericCreateStatic`. Final IPC and trajectory
+  objects remain at `0x38000000` / `0x38001000` with `NOBITS`.
+- **Stage 2E-3 — source committed, awaiting validation:** M4's
+  `intercore_startup_validation.c` checks the M7-created shared
+  structures through canonical `gp_ipc_valid()` and
+  `gp_traj_shared_valid()`, using fixed SRAM4 addresses. The M4
+  `main.c` user-code block calls this after the generated HSEM-0
+  wake and HAL initialization but before `osKernelInitialize()`.
+  Invalid shared state calls the existing `Error_Handler()`;
+  M4 never initializes or clears this memory. Source staging now
+  supports *both* firmware cores, and the ARM compile/startup-order
+  test covers M4 as well.
+- **Still pending:** run the updated ARM test, clean M4 CubeIDE build,
+  M4 ELF verification, ST-style EXTI/FreeRTOS notifications,
+  reset/partial-core recovery assessment and real MCU tests.
 
 **Important:** ST's example covers cold-boot sequencing and one-way
 Message Buffer demonstration. It does not establish safe partial-core
@@ -389,21 +400,25 @@ the standalone Windows verifier, stage exact copies using:
 bash Firmware/Tests/stage_intercore_headers.sh "<verification-project-root>"
 ```
 
-For Stage 2E-2, also stage the canonical M7 source code:
+For Stage 2E-2 and 2E-3, stage the canonical sources for both cores:
 
 ```bash
 bash Firmware/Tests/stage_intercore_sources.sh "<verification-project-root>"
 ```
 
 This copies exactly `ipc_mailbox_freertos.c` and
-`trajectory_stream.c` into the *separate* CubeIDE verification
-workspace without modifying canonical `Intercore/` code. The FreeRTOS
+`trajectory_stream.c` into **each core** of the separate CubeIDE
+verification workspace without modifying canonical `Intercore/` code. The FreeRTOS
 backend compilation unit now selects its own compile-time backend mode;
 the existing `ipc_mailbox.c` host-only implementation must **not** be
 compiled into CM7. Neither staging script copies HAL startup or edits
-ST-generated RTOS/driver files. Run a clean M7 CubeIDE build after
-staging, and recheck actual ELF symbols; then implement M4's
-post-HSEM validity gate in a separate change.
+ST-generated RTOS/driver files. For Stage 2E-3, copy the tracked M4 files
+`CM4/Core/Src/main.c`, `CM4/Core/Src/intercore_startup_validation.c`
+and `CM4/Core/Inc/intercore_startup_validation.h` into the verifier
+before staging. Run `check_intercore_startup_compile.sh`, then build
+M4 in CubeIDE and inspect its ELF. The M4 ELF should have its validator
+and native ABI readers but **must not** define the M7-owned
+`intercore_ipc_shared` or `intercore_trajectory_shared` symbols.
 Do not describe Stage 2E as complete.
 
 ## 4. Follow-up implementation checkpoints
