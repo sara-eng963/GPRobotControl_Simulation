@@ -18,11 +18,9 @@ typedef struct {
     uint64_t finish_us;
     uint64_t duration_us;
     uint64_t interval_us;
-    uint64_t scheduled_us;
-    int64_t start_late_us;
-    int64_t finish_late_us;
+    /* Measured body overrun only; actual RTOS release timestamps unavailable. */
     uint32_t dropped_total;
-    uint8_t missed_deadline;
+    uint8_t execution_budget_overrun;
     uint8_t success;
 } GpTimingSample;
 
@@ -32,7 +30,6 @@ typedef struct {
     uint32_t tail;         /* logger only writes */
     uint32_t dropped;      /* producer only writes */
     uint64_t count;        /* producer only writes */
-    uint64_t first_start;  /* producer only writes */
     uint64_t last_start;   /* producer only writes */
     uint64_t began_us;     /* producer only writes */
     bool in_progress;      /* producer only writes */
@@ -73,16 +70,14 @@ static void write_sample(unsigned source, const GpTimingSample *s)
 {
     const GpTimingDefinition *def = &defs[source];
     fprintf(output,
-        "1,%s,%s,%" PRIu64 ",%u,%" PRIu64 ",%" PRIu64 ","
+        "2,%s,%s,%" PRIu64 ",%u,%" PRIu64 ",%" PRIu64 ","
         "%" PRIu64 ",%" PRIu64 ",",
         def->name, def->kind, s->sequence, def->period_us,
         s->start_us, s->finish_us, s->duration_us, s->interval_us);
     if (def->period_us != 0U)
-        fprintf(output, "%" PRIu64 ",%" PRId64 ",%" PRId64 ",%u,",
-                s->scheduled_us, s->start_late_us, s->finish_late_us,
-                (unsigned)s->missed_deadline);
+        fprintf(output, "%u,", (unsigned)s->execution_budget_overrun);
     else
-        fputs(",,,,", output); /* scheduled, start_late, finish_late, missed */
+        fputs(",", output); /* No periodic execution budget. */
     fprintf(output, "%u,%u\n", (unsigned)s->success, s->dropped_total);
 }
 
@@ -124,8 +119,8 @@ bool gp_timing_init(const char *csv_path)
         return false;
     }
     fputs("schema_version,source,kind,sequence,period_us,start_us,finish_us,"
-          "duration_us,interval_us,scheduled_us,start_lateness_us,"
-          "finish_lateness_us,missed_deadline,success,dropped_total\n", output);
+          "duration_us,interval_us,execution_budget_overrun,"
+          "success,dropped_total\n", output);
     if (fflush(output) != 0) {
         fclose(output);
         output = NULL;
@@ -163,7 +158,6 @@ void gp_timing_end(GpTimingSource source, bool success)
     const uint64_t started_us = ring->began_us;
     ring->in_progress = false;
     const uint64_t sequence = ring->count++;
-    if (sequence == 0U) ring->first_start = started_us;
     const uint64_t last_start = ring->last_start;
     ring->last_start = started_us;
 
@@ -176,16 +170,9 @@ void gp_timing_end(GpTimingSource source, bool success)
     sample.interval_us = sequence > 0U && started_us >= last_start
         ? started_us - last_start : 0U;
     const uint32_t period = defs[source].period_us;
-    if (period != 0U) {
-        sample.scheduled_us = ring->first_start +
-            sequence * (uint64_t)period;
-        sample.start_late_us =
-            (int64_t)started_us - (int64_t)sample.scheduled_us;
-        sample.finish_late_us =
-            (int64_t)finished_us -
-            (int64_t)(sample.scheduled_us + period);
-        sample.missed_deadline = (uint8_t)(sample.finish_late_us > 0);
-    }
+    if (period != 0U)
+        sample.execution_budget_overrun =
+            (uint8_t)(sample.duration_us > period);
     sample.success = (uint8_t)(success ? 1U : 0U);
     const uint32_t head =
         __atomic_load_n(&ring->head, __ATOMIC_RELAXED);
