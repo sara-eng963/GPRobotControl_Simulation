@@ -50,9 +50,9 @@ typedef struct {
 #if (configSUPPORT_STATIC_ALLOCATION != 1)
 #error "The STM32 inter-core message-buffer backend requires FreeRTOS static allocation"
 #endif
-#if (configUSE_STREAM_BUFFERS != 1)
-#error "The STM32 inter-core message-buffer backend requires FreeRTOS stream buffers"
-#endif
+/* FreeRTOS 10.6.2 message_buffer.h includes stream_buffer.h and has no
+ * configUSE_STREAM_BUFFERS feature toggle. Compilation and linking of the
+ * vendor stream_buffer.c is verified by the firmware build instead. */
 
 /* 16 whole 60-byte messages plus the FreeRTOS size_t length prefix.
  * One extra byte compensates for the underlying stream-buffer sentinel. */
