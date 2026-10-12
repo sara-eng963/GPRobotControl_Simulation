@@ -49,52 +49,59 @@ Optional plotting:
 \`python3 -m pip install matplotlib\`. Without matplotlib the analyzer still
 produces CSV/Markdown summaries. Use \`--no-plots\` to suppress PNGs.
 
-## Raw CSV contract
+## Raw CSV contracts
 
-\`schema_version,source,kind,sequence,period_us,start_us,finish_us,duration_us,interval_us,scheduled_us,start_lateness_us,finish_lateness_us,missed_deadline,success,dropped_total\`
+**Current recorder (schema v2):**
 
-- \`start_us\` and \`finish_us\`: microseconds since instrumentation startup
-  (CLOCK_MONOTONIC); duration is time spent within the instrumented routine.
-  It includes scheduling preemption and instrumentation overhead.
-- \`supervisor\`: complete 1 ms control-loop body, excluding vTaskDelayUntil.
-  Period and nominal deadline both 1000 us.
-- \`hmi\`: 10 ms period and deadline.
-- \`sim_inputs\`, \`prefetch\`: best-effort RTOS tasks (their vTaskDelay(1)
-  does **not** imply a fixed absolute 1 ms periodic release).
-- \`validation\`: one numerical validation step in the lower-priority worker.
-- \`flash_storage\`: one M4-role task step, including actual simulated NOR
-  callback time when an operation is queued. This is still a POSIX single-
-  scheduler M4-role simulation, not the physical STM32 M4.
-- \`can_targets\`: call duration of SIX RPDO4 target frames plus SYNC.
-  The events can be absent when no motion command is sent.
-  No pretend 2 ms deadline is assigned to intermittent motion episodes.
-- \`scheduled_us\` = first observed release + sequence * nominal period.
-- \`start_lateness_us\` = actual start - scheduled start, signed.
-- \`finish_lateness_us\` = actual finish - (scheduled start + period).
-- \`missed_deadline\` is 1 only if a periodic task finishes after that
-  nominal period boundary. Nonperiodic rows leave those columns empty.
-- \`interval_us\` = spacing between two recorded starts from the same source.
-- \`success\` = whether the measured call returned success (for CAN/flash
-  operations); not necessarily robot operation success.
-- \`dropped_total\` = cumulative logger ring saturation count. A nonzero
-  count means the observed percentiles may be biased/incomplete.
+`schema_version,source,kind,sequence,period_us,start_us,finish_us,duration_us,interval_us,execution_budget_overrun,success,dropped_total`
+
+- `start_us` / `finish_us`: timestamps from CLOCK_MONOTONIC in microseconds
+  since instrumentation startup.
+- `duration_us`: elapsed wall time spent executing the measured function.
+  This includes time preempted by WSL/POSIX scheduling.
+- `interval_us`: elapsed wall time since the previous execution started.
+- `execution_budget_overrun`: for *periodic* tasks only, 1 if
+  `duration_us > period_us`. This is NOT an actual release-to-deadline miss
+  and says nothing about when the FreeRTOS task was released.
+- `success`: whether the instrumented callback returned success.
+- `dropped_total`: number of ring-buffer logging records lost due to
+  saturation; a nonzero count makes observed percentiles incomplete.
+- `supervisor`: nominal 1000 us execution budget; `hmi`: nominal
+  10000 us execution budget. `sim_inputs`, `prefetch`,
+  `validation`, `flash_storage` and `can_targets` have no periodic
+  execution-deadline classification in this host instrumentation.
+
+**Old schema v1:** previous logs include `scheduled_us`,
+`start_lateness_us`, `finish_lateness_us`, and `missed_deadline`.
+The old deadline calculation compared every cycle to
+`first_start + n * nominal_period`, so it accumulated POSIX/WSL
+scheduler/tick drift and produced misleading near-100%-miss counts.
+**Do not cite or interpret those four old values as actual misses.**
+The updated Python analyzer ignores them and recomputes trustworthy
+descriptive statistics from `start_us`, `duration_us`, and `period_us`.
+You do not need to rerun your two ~67-second scenarios.
 
 ## Reading the output
 
-- \`P99 execution time\`: 99% of *recorded* calls finished no slower than
-  this duration; it is not a true worst-case execution-time proof.
-- \`max execution time\`: maximum **observed** wall time in this run.
-- \`P99 start lateness\`: 99th percentile of release delay relative to the
-  first cycle's nominal FreeRTOS schedule.
-- \`deadline misses\`: observed completion later than its nominal next release.
-  Even zero misses on a host run is not an STM32 timing guarantee.
-- \`CAN burst jitter\`: differences between successive CAN target-command
-  **host calls** inside runs of >=10 commands with gaps <=5 ms.
-  Do not equate these with CAN bus frame delivery or command-to-drive latency.
-  Hardware CAN 2.0 bit timing is analyzed independently.
-- Compare \`baseline\` and \`flash\` to see whether background storage changes
-  Supervisor execution duration, lateness, or misses. Compare under the
-  same WSL/host load, clock and logging configuration.
+- `P99 execution time`: 99% of **observed** calls were this fast or
+  faster. Not a worst-case execution time proof.
+- `Max execution time`: largest measured wall duration in the run.
+- `Execution-budget overruns`: number of periodic task bodies that
+  actually took longer than their 1 ms / 10 ms budget.
+- `Mean/P99 start interval`: actual spacing between consecutive recorded
+  invocations; a better host wake/pacing diagnostic than accumulating
+  lateness from the beginning of the test.
+- `Intervals over 1.5x nominal period`: **heuristic gap counter**,
+  not a proven hard deadline-miss count. For the Supervisor, this is
+  a start gap exceeding 1500 us; for HMI, exceeding 15000 us.
+- `CAN target-command bursts`: gaps between host API calls sending
+  six RPDO4 frames + SYNC; this does NOT measure physical CAN wire timing.
+
+Compare `baseline.csv` and `flash.csv` on execution P99/max,
+observed start spacing, and overruns. Any deterioration is descriptive
+under the measured PC load; repeat runs are recommended. The recorder
+does **not** have the FreeRTOS tick ISR wall-clock timestamp needed to
+attribute a delayed wake exactly to RTOS release lateness.
 
 ## Limitations / sign-off
 
