@@ -2,7 +2,7 @@
 #define GP_HOST_TIMING_TRACE_H
 
 /* POSIX-only instrumentation. Never link this module into STM32 firmware.
- * A single RTOS task writes each named ring; a separate low-priority host
+ * A single RTOS task writes each named ring; a separate background host
  * pthread drains the rings to CSV. The measured code NEVER writes files,
  * blocks, locks a mutex, allocates memory, or waits for the logger.
  */
