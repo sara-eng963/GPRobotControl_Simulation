@@ -123,20 +123,23 @@ or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
   Full CM4 CubeIDE build: 0 errors, 0 warnings. The M4 ELF contains
   the validation functions but defines no M7-owned shared objects;
   its reserved linker sections have zero length.
-- **2E-4 (verified at software-build level, 2026-10-12):**
+- **2E-4 (complete at static software-verification level, 2026-10-12):**
   `Common/Src/intercore_notifications.c` adapts ST's EXTI
   SW-interrupt pattern bidirectionally: EXTI0 signals M7→M4,
   EXTI1 signals M4→M7. FreeRTOS
-  `xMessageBufferSendCompletedFromISR()` is invoked only when
-  the recipient's kernel is running. The STM32H745 vendor device
-  header supplies `DUAL_CORE` without a redundant compiler define.
-  `bash Firmware/Tests/check_intercore_notifications.sh` passed
-  CM7/CM4 compilation, IRQ binding and startup-order checks. The
-  user then successfully built **both STM32CubeIDE projects**:
-  CM7 and CM4 each had **0 errors and 0 warnings**. Final ELF
-  inspection, physical bidirectional EXTI delivery, application
-  IPC-task response, and reset-recovery verification remain pending.
-  Message Buffer application receives are still nonblocking.
+  `xMessageBufferSendCompletedFromISR()` is used only while the
+  receiving core's scheduler is running; STM32H745 CMSIS defines
+  `DUAL_CORE` itself. The ARM compile/startup test passed and
+  both complete CubeIDE builds reported **0 errors and 0 warnings**.
+  Final ELF inspection also passed: strong CM7
+  `EXTI1_IRQHandler` and strong CM4 `EXTI0_IRQHandler`,
+  with the opposite handlers remaining weak startup defaults.
+  Both ELF files contain `intercore_notifications_initialize`,
+  `intercore_notifications_handle_irq` and
+  `xStreamBufferSendCompletedFromISR`. Physical bidirectional
+  EXTI signaling, application-task IPC response and independent-core
+  reset recovery are **not** verified; Message Buffer application
+  receives remain nonblocking.
 
 See the [Stage 2 engineering record](STAGE2_SHARED_SRAM4_MPU.md)
 for detailed decision rationale, test evidence and remaining risks.
