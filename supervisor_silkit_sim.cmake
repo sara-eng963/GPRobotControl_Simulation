@@ -13,6 +13,7 @@ if(ENABLE_SILKIT)
         ${CMAKE_SOURCE_DIR}/Simulation/Renode/Storage/w25q512jv_flash.c
         ${CMAKE_SOURCE_DIR}/Simulation/Renode/Storage/qspi_nor_validated_storage.c
         ${CMAKE_SOURCE_DIR}/HMI/hmi_task.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Timing/host_timing_trace.c
         ${CMAKE_SOURCE_DIR}/StateMachine/supervisor_task.c
         ${CMAKE_SOURCE_DIR}/StateMachine/supervisor_io.c
         ${CMAKE_SOURCE_DIR}/StateMachine/state_machine.c
@@ -53,6 +54,7 @@ if(ENABLE_SILKIT)
         PRIVATE
         -Wall
         -Wextra
+        -DGP_HOST_TIMING=1
         -Werror=implicit-function-declaration
         -Werror=incompatible-pointer-types
     )
