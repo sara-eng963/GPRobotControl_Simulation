@@ -17,6 +17,7 @@
 
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
+#include "gp_shared_sram4_layout.h"
 
 _Static_assert(sizeof(void *) == 4U, "Expected ARM 32-bit pointer layout");
 _Static_assert(sizeof(size_t) == 4U, "Expected ARM 32-bit size_t layout");
@@ -25,8 +26,12 @@ _Static_assert(sizeof(GpTrajectorySample) == 24U, "Trajectory sample ABI drift")
 _Static_assert(GP_TRAJ_CAPACITY == 512U, "Unexpected trajectory capacity");
 _Static_assert(_Alignof(GpTrajectoryShared) >= 32U,
                "Trajectory sample alignment requires 32 bytes");
-_Static_assert((sizeof(GpIpcShared) + sizeof(GpTrajectoryShared)) <= 65536U,
-               "Shared objects exceed the entire SRAM4 physical capacity");
+_Static_assert(sizeof(GpIpcShared) <= GP_SHARED_IPC_BYTES,
+               "IPC storage exceeds its 4 KiB reservation");
+_Static_assert(sizeof(GpTrajectoryShared) <= GP_SHARED_TRAJECTORY_BYTES,
+               "Trajectory storage exceeds its 16 KiB reservation");
+_Static_assert((sizeof(GpIpcShared) + sizeof(GpTrajectoryShared)) <= GP_SHARED_BYTES,
+               "Objects exceed shared MPU window");
 
 #define GP_PROBE __attribute__((used))
 /* The following are BSS probe objects, not actual firmware allocations. */
