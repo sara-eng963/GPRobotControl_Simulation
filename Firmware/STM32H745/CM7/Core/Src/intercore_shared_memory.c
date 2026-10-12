@@ -13,6 +13,7 @@
 #define GP_IPC_FREERTOS_BACKEND 1
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
+#include "intercore_shared_memory.h"
 #include "../../../Common/Inc/sram4_memory_map.h"
 
 _Static_assert(sizeof(GpIpcShared) <= GP_SHARED_IPC_BYTES,
@@ -30,3 +31,21 @@ GpIpcShared intercore_ipc_shared
 
 GpTrajectoryShared intercore_trajectory_shared
     __attribute__((used, aligned(32), section(".gp_shared_trajectory")));
+
+/* ST's FreeRTOS_AMP_Dual_RTOS initializes static message buffers before
+ * releasing CM4 from STOP via HSEM-0. No separate boot protocol is needed
+ * for the initial cold-start sequencing.
+ *
+ * The target's ipc_mailbox_freertos.c uses xMessageBufferCreateStatic().
+ * Both objects must be initialized with M4 still quiescent. A failure
+ * prevents M7 from releasing M4, avoiding partially initialized IPC.
+ */
+bool intercore_shared_memory_initialize(void)
+{
+    gp_ipc_initialize(&intercore_ipc_shared);
+    if (!gp_ipc_valid(&intercore_ipc_shared))
+        return false;
+
+    gp_traj_shared_initialize(&intercore_trajectory_shared);
+    return gp_traj_shared_valid(&intercore_trajectory_shared);
+}
