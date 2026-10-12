@@ -35,9 +35,24 @@ not pretend that the existing single-RTOS POSIX simulator is already dual-core.
   M4 validates them on wake. Its `sbSEND_COMPLETED` hook, EXTI0 SW
   interrupt and `xMessageBufferSendCompletedFromISR` implement
   notification to the receiving kernel.
-- Our target's current `gp_ipc_set_notifier` API is not the same as
-  ST's published EXTI completion path. We must port or justify a
-  replacement and test reverse-direction notifications explicitly.
+- **Production EXTI adapter (Stage 2E-4, pending validation):**
+  `Firmware/STM32H745/Common/Src/intercore_notifications.c` adapts
+  ST's HAL EXTI SW-interrupt/FreeRTOS completion pattern for both
+  directions. It reuses the backend's **successful zero-timeout send**
+  notifier instead of ST's separate control Message Buffer and
+  `sbSEND_COMPLETED` hook. EXTI0 carries M7→M4, EXTI1 carries
+  M4→M7; each receiving ISR calls the FreeRTOS
+  `xMessageBufferSendCompletedFromISR` helper only if that core's
+  scheduler is running. Both CubeIDE projects must compile the ST HAL
+  with `DUAL_CORE` enabled for proper C2 interrupt register handling.
+  GPIO EXTI0/1 are reserved for IPC on the production pin map.
+- This adapter is **not a blocking bidirectional FreeRTOS transport**.
+  IPC sends and receives remain strictly nonblocking, and no IPC
+  consumer task is registered to wait for an interrupt yet. EXTI events
+  may coalesce, so consuming tasks must drain queues. Physical delivery,
+  missing-interrupt handling, latency and independent-core reset
+  recovery remain unverified. The older HSEM 24–27 adapter/mock tests
+  are separate exploratory code, not linked into this firmware.
 - Initialize shared objects exactly once, with both cores quiescent.
   Never reset a live mailbox. Handle full queues and stale messages at
   the application layer. This is not a physical safety mechanism.
