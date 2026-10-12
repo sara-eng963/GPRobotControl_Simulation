@@ -5,6 +5,31 @@ on:
       - fix/trajectory-time-paced-scheduling
   workflow_dispatch:
 jobs:
+  full-host-cmake:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install host graphics build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev \
+            libxi-dev libgl1-mesa-dev libxcursor-dev libxinerama-dev \
+            libxkbcommon-dev
+      - name: Get FreeRTOS POSIX port beside robot repo
+        run: |
+          git clone --depth 1 --branch V11.2.0 \
+            https://github.com/FreeRTOS/FreeRTOS-Kernel.git ../FreeRTOS-Kernel
+      - name: Configure and build all non-SIL Kit targets
+        run: |
+          cmake -S . -B build-all-host -DENABLE_SILKIT=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-all-host --parallel 4
+      - name: Run entire configured non-SIL Kit CTest suite
+        run: |
+          ctest --test-dir build-all-host --output-on-failure --parallel 2
+
   host-unit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
