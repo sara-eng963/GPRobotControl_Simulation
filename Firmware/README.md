@@ -108,12 +108,19 @@ or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
   `0x38000000..0x38007FFF` (normal, shareable, non-cacheable,
   non-executable) committed; both firmware builds passed. Actual caches
   are currently disabled, and hardware MPU effects remain unverified.
-- **2E (in progress):** adopt ST's official STM32H745
-  `FreeRTOS_AMP_Dual_RTOS` example: M7 creates static shared Message
-  Buffers **before releasing M4 through HSEM-0**, M4 verifies them, and
-  ST's FreeRTOS/EXTI completion pattern notifies the peer. The obsolete
-  `configUSE_STREAM_BUFFERS` guard and probe-only shims were removed;
-  production object placement and boot/notification wiring are pending.
+- **2E-1 (verified):** full CM7 CubeIDE build succeeded (0 errors,
+  0 warnings). Actual firmware ELF contained
+  `intercore_ipc_shared` at `0x38000000` and
+  `intercore_trajectory_shared` at `0x38001000`, both `NOBITS`.
+- **2E-2 (code integrated, awaiting build):** M7 initializes static
+  FreeRTOS Message Buffers and the trajectory region before HSEM-0
+  releases M4, using the published ST `FreeRTOS_AMP_Dual_RTOS`
+  cold-boot ordering. Run
+  `bash Firmware/Tests/check_intercore_startup_compile.sh`, stage the
+  canonical `Intercore/*.c` sources with
+  `bash Firmware/Tests/stage_intercore_sources.sh "<verifier>"`, then
+  complete a clean CM7 firmware build. CM4 validation, EXTI notification,
+  fault/recovery testing and hardware operation remain pending.
 
 See the [Stage 2 engineering record](STAGE2_SHARED_SRAM4_MPU.md)
 for detailed decision rationale, test evidence and remaining risks.
