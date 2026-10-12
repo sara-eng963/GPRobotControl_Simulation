@@ -203,6 +203,22 @@ bool trajectory_prefetch_refill(TrajectoryPrefetch *s)
     return true;
 }
 
+bool trajectory_prefetch_skip(TrajectoryPrefetch *s,
+                              uint32_t expected_index, uint32_t count)
+{
+    if (s == NULL || lifecycle(s) != TRAJECTORY_PREFETCH_EXECUTING ||
+        !__atomic_load_n(&s->armed, ACQUIRE) ||
+        __atomic_load_n(&s->read_failed, ACQUIRE)) return false;
+    const uint32_t r = __atomic_load_n(&s->consumed, RELAXED);
+    const uint32_t w = __atomic_load_n(&s->written, ACQUIRE);
+    if (expected_index != r || w < r || count > w - r) {
+        if (w >= r && count > w - r) s->underruns++;
+        return false;
+    }
+    __atomic_store_n(&s->consumed, r + count, RELEASE);
+    return true;
+}
+
 bool trajectory_prefetch_take(TrajectoryPrefetch *s,
                               uint32_t expected_index,
                               PvExecutionSample *out)

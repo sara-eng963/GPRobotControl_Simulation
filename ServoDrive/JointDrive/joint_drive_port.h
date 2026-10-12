@@ -22,6 +22,8 @@ typedef struct {
     bool feedback_valid;
     bool operation_enabled;
     int32_t actual_position_units;
+    uint64_t timestamp_us;
+    uint32_t sequence;
 } JointDriveAxisFeedback;
 
 typedef struct {

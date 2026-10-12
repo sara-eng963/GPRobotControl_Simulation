@@ -71,6 +71,12 @@ typedef struct
 /* RTOS-independent callback: runtime access must originate from its one owner. */
 typedef bool (*CanopenMasterOwnerCheck)(void *context);
 
+typedef struct {
+    int32_t value;
+    uint64_t timestamp_us;
+    bool valid;
+} CanopenTpdoLatest;
+
 typedef struct
 {
     CanBackend *backend;
@@ -90,6 +96,7 @@ typedef struct
 
     /* Monotonic per-node TPDO4 receive counters for cyclic freshness checks. */
     uint32_t tpdo_rx_count[JOINT_DRIVE_AXES];
+    CanopenTpdoLatest latest_tpdo[JOINT_DRIVE_AXES];
 
     CanopenMasterSdoTransaction sdo;
 

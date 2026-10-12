@@ -83,6 +83,10 @@ bool trajectory_prefetch_refill(TrajectoryPrefetch *stream);
 bool trajectory_prefetch_take(TrajectoryPrefetch *stream,
                               uint32_t expected_index,
                               PvExecutionSample *out);
+/* O(1) SRAM-only consumer discard for missed sample deadlines.
+ * Fails closed rather than advancing past M4's committed samples. */
+bool trajectory_prefetch_skip(TrajectoryPrefetch *stream,
+                              uint32_t expected_index, uint32_t count);
 
 /* Readiness check for the start-motion preflight (must be used before
  * enabling production welding / issuing the first trajectory sample). */

@@ -31,13 +31,15 @@ static bool all_feedback_valid(void *context)
 static bool read_axis(void *context, size_t axis, JointDriveAxisFeedback *feedback)
 {
     if (feedback == NULL) return false;
-    const AvatarMDrive *drive =
-        canopen_master_drive((const CanopenMaster *)context, axis);
+    const CanopenMaster *master = (const CanopenMaster *)context;
+    const AvatarMDrive *drive = canopen_master_drive(master, axis);
     if (drive == NULL) return false;
     feedback->feedback_valid = drive->feedback_valid;
     feedback->operation_enabled =
         drive->cia402_state == CIA402_STATE_OPERATION_ENABLED;
-    feedback->actual_position_units = drive->feedback.actual_position;
+    feedback->actual_position_units = master->latest_tpdo[axis].value;
+    feedback->sequence = master->tpdo_rx_count[axis];
+    feedback->timestamp_us = master->latest_tpdo[axis].timestamp_us;
     return true;
 }
 

@@ -208,6 +208,7 @@ void canopen_master_clear_runtime(
 
         master->tpdo_rx_count[i] =
             0U;
+        memset(&master->latest_tpdo[i], 0, sizeof(master->latest_tpdo[i]));
     }
 
     canopen_master_sdo_clear(
@@ -269,7 +270,8 @@ static void process_heartbeat(
 
 static bool process_tpdo4(
     CanopenMaster *master,
-    const CanFrame *frame
+    const CanFrame *frame,
+    uint64_t now_us
 )
 {
     for (uint8_t i = 0U; i < master->node_count; ++i)
@@ -290,6 +292,10 @@ static bool process_tpdo4(
             if (parsed)
             {
                 master->tpdo_rx_count[i]++;
+                master->latest_tpdo[i].value =
+                    master->drives[i].feedback.actual_position;
+                master->latest_tpdo[i].timestamp_us = now_us;
+                master->latest_tpdo[i].valid = true;
             }
 
             return parsed;
@@ -479,9 +485,12 @@ bool canopen_master_poll(
             now_ms
         );
 
+        /* CANopen-owner receive observation, 1-ms quantized until
+         * the platform supplies a hardware microsecond time source. */
         (void)process_tpdo4(
             master,
-            &frame
+            &frame,
+            (uint64_t)now_ms * UINT64_C(1000)
         );
 
         process_sdo_response(

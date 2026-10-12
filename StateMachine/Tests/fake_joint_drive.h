@@ -44,6 +44,7 @@ static inline void fake_joint_drive_reset(FakeDrive *fake)
         fake->axis[i].feedback_valid = true;
         fake->axis[i].operation_enabled = true;
         fake->sequence[i] = 1U;
+        fake->axis[i].sequence = 1U;
     }
 }
 
@@ -56,13 +57,14 @@ static inline bool fake_drive_is_configured(void *ctx)
 
 static inline bool fake_drive_poll(void *ctx, uint32_t now_ms)
 {
-    (void)now_ms;
     FakeDrive *fake = (FakeDrive *)ctx;
     ++fake->polls;
     if (fake->pending_feedback && fake->auto_feedback) {
         for (size_t i = 0; i < JOINT_DRIVE_AXES; ++i) {
             fake->axis[i].actual_position_units = fake->last_targets[i];
             ++fake->sequence[i];
+            fake->axis[i].sequence = fake->sequence[i];
+            fake->axis[i].timestamp_us = (uint64_t)now_ms * 1000U;
         }
         fake->pending_feedback = false;
     }
@@ -98,6 +100,7 @@ static inline bool fake_drive_read_axis(
 
     ++fake->reads;
     *out = fake->axis[axis];
+    out->sequence = fake->sequence[axis];
     return true;
 }
 
