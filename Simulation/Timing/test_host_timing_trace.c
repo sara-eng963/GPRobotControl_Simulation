@@ -25,7 +25,7 @@ int main(void)
     char line[512];
     unsigned lines = 0U, supervisor = 0U, can = 0U;
     if (!fgets(line, sizeof(line), file) ||
-        strstr(line, "missed_deadline") == NULL) return 3;
+        strstr(line, "execution_budget_overrun") == NULL) return 3;
     while (fgets(line, sizeof(line), file)) {
         ++lines;
         if (strstr(line, ",supervisor,periodic,")) ++supervisor;
