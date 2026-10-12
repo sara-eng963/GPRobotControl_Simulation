@@ -177,7 +177,11 @@ bool gp_traj_m7_begin(GpTrajectoryConsumer *consumer,
         __atomic_load_n(&shared->read_error, GP_ACQUIRE) != 0U)
         return false;
     const uint32_t epoch = __atomic_load_n(&shared->epoch, GP_ACQUIRE);
+    /* A stream already released/discarded by M7 must not be reopened
+     * while M4 still considers it READY (before release acknowledgement).
+     * Otherwise M4 could reuse the ring underneath a new reader. */
     if (epoch == 0U || epoch == consumer->epoch ||
+        __atomic_load_n(&shared->release_epoch, GP_ACQUIRE) == epoch ||
         !identity_equal(expected, &shared->identity))
         return false;
     const uint32_t minimum =
