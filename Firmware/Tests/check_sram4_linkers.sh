@@ -45,4 +45,4 @@ for core in CM7 CM4; do
     done
 done
 echo "PASS: Stage 2C synthetic linker placement on both cores and both link modes"
-echo "NOTE: full CubeIDE firmware builds and hardware MPU remain unverified."
+echo "NOTE: this synthetic test does not itself run full CubeIDE builds or hardware MPU checks."
