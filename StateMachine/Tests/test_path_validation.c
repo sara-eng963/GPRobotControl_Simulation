@@ -10,6 +10,7 @@
 #include "math3d.h"
 #include "robot_config.h"
 #include "avatar_m_position.h"
+#include "../../Intercore/validation_storage_bridge.h"
 
 #define TEST_GEOMETRY_CAPACITY 512U
 #define TEST_STORAGE_CAPACITY  10000U
@@ -411,6 +412,74 @@ int main(void)
         (double)artifact.duration_s,
         (unsigned long)artifact.artifact_crc
     );
+
+    /* Re-run the SAME numerical validator against a bounded M7/M4 bridge.
+     * Give M4 only one flash operation per M7 validation batch, forcing
+     * queue backpressure and a delayed durable COMMIT acknowledgement.
+     * Both runs must produce exactly the same immutable artifact CRC. */
+    const uint32_t baseline_data_crc = artifact.sample_data_crc;
+    const uint32_t baseline_artifact_crc = artifact.artifact_crc;
+    const uint32_t baseline_count = artifact.sample_count;
+    static GpValidationShared async_shared;
+    GpValidationM7Client client;
+    GpValidationM4Worker flash_worker;
+    gp_validation_shared_initialize(&async_shared);
+    gp_validation_m7_init(&client, &async_shared);
+    if (!gp_validation_m4_init(&flash_worker, &async_shared, &storage))
+    {
+        puts("Could not create the M4 flash-owner worker.");
+        return 1;
+    }
+    PathValidationStorage async_storage =
+        gp_validation_m7_storage(&client, TEST_STORAGE_CAPACITY);
+    state_path_validation_enter(
+        &state, &robot, scales, &config, &services, &workspace,
+        &async_storage, &artifact, &program,
+        program.draft_revision, program.draft_crc
+    );
+    if (state.result != PV_RESULT_RUNNING)
+    {
+        puts("M7 async validation failed during begin.");
+        return 1;
+    }
+    step = STATE_STEP_RUNNING;
+    bool saw_backpressure = false;
+    bool saw_commit_wait = false;
+    for (uint32_t iteration = 0U;
+         iteration < 20000U && step == STATE_STEP_RUNNING; ++iteration)
+    {
+        step = state_path_validation_step(&state, 64U, &outputs);
+        if (state.sample_pending) saw_backpressure = true;
+        if (state.phase == PV_PHASE_FINALIZE) saw_commit_wait = true;
+        if (step == STATE_STEP_COMPLETE && !test_storage.committed)
+        {
+            puts("M7 validation returned before durable M4 flash commit.");
+            return 1;
+        }
+        if ((iteration % 2U) == 0U)
+            (void)gp_validation_m4_step(&flash_worker);
+    }
+    if (step != STATE_STEP_COMPLETE || outputs.report.result != PV_RESULT_VALID ||
+        !test_storage.committed || !saw_backpressure || !saw_commit_wait ||
+        artifact.sample_count != baseline_count ||
+        artifact.sample_data_crc != baseline_data_crc ||
+        artifact.artifact_crc != baseline_artifact_crc ||
+        flash_worker.next_index != baseline_count)
+    {
+        printf("ASYNC VALIDATION FAILED: phase=%d error=%d samples=%u/%u "
+               "backpressure=%d commit_wait=%d\n", (int)state.phase,
+               (int)state.error, artifact.sample_count, baseline_count,
+               (int)saw_backpressure, (int)saw_commit_wait);
+        return 1;
+    }
+    if (!gp_validation_m4_step(&flash_worker) ||
+        !gp_validation_m4_idle(&async_shared))
+    {
+        puts("M4 release after durable commit failed.");
+        return 1;
+    }
+    puts("[PASS] Same sample CRC and artifact CRC after M7/M4 queue pressure, "
+         "with VALID gated by the M4 durable commit.");
 
     puts(
         "============================================================\n"
