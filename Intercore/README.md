@@ -43,8 +43,9 @@ not pretend that the existing single-RTOS POSIX simulator is already dual-core.
   `sbSEND_COMPLETED` hook. EXTI0 carries M7→M4, EXTI1 carries
   M4→M7; each receiving ISR calls the FreeRTOS
   `xMessageBufferSendCompletedFromISR` helper only if that core's
-  scheduler is running. Both CubeIDE projects must compile the ST HAL
-  with `DUAL_CORE` enabled for proper C2 interrupt register handling.
+  scheduler is running. Both CubeIDE projects inherit `DUAL_CORE` from the STM32H745
+  CMSIS device header for C2 interrupt-register handling; they must
+  **not** redundantly define the same macro through `-D` flags.
   GPIO EXTI0/1 are reserved for IPC on the production pin map.
 - This adapter is **not a blocking bidirectional FreeRTOS transport**.
   IPC sends and receives remain strictly nonblocking, and no IPC
