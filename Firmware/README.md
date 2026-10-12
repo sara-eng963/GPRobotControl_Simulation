@@ -97,3 +97,21 @@ core, then links them using **each of the four** CubeIDE FLASH/RAM linker
 scripts. It verifies fixed SRAM4 symbols, dedicated partitions and NOLOAD
 sections. This does **not** replace complete CM7/CM4 CubeIDE firmware builds
 or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
+
+### Stage 2D/2E firmware integration status
+
+- **2A/2B:** ARM ABI and shared-memory capacity test passed with both cores'
+  vendored FreeRTOS 10.6.2 headers.
+- **2C:** SRAM4 slot address and `NOLOAD` tests passed for CM7/CM4
+  FLASH/RAM linkers. Both baseline CubeIDE images were clean-rebuilt.
+- **2D:** CubeMX-generated M7 Region 1 configuration for
+  `0x38000000..0x38007FFF` (normal, shareable, non-cacheable,
+  non-executable) committed; both firmware builds passed. Actual caches
+  are currently disabled, and hardware MPU effects remain unverified.
+- **2E (next):** declare and link production shared objects, coordinate
+  one-time M7 initialization, and gate M4 access behind a separate
+  application-ready/ABI handshake. ST HSEM 0 wakes M4 **before** the
+  M7 kernel initialization; do not treat that wakeup as IPC readiness.
+
+See the [Stage 2 engineering record](STAGE2_SHARED_SRAM4_MPU.md)
+for detailed decision rationale, test evidence and remaining risks.
