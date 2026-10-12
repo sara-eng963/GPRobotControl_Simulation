@@ -315,9 +315,10 @@ def main() -> None:
     lines.extend([
         "", "## What to conclude",
         "",
-        "A test pass means only that the measured host run was functionally successful; observed timing must be reviewed separately. It does NOT imply it stayed within the nominal budget. "
-        "the selected nominal bounds under this workload. "
-        "It cannot prove worst-case STM32 timing, Cortex-M7/M4 contention, "
+        "A test pass establishes functional host-simulation success, not a "
+        "timing guarantee. Review task-body budgets and observed start-to-start "
+        "intervals separately. It cannot prove worst-case STM32 timing, "
+        "Cortex-M7/M4 contention, "
         "QSPI cache effects, or 1 Mbit/s CAN on-wire latency. "
         "For MCU sign-off, repeat with a DWT cycle counter, board GPIO traces, "
         "and real bus measurements.",
