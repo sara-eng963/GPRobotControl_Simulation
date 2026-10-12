@@ -24,7 +24,7 @@ jobs:
             https://github.com/FreeRTOS/FreeRTOS-Kernel.git ../FreeRTOS-Kernel
       - name: Configure and build all non-SIL Kit targets
         run: |
-          cmake -S . -B build-all-host -DENABLE_SILKIT=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build-all-host -DENABLE_SILKIT=OFF -DCMAKE_BUILD_TYPE=Debug
           cmake --build build-all-host --parallel 4
       - name: Run entire configured non-SIL Kit CTest suite
         run: |
