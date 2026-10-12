@@ -28,6 +28,8 @@ not pretend that the existing single-RTOS POSIX simulator is already dual-core.
 - Initialize exactly once while the other core is held waiting. Never reset a
   live mailbox. Handle full queues and stale messages at the application layer.
 
+See the [verified Stage 1 STM32H745 firmware record](../Firmware/STAGE1_DUAL_CORE_FOUNDATION.md) for the source-backed CubeMX settings and dual-image build evidence.
+
 ## STM32H745 integration gate
 - Allocate GpIpcShared in SRAM visible to both CPUs via BOTH linker scripts.
 - Configure Cortex-M7 MPU mapping as **non-cacheable**, and confirm physical
@@ -94,8 +96,11 @@ ring in cached M7 SRAM without a designed cache-maintenance protocol.
 
 ### Boundaries not yet implemented
 
-- Two STM32 firmware images, M4 QSPI driver ownership, actual shared-SRAM
-  linker placement, M7 MPU non-cacheable region and M7/M4 boot via HSEM.
+- Linking the existing IPC and trajectory modules into the now-generated,
+  independently buildable CM7/CM4 firmware images; M4 QSPI driver ownership,
+  actual shared-SRAM linker placement, M7 MPU non-cacheable region and
+  application-level M7/M4 IPC startup handshake. The ST-generated boot
+  scaffold is present but not hardware-validated.
 - Production integration with the current SIL Kit `validated_prefetch`;
   intentionally kept unchanged to protect existing regression behavior.
 - Hardware timing, cache, reset/recovery, DMA consistency and bus contention.
