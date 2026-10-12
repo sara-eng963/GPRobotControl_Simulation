@@ -6,15 +6,6 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* FreeRTOS 10.6.2 provides stream buffers without requiring this config flag.
- * The robot's current IPC header, however, requires it to be explicitly 1.
- * For THIS AUDIT only, satisfy that application-level guard without editing
- * generated firmware configurations or claiming target integration passed.
- */
-#ifndef configUSE_STREAM_BUFFERS
-#define configUSE_STREAM_BUFFERS 1
-#endif
-
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
 #include "gp_shared_sram4_layout.h"
