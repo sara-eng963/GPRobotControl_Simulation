@@ -1,0 +1,33 @@
+name: Host timing recorder
+
+on:
+  push:
+    branches:
+      - fix/real-time-timing-metrics
+    paths:
+      - 'Simulation/Timing/**'
+      - 'scripts/analyze_timing_csv.py'
+      - 'scripts/run_timing_benchmark.sh'
+      - '.github/workflows/host-timing.yml'
+  workflow_dispatch:
+
+jobs:
+  recorder-and-analyzer-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile POSIX timing recorder and its smoke test
+        run: |
+          set -euo pipefail
+          mkdir -p build-timing
+          cc -std=c11 -Wall -Wextra -Werror -O2 -pthread \
+            -I Simulation/Timing \
+            Simulation/Timing/host_timing_trace.c \
+            Simulation/Timing/test_host_timing_trace.c \
+            -o build-timing/trace_smoke
+      - name: Verify CSV publication and analyzer summary
+        run: |
+          set -euo pipefail
+          timeout 10s ./build-timing/trace_smoke
+          python3 Simulation/Timing/test_analyzer.py scripts/analyze_timing_csv.py
