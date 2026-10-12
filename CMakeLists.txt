@@ -69,6 +69,20 @@ if(GP_BASH_EXECUTABLE)
     set_tests_properties(intercore_ipc_hsem_mock_test PROPERTIES TIMEOUT 20)
 endif()
 
+# Real STM32CubeH7 header/driver cross-compilation. Opt-in because
+# ST's separate SDK package is not vendored in this repository.
+set(GP_STM32CUBEH7_ROOT "" CACHE PATH "Installed official STM32CubeH7 root")
+if(GP_ARM_NONE_EABI_GCC AND GP_BASH_EXECUTABLE AND GP_STM32CUBEH7_ROOT
+   AND EXISTS "${GP_STM32CUBEH7_ROOT}/Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_hsem.h")
+    add_test(NAME intercore_ipc_real_hal_compile_test
+        COMMAND "${GP_BASH_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Intercore/Tests/test_ipc_stm32_hal_compile.sh")
+    set_tests_properties(intercore_ipc_real_hal_compile_test PROPERTIES
+        TIMEOUT 90
+        ENVIRONMENT
+            "STM32CUBEH7_ROOT=${GP_STM32CUBEH7_ROOT};ARM_NONE_EABI_GCC=${GP_ARM_NONE_EABI_GCC}")
+endif()
+
 # M4 owns the flash producer/staging; M7 owns the 500 Hz consumer.
 # Only GpTrajectoryShared crosses the inter-core SRAM boundary.
 add_library(intercore_trajectory_stream STATIC Intercore/trajectory_stream.c)

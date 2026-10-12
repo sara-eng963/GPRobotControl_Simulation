@@ -372,3 +372,32 @@ HSEM IDs 24..27. Both STM32 firmware images must reserve these four IDs
 exclusively and check against all future boot/RTOS/driver semaphore uses.
 The unit test does not run ST HAL or hardware interrupts; target CubeH7
 header integration, NVIC priority, MPU and real inter-core wake-up remain.
+
+### Official STM32CubeH7 HAL compilation (no hardware)
+
+`bash Intercore/Tests/test_ipc_stm32_hal_compile.sh` checks **both**
+`GP_IPC_CORE_M7` and `GP_IPC_CORE_M4` using the real ST HAL headers, the
+actual `stm32h7xx_hal_hsem.c` implementation, CMSIS, and the installed
+FreeRTOS ARM ports. Set `STM32CUBEH7_ROOT` to a complete STM32CubeH7 SDK
+checkout if it is not available at `../STM32CubeH7`.
+
+The recommended source is the official
+[STM32CubeH7 package](https://github.com/STMicroelectronics/STM32CubeH7)
+with its CMSIS device and HAL driver **Git submodules populated**.
+The compiler uses ST's `STM32H745I-DISCO/Examples/HSEM/HSEM_CoreNotification`
+example configuration for each core. ST SDK content remains outside the
+robot-control repository. Do not mix independently downloaded HAL and
+CMSIS versions.
+
+CMake/CTest can register the opt-in test when configured with
+`-DGP_STM32CUBEH7_ROOT=/absolute/path/to/STM32CubeH7`; its CTest name is
+`intercore_ipc_real_hal_compile_test`. The standalone script checks for
+missing SDK dependencies and exits nonzero, never reporting a false pass.
+
+The gate proves compilation of the HSEM adapter against **official**
+STM32CubeH7 API declarations and compilation of ST's corresponding HSEM
+source, not linking or execution of a complete two-core firmware image.
+It does not verify linker scripts, actual HAL IRQ dispatch, NVIC settings,
+MPU/cache configuration, HSEM wakeup timing, reset/recovery, or 500 Hz jitter.
+Actual firmware must use separately generated validated CM7/CM4 FreeRTOS
+configs rather than the temporary test configuration.
