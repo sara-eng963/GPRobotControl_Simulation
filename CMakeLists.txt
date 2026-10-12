@@ -35,6 +35,12 @@ target_compile_options(ipc_mailbox_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME ipc_mailbox_test COMMAND ipc_mailbox_test)
 set_tests_properties(ipc_mailbox_test PROPERTIES TIMEOUT 15)
 
+
+# Reusable STM32H745 target-only compile smoke test; independent of the POSIX
+# kernel build. No HAL/board firmware or target hardware is required here.
+find_program(GP_ARM_NONE_EABI_GCC arm-none-eabi-gcc)
+find_program(GP_BASH_EXECUTABLE bash)
+
 # Real FreeRTOS message-buffer transport, isolated from the host SIL Kit
 # kernel configuration. The script builds a separate GCC_POSIX kernel.
 if(GP_BASH_EXECUTABLE)
@@ -44,11 +50,6 @@ if(GP_BASH_EXECUTABLE)
     set_tests_properties(intercore_ipc_freertos_runtime_test PROPERTIES
         TIMEOUT 90)
 endif()
-
-# Reusable STM32H745 target-only compile smoke test; independent of the POSIX
-# kernel build. No HAL/board firmware or target hardware is required here.
-find_program(GP_ARM_NONE_EABI_GCC arm-none-eabi-gcc)
-find_program(GP_BASH_EXECUTABLE bash)
 if(GP_ARM_NONE_EABI_GCC AND GP_BASH_EXECUTABLE)
     add_test(NAME intercore_ipc_arm_compile_test
         COMMAND "${GP_BASH_EXECUTABLE}"
