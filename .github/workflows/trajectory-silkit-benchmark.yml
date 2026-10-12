@@ -30,6 +30,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/silkit"
           curl -fsSL --retry 3 \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/vectorgrp/sil-kit/releases/latest \
             -o "$RUNNER_TEMP/silkit/release.json"
           python3 - "$RUNNER_TEMP/silkit/release.json" "$RUNNER_TEMP/silkit/asset-url.txt" <<'PY'
