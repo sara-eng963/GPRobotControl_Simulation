@@ -68,10 +68,15 @@ static void on_peer_data(void)
 {
     BaseType_t higher_priority_task_woken = pdFALSE;
 
-    if (notifications_ready && received_buffer != NULL)
+    /* M4 may send before M7 starts its scheduler. A pre-scheduler
+     * EXTI still gets acknowledged, but cannot invoke FreeRTOS FromISR
+     * APIs until the receiving kernel is running. Messages remain
+     * queued for the application to drain after startup. */
+    if (notifications_ready && received_buffer != NULL &&
+        xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
     {
-        /* Matches ST's EXTI -> FreeRTOS Message Buffer completion pattern.
-         * Currently all application receive APIs are nonblocking. */
+        /* Native ST/FreeRTOS completion helper. All shared-message
+         * receive calls currently remain strictly nonblocking. */
         (void)xMessageBufferSendCompletedFromISR(
             received_buffer, &higher_priority_task_woken);
     }
