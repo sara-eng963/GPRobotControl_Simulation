@@ -333,13 +333,29 @@ ABI-validated cross-core migration, not a cosmetic text substitution.
 CubeMX's `GP_STM32H745.ioc` identity is also separate from these
 application-file changes.
 
-**Current implementation state:** the nonstandard FreeRTOS guard and
-ARM probe shims have been removed. The first production **M7-owned typed
-object definitions** have now been committed as
-`CM7/Core/Src/intercore_shared_memory.c`. They use the existing `NOLOAD`
-sections, 32-byte alignment and exact ABI size checks. M4 must **not**
-define duplicate physical storage. Full CM7/CM4 firmware linking, M7
-initialization-before-HSEM-0-release and peer notification are pending.
+**Current implementation state (2026-10-12):**
+- **Stage 2E-1 — verified:** `CM7/Core/Src/intercore_shared_memory.c`
+  defines the physical objects in existing `NOLOAD` linker sections.
+  A clean CM7 CubeIDE build reported 0 errors / 0 warnings. The
+  user inspected its actual ELF: `intercore_ipc_shared` at
+  `0x38000000` (0x8a0 B) and `intercore_trajectory_shared` at
+  `0x38001000` (0x3040 B), both aligned and `NOBITS`.
+- **Stage 2E-2 — code committed, awaiting validation:** M7
+  `intercore_shared_memory_initialize()` uses existing
+  `gp_ipc_initialize()` (FreeRTOS `xMessageBufferCreateStatic()`) and
+  `gp_traj_shared_initialize()`, checking both valid before M7's
+  HSEM-0 wakeup. The generated M7 `main.c` calls this function inside
+  `Boot_Mode_Sequence_2` *after* `SystemClock_Config()` and *before*
+  `HAL_HSEM_FastTake/Release(HSEM_ID_0)`. On failure `Error_Handler()`
+  prevents the CM4 wake. No new protocol or scheduler code was introduced.
+- **Still pending:** compilation of the new boot-initialization sources
+  on the user's ARM toolchain; clean integrated CM7 build and ELF check
+  after source staging; CM4 validation, EXTI/FreeRTOS notifications,
+  reset handling, and physical MCU execution.
+
+**Important:** ST's example covers cold-boot sequencing and one-way
+Message Buffer demonstration. It does not establish safe partial-core
+reset recovery, bidirectional ISR completion, or robot functional safety.
 
 **Stage 2E-1 verification commands:**
 
@@ -349,7 +365,20 @@ bash Firmware/Tests/check_production_shared_objects.sh
 
 The new test cross-compiles the actual production source and checks its
 symbol addresses and NOBITS sections using the existing M7 Flash/RAM
-linker scripts. This is not a full CubeIDE build.
+linker scripts. The actual M7 CubeIDE ELF passed these same addresses
+in the user's verification workspace.
+
+**Stage 2E-2 ARM source and startup-order test:**
+
+```bash
+bash Firmware/Tests/check_intercore_startup_compile.sh
+```
+
+This compiles the M7 allocation/init module and the canonical
+`Intercore/ipc_mailbox_freertos.c` and `Intercore/trajectory_stream.c`
+against the vendored FreeRTOS 10.6.2 and asserts that M7 initialization
+is called in the CubeMX boot user-code section before HSEM-0 release.
+It does not replace the real CubeIDE build or a two-core runtime test.
 
 **Separate CubeIDE verifier:** the canonical
 `Intercore/ipc_mailbox.h` and `Intercore/trajectory_stream.h` live
@@ -360,10 +389,21 @@ the standalone Windows verifier, stage exact copies using:
 bash Firmware/Tests/stage_intercore_headers.sh "<verification-project-root>"
 ```
 
-These copied headers are build inputs **only**, not a second source
-of truth. Re-stage after any IPC header change. The script deliberately
-does not install new RTOS sources, reset handlers or board drivers.
-The next gate is a clean M7 build with symbols present in its map.
+For Stage 2E-2, also stage the canonical M7 source code:
+
+```bash
+bash Firmware/Tests/stage_intercore_sources.sh "<verification-project-root>"
+```
+
+This copies exactly `ipc_mailbox_freertos.c` and
+`trajectory_stream.c` into the *separate* CubeIDE verification
+workspace without modifying canonical `Intercore/` code. The FreeRTOS
+backend compilation unit now selects its own compile-time backend mode;
+the existing `ipc_mailbox.c` host-only implementation must **not** be
+compiled into CM7. Neither staging script copies HAL startup or edits
+ST-generated RTOS/driver files. Run a clean M7 CubeIDE build after
+staging, and recheck actual ELF symbols; then implement M4's
+post-HSEM validity gate in a separate change.
 Do not describe Stage 2E as complete.
 
 ## 4. Follow-up implementation checkpoints
