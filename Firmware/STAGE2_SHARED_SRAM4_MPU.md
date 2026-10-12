@@ -1,7 +1,7 @@
 ---
 title: "Stage 2 — Shared SRAM4, Linker, MPU and IPC ABI"
 stage: 2
-status: "In progress — 2A inventory/probe committed; measurements pending"
+status: "2A measured PASS; Stage 2B address contract committed, pending test"
 date: 2026-10-12
 tags: [stm32h745, shared-memory, freertos, firmware]
 ---
@@ -84,10 +84,57 @@ absent; no firmware source or production macro is changed. FreeRTOS 10.6.2's
 stream buffer API is separate from that project guard. Resolve this gate
 during real IPC integration without silently rewriting vendor code.
 
+## 3A. Stage 2A measured result and Stage 2B memory layout
+
+**Measured using the real firmware FreeRTOS 10.6.2 headers on both ARM cores:**
+
+| Object | Measured footprint | Alignment |
+| --- | ---: | ---: |
+| `GpIpcShared` | 2,208 bytes | 32 bytes |
+| `GpTrajectoryShared` | 12,352 bytes | 32 bytes |
+| Combined | **14,560 bytes** | — |
+
+Both generated core configurations produced identical sizes and field offsets.
+The M4-private flash staging/producer descriptor (6,172 bytes) must **not**
+be placed in SRAM4; nor may RTOS stacks or private task handles be shared.
+
+**Proposed fixed physical allocation, not yet enabled in linkers or MPU:**
+
+| Inclusive SRAM4 address range | Slot size | Design purpose |
+| --- | ---: | --- |
+| `0x38000000–0x38000FFF` | 4 KiB | IPC buffers and metadata (2,208 B used) |
+| `0x38001000–0x38004FFF` | 16 KiB | Trajectory ring (12,352 B used) |
+| `0x38005000–0x38007FFF` | 12 KiB | Reserved for future shared metadata only |
+| `0x38008000–0x3800FFFF` | 32 KiB | Unallocated upper SRAM4; not inside shared MPU window |
+
+**Why these sizes?** The lower **32 KiB** is a power-of-two, 32 KiB-aligned
+region suitable for one future Cortex-M7 MPU region. The two fixed slots
+provide growth margin and prevent one message-buffer change from silently
+moving the trajectory ring. Both bases are 32-byte aligned. The upper
+32 KiB remains uncommitted to avoid unnecessary restrictions on later
+hardware and DMA requirements.
+
+The remaining 50,976 bytes reported by the Stage 2A gross-capacity test
+should **not** be interpreted as one contiguous free region. Some bytes
+are inside fixed slots or are deliberately reserved.
+
+The single C-side address contract is
+[`Common/Inc/gp_shared_sram4_layout.h`](STM32H745/Common/Inc/gp_shared_sram4_layout.h).
+The stage 2 compile probe asserts both actual object sizes fit their
+respective slots and checks adjacency and MPU alignment.
+
+**Status:** the shared-memory layout is a **compile-time design contract**
+only. No physical placement, NOLOAD section, MPU region, or startup
+initialization is implemented. The next gate is to validate the new size
+checks; then add matching linker sections to both firmware targets and
+inspect both ELF maps. Do not treat a passing size test as a cache
+coherency or multi-kernel IPC validation.
+
 ## 4. Follow-up implementation checkpoints
 
-- **2B — memory contract:** choose physical block offsets and alignment,
-  reserve an SRAM4 layout and define shared initialization/version metadata.
+- **2B — memory contract:** fixed slot addresses and alignments proposed;
+  compile-time ABI/capacity gate awaits rerun. Initialization/version
+  metadata remain to be designed.
 - **2C — linker sections:** add `NOLOAD`/equivalent sections for both images;
   use explicit linker assertions to reject overflows and overlapping
   allocations, then verify in both ELF map files.
