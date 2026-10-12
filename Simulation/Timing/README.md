@@ -49,6 +49,57 @@ Optional plotting:
 \`python3 -m pip install matplotlib\`. Without matplotlib the analyzer still
 produces CSV/Markdown summaries. Use \`--no-plots\` to suppress PNGs.
 
+## Nonredundant Issue 5 diagnosis: path-command hold reasons
+
+Existing Renode QSPI tests already exercise Cortex-M7 flash/streaming
+functionality, but the repo has no Renode image running the actual
+Supervisor on a faithful dual-core STM32H745 with accurate cycle timing.
+Another Renode virtual-time 1 ms benchmark would not verify the observed
+500 Hz CAN irregularity. We therefore leave the Renode suite unchanged.
+
+The current SIL Kit simulator records additional HOST-ONLY sources on the
+real `PathExecutionState` code path:
+
+- `path_commands`: trajectory-specific six-axis send attempts (excludes
+  teaching, homing and other CAN transactions).
+- `path_feedback_wait`: feedback from at least one of the six motors
+  has not advanced, but the next 2 ms target is not yet due.
+- `path_feedback_late`: feedback has not advanced and the next target
+  is ALREADY due. This directly indicates a feedback-gated delay.
+- `path_period_wait`: feedback gate is satisfied; next target is
+  not due yet by the 2 ms sample clock.
+
+The feedback check precedes the period check in the existing state machine,
+so counters are exclusive first-blocking-reason **polls** on each Supervisor
+iteration, not numbers of distinct commands missed. These counters do not
+measure per-axis TPDO wire arrival, nor does any result justify removing the
+all-six-axis feedback safety gate.
+
+Only ONE new flash-backed end-to-end run is necessary. Previous long-run
+baseline.csv/flash.csv remain unchanged:
+
+```bash
+git fetch origin
+git switch fix/path-execution-timing-diagnostics
+cmake -S . -B build-can-silkit
+bash scripts/run_timing_benchmark.sh --path-only --no-plots
+```
+
+Results:
+`.simulation-logs/timing-benchmark/path_diagnostics.csv` and
+`.simulation-logs/timing-benchmark/path_diagnostics-analysis/timing_report.md`.
+If `path_commands` has no samples, do not claim cadence was measured:
+verify that the scenario actually entered path-follow/preview execution.
+
+Decision guide:
+- Many `path_feedback_late` polls suggest all-axis TPDO freshness is a
+  substantial contributor to command delay (still investigate CAN receive
+  processing, motor response and scheduling).
+- Few feedback-late polls but long `path_commands` intervals suggest
+  missed Supervisor wakeups, other control gating, or test-driver pacing.
+- Zero path-specific events means this test did not reach trajectory-follow
+  logic; no feedback attribution is possible.
+
 ## Raw CSV contracts
 
 **Current recorder (schema v2):**
