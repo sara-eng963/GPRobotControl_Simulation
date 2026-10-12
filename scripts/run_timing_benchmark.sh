@@ -14,17 +14,23 @@ FLASH_ONLY=0
 PATH_ONLY=0
 INCLUDE_FAULTS=0
 NO_PLOTS=0
+PATH_RUNS=1
 for arg in "$@"; do
     case "$arg" in
         --flash-only) FLASH_ONLY=1 ;;
         --path-only) PATH_ONLY=1 ;;
         --include-faults) INCLUDE_FAULTS=1 ;;
         --no-plots) NO_PLOTS=1 ;;
+        --path-runs=*) PATH_RUNS="${arg#--path-runs=}" ;;
         *)
-            echo "Usage: bash scripts/run_timing_benchmark.sh [--flash-only|--path-only] [--include-faults] [--no-plots]" >&2
+            echo "Usage: bash scripts/run_timing_benchmark.sh [--flash-only|--path-only] [--path-runs=N] [--include-faults] [--no-plots]" >&2
             exit 2 ;;
     esac
 done
+if ! [[ "$PATH_RUNS" =~ ^[1-9][0-9]*$ ]] || ((PATH_RUNS > 20)); then
+    echo "[FAIL] --path-runs must be 1..20" >&2
+    exit 2
+fi
 PLOT_ARGS=()
 if ((NO_PLOTS)); then PLOT_ARGS+=(--no-plots); fi
 
@@ -66,9 +72,17 @@ run_scenario() {
 }
 
 if ((PATH_ONLY)); then
-    # Do not overwrite the user's previously verified baseline.csv/flash.csv.
-    run_scenario path_diagnostics supervisor_silkit_flash_sequence
-    echo "[TIMING] Path diagnostic complete; existing baseline/flash logs unchanged."
+    # Preserve legacy single-run filenames. Multi-run results have unique
+    # names; baseline and modified branches must use separate LOG_DIRs.
+    for ((run = 1; run <= PATH_RUNS; ++run)); do
+        if ((PATH_RUNS == 1)); then
+            scenario=path_diagnostics
+        else
+            scenario="path_diagnostics_run${run}"
+        fi
+        run_scenario "$scenario" supervisor_silkit_flash_sequence
+    done
+    echo "[TIMING] $PATH_RUNS complete path run(s). Baseline/flash unchanged."
     exit 0
 fi
 
