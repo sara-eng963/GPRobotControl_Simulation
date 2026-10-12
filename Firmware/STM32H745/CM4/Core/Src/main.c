@@ -23,7 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "intercore_startup_validation.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -121,7 +121,12 @@ int main(void)
 
   /* Initialize all configured peripherals */
   /* USER CODE BEGIN 2 */
-
+  /* ST FreeRTOS_AMP_Dual_RTOS: validate M7-created buffers after
+   * HSEM-0 wakeup, before starting the M4 scheduler. */
+  if (!intercore_startup_validate())
+  {
+    Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Init scheduler */
