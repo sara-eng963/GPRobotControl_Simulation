@@ -105,6 +105,10 @@ bool gp_traj_m7_begin(GpTrajectoryConsumer *consumer,
 GpTrajectoryReadResult gp_traj_m7_take(GpTrajectoryConsumer *consumer,
                                       uint32_t expected_index,
                                       GpTrajectorySample *sample);
+/* M7-only O(1) discard, bounded by published samples and current epoch. */
+GpTrajectoryReadResult gp_traj_m7_skip(GpTrajectoryConsumer *consumer,
+                                      uint32_t expected_index,
+                                      uint32_t count);
 
 /* M7 only: after motion has fully stopped reading, publish release.
  * M4 must acknowledge before reusing/resetting the ring. */

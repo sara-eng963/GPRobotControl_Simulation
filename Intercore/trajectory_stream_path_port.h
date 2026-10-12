@@ -16,6 +16,8 @@ bool gp_traj_path_read_sample(uint32_t sample_index,
                               PvExecutionSample *sample, void *context);
 bool gp_traj_path_stream_ready(uint32_t next_index, uint32_t count,
                                void *context);
+bool gp_traj_path_skip_samples(uint32_t first, uint32_t count,
+                               void *context);
 void gp_traj_path_end_stream(void *context);
 
 #endif

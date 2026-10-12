@@ -72,6 +72,13 @@ int main(void)
     assert(gp_traj_path_stream_ready(0U, id.sample_count, &port));
     assert(gp_traj_path_read_sample(0U, &sample, &port));
     verify_sample(&sample, 0U);
+    /* Constant-time skip preserves ordering and rejects invalid offsets. */
+    assert(!gp_traj_path_skip_samples(2U, 1U, &port));
+    assert(!gp_traj_path_skip_samples(1U, 512U, &port));
+    assert(gp_traj_path_skip_samples(1U, 2U, &port));
+    assert(!gp_traj_path_read_sample(2U, &sample, &port));
+    assert(gp_traj_path_read_sample(3U, &sample, &port));
+    verify_sample(&sample, 3U);
     gp_traj_path_end_stream(&port);
     assert(gp_traj_m4_step(&m4));
     puts("PASS: M7 PathExecution callbacks preflight, read, pause, release, replay");

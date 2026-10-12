@@ -229,6 +229,35 @@ GpTrajectoryReadResult gp_traj_m7_take(GpTrajectoryConsumer *consumer,
     return GP_TRAJ_READ_OK;
 }
 
+GpTrajectoryReadResult gp_traj_m7_skip(GpTrajectoryConsumer *consumer,
+                                      uint32_t expected_index,
+                                      uint32_t count)
+{
+    if (consumer == NULL || !consumer->active ||
+        !gp_traj_shared_valid(consumer->shared))
+        return GP_TRAJ_READ_UNAVAILABLE;
+    GpTrajectoryShared *shared = consumer->shared;
+    if (__atomic_load_n(&shared->epoch, GP_ACQUIRE) != consumer->epoch ||
+        __atomic_load_n(&shared->ready, GP_ACQUIRE) != 1U)
+        return GP_TRAJ_READ_UNAVAILABLE;
+    if (__atomic_load_n(&shared->read_error, GP_ACQUIRE) != 0U)
+        return GP_TRAJ_READ_STORAGE_ERROR;
+    if (expected_index != consumer->next_index ||
+        count > consumer->expected.sample_count - consumer->next_index)
+        return GP_TRAJ_READ_INVALID_INDEX;
+    const uint32_t consumed = __atomic_load_n(&shared->consumed, GP_RELAXED);
+    const uint32_t written = __atomic_load_n(&shared->written, GP_ACQUIRE);
+    const uint32_t buffered = written - consumed;
+    if (buffered > GP_TRAJ_CAPACITY) return GP_TRAJ_READ_STORAGE_ERROR;
+    if (count > buffered) {
+        consumer->underruns++;
+        return GP_TRAJ_READ_STARVED;
+    }
+    __atomic_store_n(&shared->consumed, consumed + count, GP_RELEASE);
+    consumer->next_index += count;
+    return GP_TRAJ_READ_OK;
+}
+
 bool gp_traj_m7_finish(GpTrajectoryConsumer *consumer)
 {
     if (consumer == NULL || !consumer->active ||

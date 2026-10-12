@@ -17,6 +17,14 @@ bool gp_traj_path_read_sample(uint32_t sample_index,
     return true;
 }
 
+bool gp_traj_path_skip_samples(uint32_t first, uint32_t count,
+                               void *context)
+{
+    GpTrajectoryPathPort *port = context;
+    return port != NULL && port->consumer != NULL &&
+        gp_traj_m7_skip(port->consumer, first, count) == GP_TRAJ_READ_OK;
+}
+
 bool gp_traj_path_stream_ready(uint32_t next_index, uint32_t count,
                                void *context)
 {

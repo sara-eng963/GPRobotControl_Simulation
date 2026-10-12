@@ -31,6 +31,15 @@ jobs:
             ServoDrive/JointDrive/canopen_drive_commissioning_port.c \
             -lm -o build-path-regression/test_canopen_master
           ./build-path-regression/test_canopen_master
+      - name: M7/M4 shared-memory path adapter regression
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra -Werror -O2 -pthread \
+            Intercore/trajectory_stream.c \
+            Intercore/trajectory_stream_path_port.c \
+            Intercore/Tests/test_trajectory_stream_path_port.c \
+            -o build-path-regression/test_m7_path_port
+          ./build-path-regression/test_m7_path_port
       - name: SRAM prefetch and timing analyzer regressions
         run: |
           set -euo pipefail
