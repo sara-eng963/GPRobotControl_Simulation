@@ -33,7 +33,7 @@ for core in CM7 CM4; do
         -mcpu="$cpu" -mthumb -mfpu="$fpu" -mfloat-abi=hard \
         -DSTM32H745xx -DUSE_HAL_DRIVER -D"CORE_$core=1" \
         -D"GP_IPC_CORE_M${core#CM}=1" -DGP_IPC_FREERTOS_BACKEND=1 \
-        -I"$FW/$core/Core/Inc" -I"$ROOT/Intercore" \
+        -I"$FW/$core/Core/Inc" -I"$ROOT/Intercore" -I"$FW/Common/Inc" \
         -I"$KERNEL/include" -I"$PORT" -I"$DEV" -I"$CORE" \
         -I"$HAL" -I"$HAL/Legacy" \
         -c "$SRC" -o "$TMP/$core.o"
@@ -73,6 +73,12 @@ if grep -Eq '(^|[[:space:]])(RAM_D3|SRAM4)[[:space:]]*\(' "$FW/CM4/STM32H745IITX
 else
     echo 'PENDING: CM4 linker has no dedicated SRAM4 region.'
 fi
+echo
+echo 'Stage 2B RESERVED ADDRESS PROPOSAL (not yet linker-placed):'
+printf '  IPC:          0x38000000..0x38000FFF  4096 B (%d B occupied)\n' "$ipc"
+printf '  Trajectory:   0x38001000..0x38004FFF 16384 B (%d B occupied)\n' "$traj"
+echo "  Shared spare: 0x38005000..0x38007FFF 12288 B (reserved)"
+echo "  Upper SRAM4:  0x38008000..0x3800FFFF 32768 B (unallocated)"
 echo 'PENDING: Neither core places the objects in SRAM4 yet; no MPU validation.'
 echo 'NOTE: probe-only configUSE_STREAM_BUFFERS=1 does not modify target config.'
 echo 'PASS: Stage 2A CM7/CM4 ABI equality and SRAM4 gross-capacity check'
