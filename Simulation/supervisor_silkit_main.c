@@ -468,8 +468,8 @@ static void host_flash_abort(void *ctx)
     qspi_nor_validated_storage_abort(ctx);
 }
 
-/* Host-only fault injection. No STM32 firmware or CANopen configuration uses
- * these switches. Executed by the low-priority flash validation worker. */
+/* Host-only fault injection; the FlashM4 task owns all flash callbacks.
+ * No STM32 firmware or CANopen configuration uses these switches. */
 static int host_flash_test_mode;
 static bool host_flash_test_fired;
 static bool host_flash_test_command(void *ctx, uint8_t op, uint32_t addr,
