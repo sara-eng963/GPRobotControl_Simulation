@@ -280,8 +280,112 @@ static void test_runtime_faults(void)
     puts("[PASS] Runtime read failure/starvation request one hold; rejected hold fails closed");
 }
 
+/* Explicit clock jumps bypass the normal 1-ms test helper. */
+static StateStepResult step_at(Test *t, uint32_t ms)
+{
+    PathExecutionInputs inputs = {
+        .motion_permission = true, .now_ms = ms,
+        .now_us = (uint64_t)ms * 1000U
+    };
+    PathExecutionOutputs outputs = {0};
+    t->next_ms = ms + 1U;
+    return state_path_execution_step(&t->execution, &inputs, &outputs);
+}
+
+static void test_time_paced_feedback_and_skips(void)
+{
+    Test t;
+    init(&t, 64, 2, UINT32_MAX);
+    /* Initial phases do not send commands. */
+    assert(step_at(&t, 0) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 1) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 2) == STATE_STEP_RUNNING);
+    assert(t.drive.commands == 1U && t.execution.sample_index == 1U);
+
+    /* Simulate a late supervisor activation, advancing the absolute
+     * cursor instead of replaying expired positions or stretching time. */
+    assert(step_at(&t, 13) == STATE_STEP_RUNNING);
+    assert(t.execution.skipped_samples == 4U);
+    assert(t.execution.sample_index == 6U);
+    assert(t.drive.commands == 2U);
+    assert(t.drive.last_targets[0] == value(5, 0));
+    assert(__atomic_load_n(&t.stream.consumed, __ATOMIC_ACQUIRE) == 6U);
+    assert(step_at(&t, 14) == STATE_STEP_RUNNING);
+    assert(t.execution.sample_index == 7U);
+    assert(t.drive.last_targets[0] == value(6, 0));
+    assert(t.execution.skipped_samples == 4U);
+    puts("[PASS] Absolute deadlines, skipped cursor, nonblocking SRAM discard");
+}
+
+static void test_delayed_axis_feedback(void)
+{
+    Test t;
+    init(&t, 64, 2, UINT32_MAX);
+    t.drive.auto_feedback = false;
+    unsigned commands_at_6 = 0U;
+    for (uint32_t ms = 0; ms <= 16; ++ms) {
+        /* Five nodes update independently; axis 0 is deliberately delayed. */
+        for (size_t axis = 1U; axis < JOINT_DRIVE_AXES; ++axis) {
+            ++t.drive.sequence[axis];
+            t.drive.axis[axis].timestamp_us = (uint64_t)ms * 1000U;
+        }
+        if (ms == 12U) {
+            ++t.drive.sequence[0];
+            t.drive.axis[0].timestamp_us = 12000U;
+        }
+        assert(step_at(&t, ms) == STATE_STEP_RUNNING);
+        if (ms == 6U) commands_at_6 = t.drive.commands;
+    }
+    assert(commands_at_6 == 3U); /* t0=2ms -> samples 0,1,2 */
+    assert(t.drive.commands == 8U); /* due sample index 7 at t=16ms */
+    assert(t.execution.skipped_samples == 0U);
+    assert(t.execution.error == PATH_EXEC_ERR_NONE && t.stop_calls == 0U);
+    puts("[PASS] Delayed single-axis TPDO does not gate cadence below age limit");
+}
+
+static void test_missing_axis_fault_and_reentry(void)
+{
+    Test t;
+    init(&t, 64, 2, UINT32_MAX);
+    t.drive.auto_feedback = false;
+    StateStepResult result = STATE_STEP_RUNNING;
+    for (uint32_t ms = 0; ms < 28U && result == STATE_STEP_RUNNING; ++ms) {
+        for (size_t axis = 1U; axis < JOINT_DRIVE_AXES; ++axis) {
+            ++t.drive.sequence[axis];
+            t.drive.axis[axis].timestamp_us = (uint64_t)ms * 1000U;
+        }
+        result = step_at(&t, ms);
+    }
+    assert(result == STATE_STEP_FAILED);
+    assert(t.execution.error == PATH_EXEC_ERR_CYCLIC_FEEDBACK);
+    assert(t.execution.phase == PATH_EXEC_PHASE_FAILED);
+    assert(t.execution.feedback_age_us[0] > 20000U);
+    assert(t.stop_calls == 1U && !t.wire);
+    const unsigned at_fault = t.drive.commands;
+    assert(step_at(&t, 30) == STATE_STEP_FAILED);
+    assert(t.drive.commands == at_fault && t.stop_calls == 1U);
+
+    /* Fault latch cleared and TPDOs restored: new path entry must neither
+     * inherit the old clock nor reuse the previous feedback watchdog. */
+    state_path_execution_release_stream(&t.execution);
+    for (unsigned i = 0; i < 4U; ++i)
+        (void)trajectory_prefetch_worker_step(&t.stream);
+    t.drive.auto_feedback = true;
+    enter(&t, ROBOT_EXECUTION_PREVIEW);
+    assert(step_at(&t, 40) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 41) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 42) == STATE_STEP_RUNNING);
+    assert(t.execution.sample_index == 1U);
+    assert(t.execution.skipped_samples == 0U);
+    assert(t.execution.error == PATH_EXEC_ERR_NONE);
+    puts("[PASS] 20-ms stale axis trips controlled hold; reset/re-entry is clean");
+}
+
 int main(void)
 {
+    test_time_paced_feedback_and_skips();
+    test_delayed_axis_feedback();
+    test_missing_axis_fault_and_reentry();
     test_startup();
     test_final_feedback_replay_pause_abort();
     test_runtime_faults();
