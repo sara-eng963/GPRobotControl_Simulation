@@ -172,8 +172,8 @@ static void validation_worker_entry(void *argument)
             taskEXIT_CRITICAL();
             if (result != STATE_STEP_RUNNING)
                 break;
-            /* Yield after at most one bounded batch of samples. NOR erase or
-             * page-program latency stays in THIS low-priority thread. */
+            /* Yield after one bounded numerical batch. Async storage may
+             * report BUSY; M4 continues flash IO without blocking M7. */
             vTaskDelay(1);
         }
     }
