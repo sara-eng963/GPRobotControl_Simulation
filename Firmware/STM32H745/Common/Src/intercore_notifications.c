@@ -19,6 +19,7 @@
  * This adapter delivers interrupts and a kernel completion opportunity,
  * but application task wait registration is not implemented here.
  */
+#define GP_IPC_FREERTOS_BACKEND 1
 #include "intercore_notifications.h"
 
 #include <stdint.h>
@@ -40,13 +41,11 @@
 #define IPC_TX_LINE            EXTI_LINE_0
 #define IPC_RX_IRQn            EXTI1_IRQn
 #define IPC_TX_EVENT           GP_IPC_NOTIFY_M7_TO_M4_DATA
-#define IPC_RECEIVING_CORE_M7  1
 #elif defined(CORE_CM4)
 #define IPC_RX_LINE            EXTI_LINE_0
 #define IPC_TX_LINE            EXTI_LINE_1
 #define IPC_RX_IRQn            EXTI0_IRQn
 #define IPC_TX_EVENT           GP_IPC_NOTIFY_M4_TO_M7_DATA
-#define IPC_RECEIVING_CORE_M7  0
 #else
 #error "Compile intercore_notifications.c separately for CORE_CM7 or CORE_CM4"
 #endif
