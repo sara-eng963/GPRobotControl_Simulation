@@ -2,8 +2,13 @@
  * The FreeRTOS kernel supplies actual message storage, framing and state.
  * Each channel has exactly one sender and one receiver, both nonblocking.
  * This is not a safety or emergency-stop path. */
+/* This compilation unit selects the FreeRTOS implementation by design.
+ * It is never compiled alongside the host-only ipc_mailbox.c backend.
+ * Setting GP_IPC_FREERTOS_BACKEND=0 explicitly is a configuration error. */
 #ifndef GP_IPC_FREERTOS_BACKEND
-#error "Build this file only with GP_IPC_FREERTOS_BACKEND=1"
+#define GP_IPC_FREERTOS_BACKEND 1
+#elif (GP_IPC_FREERTOS_BACKEND != 1)
+#error "ipc_mailbox_freertos.c requires GP_IPC_FREERTOS_BACKEND=1"
 #endif
 #include "ipc_mailbox.h"
 #include <string.h>
