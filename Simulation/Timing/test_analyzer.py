@@ -66,6 +66,16 @@ def main() -> None:
                  100, 400, 300, 0, 0, 1, 0],
                 [2, "supervisor", "periodic", 1, 1000,
                  1300, 2600, 1300, 1200, 1, 1, 0],
+                [2, "path_feedback_late", "event", 0, 0,
+                 2000, 2001, 1, 0, "", 1, 0],
+                [2, "path_feedback_wait", "event", 0, 0,
+                 1000, 1001, 1, 0, "", 1, 0],
+                [2, "path_period_wait", "event", 0, 0,
+                 1100, 1101, 1, 0, "", 1, 0],
+                [2, "path_commands", "event", 0, 0,
+                 2100, 2150, 50, 0, "", 1, 0],
+                [2, "path_commands", "event", 1, 0,
+                 4100, 4150, 50, 2000, "", 1, 0],
             ])
         subprocess.run(
             [sys.executable, sys.argv[1], str(v2_source), "--output-dir",
@@ -77,8 +87,14 @@ def main() -> None:
             v2_data = {row["source"]: row for row in csv.DictReader(f)}
         assert v2_data["supervisor"]["execution_budget_overruns"] == "1"
         assert v2_data["supervisor"]["interval_mean_us"] == "1200.0"
+        assert v2_data["path_commands"]["samples"] == "2"
+        assert v2_data["path_feedback_late"]["samples"] == "1"
+        report = (root / "v2-report" / "timing_report.md").read_text()
+        assert "Path-execution 2 ms gating diagnosis" in report
+        assert "Feedback not fresh while 2 ms command already due: 1" in report
+        assert "Actual trajectory command calls: 2" in report
 
-    print("PASS: legacy v1 and accurate v2 CSVs analyze correctly")
+    print("PASS: v1/v2 analyzer and path-execution wait reason counts")
 
 
 if __name__ == "__main__":
