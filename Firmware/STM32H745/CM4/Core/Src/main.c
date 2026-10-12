@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "intercore_startup_validation.h"
+#include "intercore_notifications.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -124,6 +125,11 @@ int main(void)
   /* ST FreeRTOS_AMP_Dual_RTOS: validate M7-created buffers after
    * HSEM-0 wakeup, before starting the M4 scheduler. */
   if (!intercore_startup_validate())
+  {
+    Error_Handler();
+  }
+  /* Arm ST EXTI IPC receiving interrupt before M4's kernel starts. */
+  if (!intercore_notifications_initialize())
   {
     Error_Handler();
   }
