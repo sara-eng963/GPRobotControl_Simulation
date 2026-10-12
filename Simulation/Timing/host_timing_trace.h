@@ -17,6 +17,13 @@ typedef enum {
     GP_TIMING_FLASH,
     GP_TIMING_PREFETCH,
     GP_TIMING_CAN_TARGET,
+    /* Events/callbacks issued only by PathExecution in the Supervisor task.
+     * Each waiting event counts one Supervisor polling opportunity, not a
+     * unique missed command or deadline. No periodic cadence assigned. */
+    GP_TIMING_PATH_FEEDBACK_WAIT,
+    GP_TIMING_PATH_FEEDBACK_LATE,
+    GP_TIMING_PATH_PERIOD_WAIT,
+    GP_TIMING_PATH_COMMAND,
     GP_TIMING_SOURCE_COUNT
 } GpTimingSource;
 
