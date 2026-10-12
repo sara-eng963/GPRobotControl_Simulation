@@ -1,0 +1,66 @@
+name: Additional SIL Kit supervisor regressions
+on:
+  push:
+    branches:
+      - fix/trajectory-time-paced-scheduling
+    paths:
+      - '.github/workflows/trajectory-silkit-regressions.yml'
+  workflow_dispatch:
+jobs:
+  silkit-supervisor-cases:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install simulation build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev \
+            libxi-dev libgl1-mesa-dev libxcursor-dev libxinerama-dev \
+            libxkbcommon-dev unzip
+          git clone --depth 1 --branch V11.2.0 \
+            https://github.com/FreeRTOS/FreeRTOS-Kernel.git ../FreeRTOS-Kernel
+      - name: Obtain same SIL Kit release as path benchmark
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/silkit"
+          curl -fsSL --retry 3 -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/vectorgrp/sil-kit/releases/latest \
+            -o "$RUNNER_TEMP/silkit/release.json"
+          python3 - "$RUNNER_TEMP/silkit/release.json" "$RUNNER_TEMP/silkit/url" <<'PY'
+          import json,sys
+          data=json.load(open(sys.argv[1]))
+          packages=[a for a in data["assets"] if a["name"].lower().endswith(".zip")
+                    and "ubuntu-24.04" in a["name"].lower()
+                    and "x86_64" in a["name"].lower()
+                    and "gcc" in a["name"].lower()]
+          assert len(packages)==1, packages
+          open(sys.argv[2],"w").write(packages[0]["browser_download_url"])
+          print("Selected SIL Kit:",data["tag_name"],packages[0]["name"])
+          PY
+          curl -fsSL --retry 3 -L "$(cat "$RUNNER_TEMP/silkit/url")" \
+            -o "$RUNNER_TEMP/silkit/package.zip"
+          unzip -q "$RUNNER_TEMP/silkit/package.zip" \
+            -d "$RUNNER_TEMP/silkit/install"
+          python3 - "$RUNNER_TEMP/silkit/install" >> "$GITHUB_ENV" <<'PY'
+          from pathlib import Path
+          import sys
+          configs=list(Path(sys.argv[1]).rglob("SilKitConfig.cmake"))
+          assert len(configs)==1,configs
+          print("SILKIT_ROOT="+str(configs[0].parents[3]))
+          PY
+      - name: Compile SIL Kit integration binaries
+        run: |
+          cmake -S . -B "$RUNNER_TEMP/build-silkit" \
+            -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT" \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build "$RUNNER_TEMP/build-silkit" --parallel 4 \
+            --target supervisor_silkit_sim avatar_m_silkit_motor_bank
+      - name: Run non-benchmark full integration and fault scenarios
+        run: |
+          ctest --test-dir "$RUNNER_TEMP/build-silkit" --output-on-failure \
+            -R '^supervisor_silkit_(sequence|flash_cancel|flash_program_fail)$'
