@@ -1,0 +1,43 @@
+name: Trajectory pacing regression
+on:
+  push:
+    branches:
+      - fix/trajectory-time-paced-scheduling
+  workflow_dispatch:
+jobs:
+  host-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile actual PathExecution state and SRAM prefetch
+        run: |
+          set -euo pipefail
+          mkdir -p build-path-regression
+          cc -std=c11 -O2 -Wall -Wextra -Werror -pthread \
+            StateMachine/States/state_path_execution.c \
+            Simulation/Storage/trajectory_prefetch.c \
+            StateMachine/Tests/test_path_execution_prefetch.c \
+            -o build-path-regression/test_path_execution
+          ./build-path-regression/test_path_execution
+      - name: Compile CANopen master and joint drive tests
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            CANComm/Tests/test_canopen_master.c \
+            CANComm/CANopen/*.c ServoDrive/AvatarM/*.c \
+            ServoDrive/CiA402/*.c \
+            ServoDrive/JointDrive/canopen_joint_drive_port.c \
+            ServoDrive/JointDrive/canopen_drive_commissioning_port.c \
+            -lm -o build-path-regression/test_canopen_master
+          ./build-path-regression/test_canopen_master
+      - name: SRAM prefetch and timing analyzer regressions
+        run: |
+          set -euo pipefail
+          PREFETCH_SANITIZERS=undefined bash scripts/test_trajectory_prefetch.sh
+          cc -std=c11 -Wall -Wextra -Werror -O2 -pthread \
+            Simulation/Timing/host_timing_trace.c \
+            Simulation/Timing/test_host_timing_trace.c \
+            -o build-path-regression/test_host_timing
+          timeout 10s ./build-path-regression/test_host_timing
+          python3 Simulation/Timing/test_analyzer.py scripts/analyze_timing_csv.py
