@@ -3,6 +3,20 @@
 #include <stddef.h>
 #include <string.h>
 
+#if defined(GP_HOST_TIMING)
+#include "../../Simulation/Timing/host_timing_trace.h"
+#define PATH_TIMING_EVENT(source) do { \
+    gp_timing_begin(source); \
+    gp_timing_end(source, true); \
+} while (0)
+#define PATH_TIMING_BEGIN(source) gp_timing_begin(source)
+#define PATH_TIMING_END(source, ok) gp_timing_end(source, ok)
+#else
+#define PATH_TIMING_EVENT(source) ((void)0)
+#define PATH_TIMING_BEGIN(source) ((void)0)
+#define PATH_TIMING_END(source, ok) ((void)0)
+#endif
+
 #define PATH_EXEC_CYCLIC_FEEDBACK_TIMEOUT_MS 100U
 
 static bool elapsed(uint32_t now, uint32_t start, uint32_t duration)
@@ -371,6 +385,17 @@ StateStepResult state_path_execution_step(
         }
         else
         {
+            /* Feedback is the first gate. If the 2 ms command is already
+             * due, all-six-TPDO wait is now delaying trajectory progress.
+             * Otherwise this is an ordinary pre-deadline feedback wait.
+             * These count polls, NOT one distinct missed sample per event. */
+            if (state->phase == PATH_EXEC_PHASE_FOLLOW_TRAJECTORY)
+            {
+                if (command_due(state, inputs->now_ms))
+                    PATH_TIMING_EVENT(GP_TIMING_PATH_FEEDBACK_LATE);
+                else
+                    PATH_TIMING_EVENT(GP_TIMING_PATH_FEEDBACK_WAIT);
+            }
             state_path_execution_get_outputs(
                 state,
                 outputs
@@ -516,6 +541,7 @@ StateStepResult state_path_execution_step(
                     state,
                     inputs->now_ms))
             {
+                PATH_TIMING_EVENT(GP_TIMING_PATH_PERIOD_WAIT);
                 break;
             }
 
@@ -532,15 +558,15 @@ StateStepResult state_path_execution_step(
                 );
             }
 
-            if (!send_execution_sample(
-                    state,
-                    &sample,
-                    inputs->now_ms))
+            /* This event measures actual trajectory commands, excluding
+             * homing/guidance/hold CAN transmissions in can_targets. */
+            PATH_TIMING_BEGIN(GP_TIMING_PATH_COMMAND);
+            const bool command_sent = send_execution_sample(
+                state, &sample, inputs->now_ms);
+            PATH_TIMING_END(GP_TIMING_PATH_COMMAND, command_sent);
+            if (!command_sent)
             {
-                return fail(
-                    state,
-                    PATH_EXEC_ERR_COMMUNICATION
-                );
+                return fail(state, PATH_EXEC_ERR_COMMUNICATION);
             }
 
             state->sample_index++;
