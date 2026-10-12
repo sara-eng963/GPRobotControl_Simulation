@@ -1,7 +1,7 @@
 ---
 title: "Stage 2 — Shared SRAM4, Linker, MPU and IPC ABI"
 stage: 2
-status: "2A measured PASS; Stage 2B address contract committed, pending test"
+status: "2A/2B verified; 2C linker sections committed, ARM link test pending"
 date: 2026-10-12
 tags: [stm32h745, shared-memory, freertos, firmware]
 ---
@@ -130,14 +130,80 @@ checks; then add matching linker sections to both firmware targets and
 inspect both ELF maps. Do not treat a passing size test as a cache
 coherency or multi-kernel IPC validation.
 
+
+## 3B. Stage 2C — shared SRAM4 linker sections (pending validation)
+
+Both Cortex-M7 and Cortex-M4 linker scripts now declare **nonoverlapping
+SRAM4 partitions**:
+
+| Region name | Start address | Length | Role |
+| --- | --- | --- | --- |
+| `GP_SRAM4_IPC` | `0x38000000` | 4 KiB | Message Buffer descriptor and data storage |
+| `GP_SRAM4_TRAJECTORY` | `0x38001000` | 16 KiB | Trajectory ring |
+| `GP_SRAM4_RESERVED` | `0x38005000` | 12 KiB | Deliberately unused future shared slot |
+| CM7 `RAM_D3` / CM4 `GP_SRAM4_REMAINING` | `0x38008000` | 32 KiB | Upper SRAM4, not yet assigned |
+
+These partitions replace CM7's previous overlapping 64 KiB `RAM_D3`
+declaration; CM4 previously had **no SRAM4 region**. The changes apply to
+**both `*_FLASH.ld` and `*_RAM.ld` for both cores**, preventing different
+build modes from assigning incompatible physical memory.
+
+The two named output sections are:
+
+- `.gp_shared_ipc (NOLOAD)` → `GP_SRAM4_IPC`
+- `.gp_shared_trajectory (NOLOAD)` → `GP_SRAM4_TRAJECTORY`
+
+Each uses 32-byte alignment, `KEEP` input-section retention, explicit
+start/end symbols and GNU linker `ASSERT` checks for the exact slot base
+and capacity. **`NOLOAD` means these regions are not initialized by the
+firmware's normal copied-data/zeroed-BSS startup.** That is deliberate:
+the eventual M7-only initialization requires a *separate, coordinated
+ready handshake* with the M4; neither kernel may independently clear
+the live shared objects.
+
+### Verification
+
+Run the Stage 2A/B audit, then **the new Stage 2C ARM link test**:
+
+```bash
+bash Firmware/Tests/check_shared_layout.sh
+bash Firmware/Tests/check_sram4_linkers.sh
+```
+
+The latter compiles a *synthetic test-only* instance of each actual shared
+struct with the committed FreeRTOS 10.6.2 headers. It links that probe
+independently with all four generated linker scripts and examines the
+resulting ELF symbol positions and `NOBITS` section types with
+`arm-none-eabi-nm` and `arm-none-eabi-readelf`. The expected physical
+addresses are `0x38000000` (2,208-byte IPC) and `0x38001000`
+(12,352-byte trajectory).
+
+**This test does not build the full firmware images and must not be
+interpreted as a physical memory/cache-coherency test.** Full CM7/CM4
+CubeIDE builds are the next integration gate after this synthetic test.
+
+### Regeneration and safety
+
+These sections are maintained **in generated linker scripts** because
+CubeMX does not currently own this application-specific allocation.
+A future CubeMX regeneration can overwrite them. Re-run the Stage 2C
+script after every regeneration and review the linker diff. Do not place
+these shared structures in ordinary `.bss`, duplicate-initialize them
+from both cores, or use startup HSEM ID 0 for application notifications.
+
+**Deferred:** a production composition root that actually declares
+the section-annotated objects, initialization/ready/version protocol,
+the Cortex-M7 non-cacheable MPU region, ISR plumbing, complete firmware
+linking and hardware validation.
+
+
 ## 4. Follow-up implementation checkpoints
 
 - **2B — memory contract:** fixed slot addresses and alignments proposed;
   compile-time ABI/capacity gate awaits rerun. Initialization/version
   metadata remain to be designed.
-- **2C — linker sections:** add `NOLOAD`/equivalent sections for both images;
-  use explicit linker assertions to reject overflows and overlapping
-  allocations, then verify in both ELF map files.
+- **2C — linker sections:** sections and assertions committed to both cores'
+  FLASH/RAM scripts; synthetic ARM ELF test and full CubeIDE rebuild pending.
 - **2D — M7 MPU attributes:** make the selected physical shared region normal,
   shareable **non-cacheable** memory with the correct region size/alignment.
   Preserve unrelated MPU guards and other memory's cache configuration.
