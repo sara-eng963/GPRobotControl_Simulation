@@ -9,8 +9,13 @@
 #include <string.h>
 
 _Static_assert(sizeof(uint32_t) == 4U, "Requires 32-bit words");
+/* Only the POSIX runtime test uses host-sized pointers and size_t.
+ * Both actual STM32 binaries still enforce their 32-bit ABI at compile time.
+ * The host build uses the real FreeRTOS message-buffer implementation. */
+#if !defined(GP_IPC_POSIX_TEST)
 _Static_assert(sizeof(size_t) == 4U, "Identical 32-bit FreeRTOS ABI required");
 _Static_assert(sizeof(void *) == 4U, "STM32H745 is a 32-bit target");
+#endif
 _Static_assert(sizeof(GpIpcMessage) == 60U, "IPC application wire ABI changed");
 _Static_assert(__atomic_always_lock_free(sizeof(uint32_t), 0),
                "Requires lock-free publication of ready flag");

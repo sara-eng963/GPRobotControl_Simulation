@@ -305,3 +305,37 @@ This test does **not** link or run FreeRTOS, validate a target linker script,
 test HSEM interrupt/callback code, place the mailbox in shared SRAM, check
 cache behavior, or demonstrate physical timing correctness. Run the existing
 `ipc_mailbox_test` and other regressions separately for the host transport.
+
+### FreeRTOS IPC POSIX runtime test
+
+The permanent integration test is
+`Intercore/Tests/test_ipc_freertos_runtime.c`, built by
+`Intercore/Tests/run_ipc_freertos_runtime.sh` (or CTest
+`intercore_ipc_freertos_runtime_test`). Its separate CMake project,
+`Intercore/Tests/ipc_freertos_runtime/`, builds the locally installed,
+**actual FreeRTOS-Kernel GCC_POSIX port and stream-buffer implementation**.
+It does not modify or relink the existing SIL Kit host kernel, which has static
+allocation disabled.
+
+```bash
+bash Intercore/Tests/run_ipc_freertos_runtime.sh
+# After re-running top-level cmake configure:
+ctest --test-dir build-can-silkit -R '^intercore_ipc_freertos_runtime_test$' --output-on-failure
+```
+
+Covers empty/invalid messages, bidirectional payload framing, exact 16-message
+capacity, non-overwrite backpressure, ordered delivery, duplicated sequences,
+successful-send/receive notification callbacks, and two producer / two consumer
+FreeRTOS tasks transmitting 2000 messages in each direction.
+
+Only the test compile defines `GP_IPC_POSIX_TEST=1` to allow 64-bit
+host-sized pointers and `size_t`; the original 32-bit ABI assertions remain
+mandatory for real STM32 images. A test-specific FreeRTOS configuration enables
+static allocation and supplies idle-task static memory, while inheriting the
+main project's host settings.
+
+**Limitations:** The POSIX port runs on one FreeRTOS scheduler, so its tasks
+interleave rather than execute simultaneously on two independent STM32 cores.
+Notifications tested here are project callback invocation, **not HSEM IRQ
+delivery**. The test cannot prove shared SRAM cache coherence, core reset
+behavior, HAL integration, or physical 500 Hz determinism.
