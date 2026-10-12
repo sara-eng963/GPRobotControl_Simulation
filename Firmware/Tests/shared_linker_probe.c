@@ -4,9 +4,6 @@
  * may ship an initial value for live cross-core SRAM4 data.
  */
 #include <stdint.h>
-#ifndef configUSE_STREAM_BUFFERS
-#define configUSE_STREAM_BUFFERS 1 /* Audit-only IPC header guard. */
-#endif
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
 #include "gp_shared_sram4_layout.h"
