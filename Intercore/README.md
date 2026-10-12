@@ -166,3 +166,118 @@ Host regressions:
   `supervisor_silkit_flash_cancel`, and
   `supervisor_silkit_flash_program_fail` exercise the flash-backed whole
   simulator when built on the host.
+
+## STM32H745 target backend (FreeRTOS Message Buffers + HSEM)
+
+This is a **target-only, not-yet-hardware-verified implementation**, added
+without modifying the tested SIL Kit/POSIX transport. There are no STM32 dual
+firmware images in this repository yet, so **nothing here establishes STM32
+compile success, interrupt correctness, or 500 Hz execution guarantees**.
+
+### Technology decision
+
+| Layer | Decision | Reason |
+| --- | --- | --- |
+| HMI / status / small diagnostics | `ipc_mailbox_freertos.c`: real FreeRTOS static Message Buffers, one each direction | Standard message framing, bounded nonblocking messages, no new custom ring |
+| Trajectory streaming | Keep `trajectory_stream.c` dedicated 512 x 24-byte SPSC buffer | Avoid additional copies/variable message overhead in 2 ms consumption |
+| NOR validation writes | Keep `validation_storage_bridge.c` 64 x 32-byte SPSC command queue | Durable commit, M4 backend ownership, BUSY, ordered writes and cancel/ack are application transaction semantics |
+| Remote notifications | `ipc_stm32h745_hsem.c` via STM32 HAL HSEM | Hardware signaling; not a cross-core FreeRTOS queue |
+| OpenAMP/RPMsg | Do not add | Unnecessary protocol/metadata/runtime cost for two fixed roles and short messages |
+
+### Compile and integration contract
+
+1. Compile `Intercore/ipc_mailbox_freertos.c` **instead** of
+   `Intercore/ipc_mailbox.c` into each STM32 target. Define
+   `GP_IPC_FREERTOS_BACKEND=1` for all application translation units using
+   `GpIpcShared`. Do not define it for POSIX host targets.
+2. Pin and use identical FreeRTOS kernel revision/ABI, compiler C data layout,
+   FreeRTOSConfig settings and `StaticMessageBuffer_t` layout on both cores.
+   `configSUPPORT_STATIC_ALLOCATION=1` and `configUSE_STREAM_BUFFERS=1` are
+   required. The existing **host** `FreeRTOSConfig.h` has static allocation
+   disabled and must not simply be reused as the final target configuration.
+3. Allocate **one** `GpIpcShared` in D3 SRAM at 0x38000000 (64 KiB total
+   SRAM4), in an identically mapped `.shared_ram (NOLOAD)` section in both
+   linker files. Other shared regions (trajectory samples and validation
+   queue) need their own bounded allocation; check total SRAM4 usage and any
+   DMA restrictions. Configure the CM7 MPU for noncacheable shareable SRAM4
+   and validate MPU rules before enabling D-cache. The global structure must
+   be 32-byte aligned and never initialized independently by M4.
+4. M7, with M4 quiescent, initializes shared regions and calls
+   `gp_ipc_initialize` ONCE. After publication of the magic/ABI and a
+   documented HSEM boot handshake, release M4. Both cores check
+   `gp_ipc_valid` before any send/receive. Reset of either core invalidates
+   session ownership: stop control, quiesce both IPC users, and re-bootstrap;
+   never silently resume an old buffer/trajectory epoch.
+5. Compile `ipc_stm32h745_hsem.c` in each core image, with exactly one
+   `GP_IPC_CORE_M7` or `GP_IPC_CORE_M4`. Call
+   `gp_ipc_stm32_hsem_setup(local_service_task)` per core after HAL clock/
+   RTOS setup. In the board's single `HAL_HSEM_FreeCallback(uint32_t mask)`
+   call `gp_ipc_stm32_hsem_on_free(mask)`. Enable `HSEM1_IRQn` on M7 or
+   `HSEM2_IRQn` on M4, with an ISR priority compatible with FreeRTOS
+   `...FromISR` calls. Call `HAL_HSEM_IRQHandler()` from the IRQ handler.
+   Reserve HSEM IDs 0..3 for IPC (see enum); do not share them with other
+   boot/IPC code. Do not overwrite existing HAL callbacks blindly.
+6. These operations use **zero timeout**. No sender or receiver is permitted
+   to block on the shared message buffer because that can install a foreign
+   FreeRTOS task handle in the shared control block and cause cross-kernel
+   task-notification corruption. HSEM wakes only a **local** service task via
+   its private task handle. M7 Supervisor always polls/drains a bounded number
+   of messages; M4 service must recheck messages with a bounded fallback poll
+   because HSEM notifications can coalesce/fail. Check send return values;
+   full means dropped/explicit backpressure, never overwrite.
+7. Only one M4 IPC service task writes M4-to-M7 and reads M7-to-M4; only the
+   M7 Supervisor does the opposite. Other M4 producers use *local* FreeRTOS
+   queues to reach the service task. M7 must never wait for M4, HSEM, NOR,
+   erase, program, or readback. The nonblocking HAL `FastTake` path should be
+   measured before motion deployment. This transport is not the E-stop path.
+
+### Architecture
+
+```mermaid
+flowchart LR
+  subgraph M7[CM7 FreeRTOS]
+    S[Supervisor + CANopen / 500 Hz execution]
+    V[Numerical validation worker]
+  end
+  subgraph SH[Non-cacheable shared SRAM4]
+    MB[Two FreeRTOS Message Buffers]
+    TS[512-sample trajectory SPSC]
+    VS[64-command validation SPSC]
+  end
+  subgraph M4[CM4 FreeRTOS]
+    I[IPC / HMI service]
+    F[QSPI storage worker]
+  end
+  S <-->|Commands and status| MB
+  MB <-->|Zero-timeout IPC| I
+  S <-->|Indexed 2 ms samples| TS
+  TS <-->|256-sample refill| F
+  V -->|Sample commands| VS
+  VS -->|Durable commit acknowledgment| V
+  F <-->|Flash jobs| VS
+  S <-.->|HAL HSEM notifications, local RTOS task wake| I
+  F --> NOR[W25Q512JV NOR]
+```
+
+### Verification status and target gates
+
+- Existing host builds and tests continue using `ipc_mailbox.c`; their
+  behavior is untouched. This is **compatibility**, not target verification.
+- Target source is not included in host `CMakeLists.txt` because the STM32
+  CM7/CM4 target configurations and HAL dependencies are not present.
+- Required before enabling on a robot: separate CM7/CM4 cross-compilation,
+  linker-map / MPU checks, shared FreeRTOS struct layout and version checks,
+  HSEM callback and priority integration, notification coalescing/full-buffer
+  tests, core reset/fault injection, NOR cancel/commit tests, and physical
+  measurement of 500 Hz jitter and worst-case IPC latencies. No such outcomes
+  are claimed here.
+
+Upstream foundations: [ST AN5617](https://www.st.com/resource/en/application_note/an5617-introduction-to-interprocessor-communications-for-stm32h745755-and-stm32h747757-mcus-stmicroelectronics.pdf),
+[STM32CubeH7 AMP Dual RTOS reference](https://github.com/STMicroelectronics/STM32CubeH7),
+[ST's FreeRTOS message-buffer/HSEM guide](https://community.st.com/stm32-mcus-60/how-to-use-freertos-message-buffers-on-stm32h7-dual-core-devices-23),
+and [FreeRTOS Message Buffers](https://www.freertos.org/).
+No ST or FreeRTOS source is copied into this repository; these adapters call
+upstream APIs and are project-owned. Their runtime behavior depends on the
+FreeRTOS version selected when the MCU project is created. STM32CubeH7's
+software license and FreeRTOS's MIT licensing apply to the eventual vendored
+components, not to separately authored glue code.
