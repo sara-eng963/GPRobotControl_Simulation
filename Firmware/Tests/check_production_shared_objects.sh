@@ -23,7 +23,7 @@ GCC_FLAGS=(-std=c11 -O0 -Wall -Wextra -Werror -ffunction-sections
     -I"$FW/Drivers/STM32H7xx_HAL_Driver/Inc")
 
 "$CC" "${GCC_FLAGS[@]}" -c \
-    "$FW/CM7/Core/Src/gp_shared_objects.c" -o "$OUT/objects.o"
+    "$FW/CM7/Core/Src/intercore_shared_memory.c" -o "$OUT/objects.o"
 printf 'void Reset_Handler(void) { for (;;) { __asm volatile ("nop"); } }\n' > "$OUT/reset.c"
 "$CC" "${GCC_FLAGS[@]}" -c "$OUT/reset.c" -o "$OUT/reset.o"
 
@@ -33,8 +33,8 @@ for mode in FLASH RAM; do
     "$CC" -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard \
         -nostdlib -Wl,--gc-sections -Wl,-T,"$FW/CM7/STM32H745IITX_$mode.ld" \
         "$OUT/objects.o" "$OUT/reset.o" -o "$elf"
-    for item in "gp_shared_ipc 38000000 000008a0 .gp_shared_ipc" \
-                "gp_shared_trajectory 38001000 00003040 .gp_shared_trajectory"; do
+    for item in "intercore_ipc_shared 38000000 000008a0 .gp_shared_ipc" \
+                "intercore_trajectory_shared 38001000 00003040 .gp_shared_trajectory"; do
         read -r symbol address size section <<< "$item"
         line="$("$NM" -S --defined-only "$elf" | awk -v n="$symbol" '$4==n{print $1, $2}')"
         [[ "$line" == "$address $size" ]] || {
