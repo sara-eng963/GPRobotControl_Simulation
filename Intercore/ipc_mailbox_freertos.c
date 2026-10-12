@@ -113,7 +113,7 @@ static uint32_t pending_messages(const GpIpcShared *shared,
     if (!gp_ipc_valid(shared)) return 0U;
     /* Diagnostic snapshot only. No decisions or concurrency proof rely on it.
      * One message is 60 payload bytes plus four framing bytes on STM32. */
-    const size_t bytes = xMessageBufferBytesAvailable(handle);
+    const size_t bytes = xStreamBufferBytesAvailable(handle);
     const size_t total = sizeof(GpIpcMessage) + sizeof(size_t);
     const size_t count = bytes / total;
     return (uint32_t)(count > GP_IPC_RING_CAPACITY ?
