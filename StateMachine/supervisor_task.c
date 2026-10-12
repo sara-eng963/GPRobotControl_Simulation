@@ -5,6 +5,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(GP_HOST_TIMING)
+#include "../Simulation/Timing/host_timing_trace.h"
+#define TRACE_BEGIN(source) gp_timing_begin(source)
+#define TRACE_END(source, success) gp_timing_end(source, success)
+#else
+#define TRACE_BEGIN(source) ((void)0)
+#define TRACE_END(source, success) ((void)0)
+#endif
+
 #ifndef SUPERVISOR_DEBUG
 #define SUPERVISOR_DEBUG 0
 #endif
@@ -161,10 +170,12 @@ static void validation_worker_entry(void *argument)
             }
 
             PathValidationOutputs snapshot = {0};
+            TRACE_BEGIN(GP_TIMING_VALIDATION);
             StateStepResult result = state_path_validation_step(
                 &context->validation,
                 context->config.validation_sample_budget,
                 &snapshot);
+            TRACE_END(GP_TIMING_VALIDATION, result != STATE_STEP_FAILED);
             taskENTER_CRITICAL();
             context->validation_outputs = snapshot;
             if (result != STATE_STEP_RUNNING)
@@ -964,6 +975,7 @@ static void supervisor_task_entry(void *argument)
 
     for (;;)
     {
+        TRACE_BEGIN(GP_TIMING_SUPERVISOR);
         /* Acquisition only: raw inputs do not authorize motion or create HMI
          * events until a separately tested input adapter is connected. */
         SupervisorInputSnapshot sampled = {0};
@@ -1031,6 +1043,7 @@ static void supervisor_task_entry(void *argument)
             (void)context->config.io.write_outputs(
                 context->config.io.context, &outputs);
         }
+        TRACE_END(GP_TIMING_SUPERVISOR, true);
         vTaskDelayUntil(&last_wake, context->config.period_ticks);
     }
 }
