@@ -49,6 +49,10 @@ static const GpTimingDefinition defs[GP_TIMING_SOURCE_COUNT] = {
     {"flash_storage", "activity", 0U},
     {"prefetch",      "best_effort", 0U},
     {"can_targets",   "event", 0U},
+    {"path_feedback_wait", "event", 0U},
+    {"path_feedback_late", "event", 0U},
+    {"path_period_wait",   "event", 0U},
+    {"path_commands",      "event", 0U},
 };
 static GpTimingRing rings[GP_TIMING_SOURCE_COUNT];
 static FILE *output;
