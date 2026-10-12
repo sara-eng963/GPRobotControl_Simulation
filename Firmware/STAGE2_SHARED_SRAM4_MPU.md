@@ -350,19 +350,24 @@ application-file changes.
   `gp_ipc_initialize`, `gp_traj_shared_initialize` and
   `xStreamBufferGenericCreateStatic`. Final IPC and trajectory
   objects remain at `0x38000000` / `0x38001000` with `NOBITS`.
-- **Stage 2E-3 — source committed, awaiting validation:** M4's
-  `intercore_startup_validation.c` checks the M7-created shared
-  structures through canonical `gp_ipc_valid()` and
-  `gp_traj_shared_valid()`, using fixed SRAM4 addresses. The M4
-  `main.c` user-code block calls this after the generated HSEM-0
-  wake and HAL initialization but before `osKernelInitialize()`.
-  Invalid shared state calls the existing `Error_Handler()`;
-  M4 never initializes or clears this memory. Source staging now
-  supports *both* firmware cores, and the ARM compile/startup-order
-  test covers M4 as well.
-- **Still pending:** run the updated ARM test, clean M4 CubeIDE build,
-  M4 ELF verification, ST-style EXTI/FreeRTOS notifications,
-  reset/partial-core recovery assessment and real MCU tests.
+- **Stage 2E-3 — verified at CM4 build level:** The user ran the M7/M4
+  ARM compile and startup-order tests and rebuilt the full CM4 CubeIDE
+  project with 0 errors and 0 warnings. The resulting CM4 ELF contains
+  `intercore_startup_validate`, `gp_ipc_valid` and
+  `gp_traj_shared_valid`, and defines **no** M7-owned shared objects.
+  Its empty `.gp_shared_*` sections have 0-byte sizes and are not
+  memory allocations. The M4 checks after HSEM-0 wake and before the
+  scheduler are therefore verified **at build level**.
+- **Stage 2E-4 — code committed, awaiting verification:** The vendor HAL
+  EXTI software interrupt routing, per-core ISR and FreeRTOS Message
+  Buffer completion call are integrated in
+  `Common/Src/intercore_notifications.c`, the CM7/CM4 `main.c`
+  startup user sections, and each core's
+  `Core/Src/stm32h7xx_it.c`. Both `.cproject` Debug/Release
+  configurations now enable the vendor `DUAL_CORE` macro.
+- **Still pending:** compile Stage 2E-4 against the installed ARM SDK;
+  both clean CubeIDE builds; physical dual-core EXTI traffic, delivery
+  metrics, fault/reset behavior, and machine safety validation.
 
 **Important:** ST's example covers cold-boot sequencing and one-way
 Message Buffer demonstration. It does not establish safe partial-core
@@ -420,6 +425,86 @@ M4 in CubeIDE and inspect its ELF. The M4 ELF should have its validator
 and native ABI readers but **must not** define the M7-owned
 `intercore_ipc_shared` or `intercore_trajectory_shared` symbols.
 Do not describe Stage 2E as complete.
+
+
+## 3E. Stage 2E-4 — native ST EXTI Message Buffer notifications
+
+**Official implementation baseline:** ST's STM32H745I-DISCO
+`FreeRTOS_AMP_Dual_RTOS` example (linked in 3D) uses EXTI software
+interrupts to signal another core and FreeRTOS's
+`xMessageBufferSendCompletedFromISR()` to notify the receiving
+kernel. We adapted this **notification mechanism** to the ST HAL APIs
+actually bundled with our pinned STM32CubeH7 V1.13.0:
+`HAL_EXTI_SetConfigLine`, `HAL_EXTI_GenerateSWI`,
+`HAL_EXTI_RegisterCallback` and `HAL_EXTI_IRQHandler`.
+This is **not a copy** of the example's additional control Message Buffer
+and `sbSEND_COMPLETED` hook.
+
+| Flow | Software EXTI line | Recipient IRQ | Priority |
+| --- | --- | --- | --- |
+| M7 → M4 IPC message | EXTI0, CPU2 interrupt | CM4 `EXTI0_IRQHandler` | 6 |
+| M4 → M7 IPC message | EXTI1, CPU1 interrupt | CM7 `EXTI1_IRQHandler` | 6 |
+
+- M7 configures **both** EXTI routes and the SYSCFG clock before releasing
+  M4 through ST HSEM-0. M4 validates the M7-created IPC buffer before
+  enabling its own receiving IRQ. Each core registers the backend's
+  `gp_ipc_set_notifier()` only after successful configuration.
+- A successful **nonblocking** send in
+  `Intercore/ipc_mailbox_freertos.c` triggers
+  `HAL_EXTI_GenerateSWI()` for the opposite core; unsuccessful sends
+  and receipt/space notifications do not generate a peer-data interrupt.
+- The recipient's HAL EXTI callback clears its own pending flag and calls
+  native `xMessageBufferSendCompletedFromISR()`. Interrupt priority 6
+  is no more urgent than the generated FreeRTOS
+  `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5`.
+- **Dual-core build flag:** ST's HAL EXTI source uses
+  `#if defined(DUAL_CORE)` to select the M4-specific `C2IMR` /
+  `C2PR` registers. Both CubeIDE `.cproject` build configurations
+  explicitly define `DUAL_CORE`, including HAL driver compilation.
+  **CubeMX regeneration may overwrite these project settings**; audit
+  both Debug/Release configurations after every regeneration. This
+  setting is vendor-defined, not a new application-level protocol.
+- **Reservation:** EXTI0 and EXTI1 are allocated to IPC and cannot also
+  serve independent GPIO interrupt sources. Confirm actual board pin /
+  EXTI assignments before final PCB/peripheral configuration. ST's
+  HSEM-0 boot channel remains separate. The earlier HSEM 24–27 mock
+  adapter is NOT linked to either production firmware image.
+- **Kernel limitation:** the target IPC wrapper always uses 0-timeout
+  FreeRTOS Message Buffer send and receive. This prevents a sender from
+  using a task waiter belonging to the other kernel. The ISR-side
+  completion API is included following ST's pattern, but there are no
+  blocking shared-message receivers or registered IPC service-task
+  waiters yet; **the interrupt does not currently imply a task was
+  awakened**, and app-level wake latency has not been measured. Do not
+  change the cross-core IPC to blocking operations without explicitly
+  replacing the default completion hook with a validated AMP scheme.
+- The notification signal is a wakeup hint and may coalesce; consumers
+  must drain all pending messages and handle ring-full conditions. This
+  channel is not an E-stop, fail-safe, robot motion authorization or
+  guaranteed-delivery service.
+
+**Source and ARM verification (run after fetching the commit):**
+
+```bash
+bash Firmware/Tests/check_intercore_notifications.sh
+```
+
+This cross-compiles the shared `intercore_notifications.c` adapter and
+each generated core IRQ file against the **real** STM32 HAL/FreeRTOS
+headers, checks `DUAL_CORE` project settings and startup ordering.
+It must pass before the two full CubeIDE builds.
+
+**CubeIDE synchronization gate:** with the IDE closed, synchronize
+`Firmware/STM32H745/Common/Inc/intercore_notifications.h`,
+`Common/Src/intercore_notifications.c`, both core `main.c` and
+`stm32h7xx_it.c`, and **both** core `.cproject` files into the
+Windows verification project. Restart CubeIDE, refresh each project,
+clean/build both, then inspect ELF symbols. Re-stage canonical
+`Intercore` headers/sources using the existing scripts if changed.
+
+**Acceptance is pending** until ARM tests and both full builds pass;
+physical bidirectional interrupt delivery and recovery require actual
+hardware. A compile success alone is not an end-to-end communication test.
 
 ## 4. Follow-up implementation checkpoints
 
