@@ -221,6 +221,58 @@ static void test_cancel_in_flight(void)
     puts("[PASS] in-flight flash read cannot ack release or publish stale batch");
 }
 
+/* Both cores progress concurrently over 8192 wrapped ring samples.
+ * An empty consumer can retry without advancing (the real controller would
+ * hold/FAULT on starvation instead); this test checks visibility and order. */
+typedef struct { Test *t; GpTrajectoryIdentity id; } ConcurrentArgs;
+static void *concurrent_producer(void *arg)
+{
+    ConcurrentArgs *args = arg;
+    while (args->t->m4.next_index < args->id.sample_count) {
+        assert(gp_traj_m4_step(&args->t->m4));
+        sched_yield();
+    }
+    return NULL;
+}
+static void *concurrent_consumer(void *arg)
+{
+    ConcurrentArgs *args = arg;
+    GpTrajectorySample sample;
+    for (uint32_t i = 0U; i < args->id.sample_count;) {
+        const GpTrajectoryReadResult result =
+            gp_traj_m7_take(&args->t->m7, i, &sample);
+        if (result == GP_TRAJ_READ_STARVED) {
+            sched_yield();
+            continue;
+        }
+        assert(result == GP_TRAJ_READ_OK);
+        verify(&sample, i);
+        ++i;
+    }
+    assert(gp_traj_m7_finish(&args->t->m7));
+    return NULL;
+}
+static void test_bidirectional_thread_interleavings(void)
+{
+    static Test t;
+    init(&t);
+    GpTrajectoryIdentity id = identity(50U, 8192U);
+    prefill(&t, &id);
+    ConcurrentArgs args = { .t = &t, .id = id };
+    pthread_t producer, consumer;
+    assert(pthread_create(&producer, NULL, concurrent_producer, &args) == 0);
+    assert(pthread_create(&consumer, NULL, concurrent_consumer, &args) == 0);
+    assert(pthread_join(producer, NULL) == 0);
+    assert(pthread_join(consumer, NULL) == 0);
+    assert(gp_traj_buffered(&t.shared) == 0U);
+    assert(t.m4.next_index == id.sample_count);
+    assert(t.m4.refills == 32U);
+    assert(gp_traj_m4_step(&t.m4));
+    assert(gp_traj_m4_release_acknowledged(&t.shared, t.m7.epoch));
+    deinit(&t);
+    puts("[PASS] concurrent M4 producer/M7 consumer over 8192 six-axis samples");
+}
+
 static void test_discard_and_identity(void)
 {
     static Test t;
@@ -229,6 +281,9 @@ static void test_discard_and_identity(void)
     assert(gp_traj_m4_prepare(&t.m4, read_flash, &t.source, &id));
     assert(gp_traj_m4_step(&t.m4));
     assert(gp_traj_m7_discard(&t.m7));
+    /* Regression: discarded generation remains unusable until M4 ACKs,
+     * even though the producer has not cleared the READY flag yet. */
+    assert(!gp_traj_m7_begin(&t.m7, &id));
     assert(gp_traj_m4_step(&t.m4));
     assert(gp_traj_m4_release_acknowledged(&t.shared, 1U));
     assert(!gp_traj_m7_begin(&t.m7, &id));
@@ -253,6 +308,7 @@ int main(void)
     test_starvation_and_flash_error();
     test_cancel_in_flight();
     test_discard_and_identity();
+    test_bidirectional_thread_interleavings();
     puts("PASS: dual-core trajectory stream host regression");
     return 0;
 }
