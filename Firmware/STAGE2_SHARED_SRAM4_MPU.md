@@ -454,8 +454,11 @@ and `sbSEND_COMPLETED` hook.
   `HAL_EXTI_GenerateSWI()` for the opposite core; unsuccessful sends
   and receipt/space notifications do not generate a peer-data interrupt.
 - The recipient's HAL EXTI callback clears its own pending flag and calls
-  native `xMessageBufferSendCompletedFromISR()`. Interrupt priority 6
-  is no more urgent than the generated FreeRTOS
+  native `xMessageBufferSendCompletedFromISR()` **only when**
+  `xTaskGetSchedulerState()==taskSCHEDULER_RUNNING`. This handles the
+  possibility of M4 sending before M7 has started its own FreeRTOS
+  scheduler; the buffered message remains available to drain later.
+  Interrupt priority 6 is no more urgent than the generated FreeRTOS
   `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5`.
 - **Dual-core build flag:** ST's HAL EXTI source uses
   `#if defined(DUAL_CORE)` to select the M4-specific `C2IMR` /
