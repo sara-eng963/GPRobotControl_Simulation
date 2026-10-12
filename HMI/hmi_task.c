@@ -1,4 +1,12 @@
 #include "hmi_task.h"
+#if defined(GP_HOST_TIMING)
+#include "../Simulation/Timing/host_timing_trace.h"
+#define TRACE_HMI_BEGIN() gp_timing_begin(GP_TIMING_HMI)
+#define TRACE_HMI_END() gp_timing_end(GP_TIMING_HMI, true)
+#else
+#define TRACE_HMI_BEGIN() ((void)0)
+#define TRACE_HMI_END() ((void)0)
+#endif
 static HmiTaskConfig config;
 static QueueHandle_t queue;
 static TaskHandle_t task;
@@ -27,6 +35,7 @@ static void entry(void *arg)
     HmiEvent pending=HMI_EVENT_NONE;
     TickType_t wake=xTaskGetTickCount();
     for(;;) {
+        TRACE_HMI_BEGIN();
         /* Retain an event when Supervisor's queue is full; never drop Record. */
         if(pending==HMI_EVENT_NONE) {
             if(xQueueReceive(queue,&pending,0)!=pdPASS && config.receive_event)
@@ -40,6 +49,7 @@ static void entry(void *arg)
         SupervisorDiagnostics status;
         if(config.publish_status && supervisor_task_get_diagnostics(&status))
             config.publish_status(config.context,&status);
+        TRACE_HMI_END();
         vTaskDelayUntil(&wake,config.period_ticks);
     }
 }
