@@ -8,6 +8,7 @@
 #include "../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../ControlCore/Kinematics/control_fk.h"
 #include "Storage/trajectory_prefetch.h"
+#include "Timing/host_timing_trace.h"
 #include "../Intercore/validation_storage_bridge.h"
 #include "Renode/Storage/qspi_nor_validated_storage.h"
 #include "Tests/w25q_nor_model.h"
@@ -247,7 +248,17 @@ static void flash_storage_worker_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        (void)gp_validation_m4_step(&flash_validation_worker);
+        /* Avoid flooding the trace with idle flash-worker polls. */
+        const uint32_t head = __atomic_load_n(
+            &flash_validation_shared.head, __ATOMIC_ACQUIRE);
+        const uint32_t tail = __atomic_load_n(
+            &flash_validation_shared.tail, __ATOMIC_ACQUIRE);
+        const bool active = head != tail ||
+            __atomic_load_n(&flash_validation_shared.cancel_request, __ATOMIC_ACQUIRE) ||
+            __atomic_load_n(&flash_validation_shared.release_request, __ATOMIC_ACQUIRE);
+        if (active) gp_timing_begin(GP_TIMING_FLASH);
+        const bool result = gp_validation_m4_step(&flash_validation_worker);
+        if (active) gp_timing_end(GP_TIMING_FLASH, result);
         vTaskDelay(1);
     }
 }
@@ -256,7 +267,10 @@ static void prefetch_worker_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        (void)trajectory_prefetch_worker_step(&validated_prefetch);
+        const bool active = !trajectory_prefetch_stopped(&validated_prefetch);
+        if (active) gp_timing_begin(GP_TIMING_PREFETCH);
+        const bool result = trajectory_prefetch_worker_step(&validated_prefetch);
+        if (active) gp_timing_end(GP_TIMING_PREFETCH, result);
         vTaskDelay(1);
     }
 }
@@ -851,6 +865,7 @@ static void input_task(void *arg)
     (void)arg;bool old_estop=false,old_protective=false,old_fault=false;
 
     for(;;) {
+        gp_timing_begin(GP_TIMING_SIM_INPUTS);
         StateMachine machine;
         supervisor_task_get_state(&machine);
         if(machine.activeState==ROBOT_STATE_IDLE && machine.previousState==ROBOT_STATE_HOMING)homed=true;
@@ -917,6 +932,7 @@ static void input_task(void *arg)
         m.type=SUPERVISOR_MESSAGE_PATH_EXECUTION_INPUTS;memset(&m.data,0,sizeof(m.data));
         m.data.path_execution_inputs.now_ms=(uint32_t)(xTaskGetTickCount()*1000/configTICK_RATE_HZ);
         post_required(&m);
+        gp_timing_end(GP_TIMING_SIM_INPUTS, true);
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
@@ -1873,6 +1889,10 @@ int main(void)
     struct sockaddr_in addr={0};addr.sin_family=AF_INET;addr.sin_port=htons(HMI_CONTROLLER_PORT);addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
     if(udp<0 || bind(udp,(struct sockaddr*)&addr,sizeof(addr))<0){perror("GUI command port 5010");return 1;}
     (void)configure_matlab_status_destination();
+    if (!gp_timing_init(getenv("GP_TIMING_CSV"))) {
+        fprintf(stderr, "[TIMING] CSV initialization failed\n");
+        return 1;
+    }
     if(fcntl(udp,F_SETFL,O_NONBLOCK)<0 || !start_system()){fprintf(stderr,"Startup failed\n");return 1;}
     puts("REAL state modules + HMI task + SIL Kit CAN1 + six external AVATAR virtual nodes.\nGUI UDP ports: commands 5010, panel 5011, teaching 5012. MATLAB status: 5005.");
     vTaskStartScheduler();return 1;
