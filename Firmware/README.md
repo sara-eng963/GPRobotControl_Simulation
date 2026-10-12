@@ -81,3 +81,10 @@ Official references:
 
 - [Verified Stage 1 dual-core firmware engineering report](STAGE1_DUAL_CORE_FOUNDATION.md)
 - Stage 2 begins with a **SRAM4 memory-map and object-size audit** before any generated linker/MPU modification.
+
+## Stage 2 — shared SRAM4 and MPU
+
+See [Stage 2 design/audit log](STAGE2_SHARED_SRAM4_MPU.md).
+First run `bash Firmware/Tests/check_shared_layout.sh` to establish
+actual CM7/CM4 shared-object sizes using the generated FreeRTOS 10.6.2 headers.
+Do not edit linker maps until this audit passes.
