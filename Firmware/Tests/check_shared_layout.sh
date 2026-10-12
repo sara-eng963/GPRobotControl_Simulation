@@ -68,17 +68,12 @@ echo
 echo 'ABI/offset audit (array size encodes offset+1):'
 cat "$TMP/CM7.sizes"
 echo
-if grep -Eq '(^|[[:space:]])(RAM_D3|SRAM4)[[:space:]]*\(' "$FW/CM4/STM32H745IITX_FLASH.ld"; then
-    echo 'INFO: CM4 linker already declares a shared region; inspect manually.'
-else
-    echo 'PENDING: CM4 linker has no dedicated SRAM4 region.'
-fi
-echo
-echo 'Stage 2B RESERVED ADDRESS PROPOSAL (not yet linker-placed):'
+echo 'Stage 2B FIXED SHARED ADDRESS CONTRACT (linker checked separately):'
 printf '  IPC:          0x38000000..0x38000FFF  4096 B (%d B occupied)\n' "$ipc"
 printf '  Trajectory:   0x38001000..0x38004FFF 16384 B (%d B occupied)\n' "$traj"
 echo "  Shared spare: 0x38005000..0x38007FFF 12288 B (reserved)"
 echo "  Upper SRAM4:  0x38008000..0x3800FFFF 32768 B (unallocated)"
-echo 'PENDING: Neither core places the objects in SRAM4 yet; no MPU validation.'
+echo 'NOTE: compile-only ABI test; run check_sram4_linkers.sh for linker placement.'
+echo 'NOTE: generated MPU source and hardware behavior are verified separately.'
 echo 'PASS: native FreeRTOS 10.6.2 message_buffer.h compiled without custom feature shim.'
 echo 'PASS: Stage 2A CM7/CM4 ABI equality and SRAM4 gross-capacity check'
