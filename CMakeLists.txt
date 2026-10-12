@@ -177,7 +177,7 @@ target_include_directories(path_validation_test PRIVATE
     StateMachine
     StateMachine/States
 )
-target_link_libraries(path_validation_test PRIVATE control_core avatar_drives m)
+target_link_libraries(path_validation_test PRIVATE control_core avatar_drives intercore_validation_storage m)
 add_test(NAME path_validation_test COMMAND path_validation_test)
 
 add_executable(runtime_states_test
