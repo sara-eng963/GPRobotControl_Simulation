@@ -312,6 +312,51 @@ def main() -> None:
             "When command bursts are interrupted, no 500 Hz conclusion "
             "should be drawn from a whole-run average.",
         ])
+    if any(name in groups for name in (
+            "path_commands", "path_feedback_late",
+            "path_feedback_wait", "path_period_wait")):
+        counts = {
+            name: len(groups.get(name, []))
+            for name in (
+                "path_commands", "path_feedback_late",
+                "path_feedback_wait", "path_period_wait")
+        }
+        lines.extend([
+            "", "## Path-execution 2 ms gating diagnosis", "",
+            f"Actual trajectory command calls: {counts['path_commands']}.",
+            f"Feedback not fresh while 2 ms command already due: "
+            f"{counts['path_feedback_late']} Supervisor polling events.",
+            f"Feedback not yet fresh before the command was due: "
+            f"{counts['path_feedback_wait']} polling events.",
+            f"Feedback ready but waiting for the 2 ms period: "
+            f"{counts['path_period_wait']} polling events.",
+            "",
+            "These are **poll counts** at successive Supervisor iterations, "
+            "**not** numbers of independently missed commands or motor failures. "
+            "The feedback gate is checked before the period gate. "
+            "A late-feedback event means feedback was still unavailable "
+            "when the trajectory command became due.",
+        ])
+        if "path_commands" in groups:
+            timing = can_bursts(groups["path_commands"])
+            lines.extend([
+                f"Trajectory-only burst intervals: {timing['intervals']} "
+                f"across {timing['bursts']} bursts.",
+                f"Trajectory command P99 interval: "
+                f"{pretty(timing['interval_p99_us'])} us; "
+                f"maximum interval within classified bursts: "
+                f"{pretty(timing['interval_max_us'])} us.",
+                "Unlike the generic can_targets source, path_commands "
+                "excludes guided/homing/other CAN transactions.",
+            ])
+    else:
+        lines.extend([
+            "", "## Path-execution 2 ms gating diagnosis", "",
+            "No path-specific event counters in this recording. "
+            "This is expected for pre-instrumentation baseline/flash CSVs. "
+            "One NEW scenario run is needed for attribution.",
+        ])
+
     lines.extend([
         "", "## What to conclude",
         "",
@@ -341,6 +386,17 @@ def main() -> None:
               f"log_drops={s['logger_dropped']}")
     if "can_targets" in groups:
         print("CAN event-burst analysis:", can_bursts(groups["can_targets"]))
+    path_sources = (
+        "path_commands", "path_feedback_late",
+        "path_feedback_wait", "path_period_wait")
+    if any(source in groups for source in path_sources):
+        print("Path-execution event polls (not missed commands):",
+              {source: len(groups.get(source, [])) for source in path_sources})
+        if "path_commands" in groups:
+            print("Trajectory-only command spacing:",
+                  can_bursts(groups["path_commands"]))
+    else:
+        print("No path-specific diagnostics (legacy CSV); collect a new run.")
     print("Saved:", out_dir / "summary_metrics.csv")
     print("Saved:", report)
     if charts:
