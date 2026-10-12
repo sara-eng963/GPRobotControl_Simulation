@@ -118,14 +118,22 @@ or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
   cold-start example. Full CM7 CubeIDE build: 0 errors, 0 warnings;
   actual firmware ELF contains the native initialization functions
   and both shared objects at the expected `NOBITS` SRAM4 addresses.
-- **2E-3 (code committed, awaiting tests):** M4 now checks M7-created
-  shared buffers through canonical IPC/trajectory validation functions
-  after HSEM-0 wakeup and before its own FreeRTOS scheduler. Run
-  `bash Firmware/Tests/check_intercore_startup_compile.sh` and
-  `bash Firmware/Tests/stage_intercore_sources.sh "<verifier>"`
-  after syncing the tracked M4 source/header. A clean M4 firmware build,
-  real two-core startup, EXTI notifications, reset recovery and hardware
-  checks remain pending.
+- **2E-3 (verified at build level):** M4 checks the M7-created IPC and
+  trajectory objects after HSEM-0 wakeup and before the scheduler.
+  Full CM4 CubeIDE build: 0 errors, 0 warnings. The M4 ELF contains
+  the validation functions but defines no M7-owned shared objects;
+  its reserved linker sections have zero length.
+- **2E-4 (code committed, verification pending):** the vendor HAL EXTI
+  SW-interrupt adapter in `Common/Src/intercore_notifications.c`
+  sends M7→M4 notifications through EXTI0 and M4→M7 through EXTI1.
+  Native `xMessageBufferSendCompletedFromISR()` is used only when
+  the local scheduler is running; neither FreeRTOS scheduler nor HAL
+  driver source is replaced. Both CubeIDE projects define the vendor
+  `DUAL_CORE` build macro so the HAL uses CPU2-specific EXTI registers.
+  Run `bash Firmware/Tests/check_intercore_notifications.sh` and then
+  clean/build **both** cores in CubeIDE after staging the changed files.
+  Application receive APIs remain nonblocking; no task waiter or
+  physical inter-core notification behavior has yet been verified.
 
 See the [Stage 2 engineering record](STAGE2_SHARED_SRAM4_MPU.md)
 for detailed decision rationale, test evidence and remaining risks.
