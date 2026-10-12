@@ -363,8 +363,9 @@ application-file changes.
   Buffer completion call are integrated in
   `Common/Src/intercore_notifications.c`, the CM7/CM4 `main.c`
   startup user sections, and each core's
-  `Core/Src/stm32h7xx_it.c`. Both `.cproject` Debug/Release
-  configurations now enable the vendor `DUAL_CORE` macro.
+  `Core/Src/stm32h7xx_it.c`. The STM32H745 CMSIS device header
+  already defines `DUAL_CORE`; no redundant CubeIDE compiler
+  definition is permitted.
 - **Still pending:** compile Stage 2E-4 against the installed ARM SDK;
   both clean CubeIDE builds; physical dual-core EXTI traffic, delivery
   metrics, fault/reset behavior, and machine safety validation.
@@ -460,13 +461,14 @@ and `sbSEND_COMPLETED` hook.
   scheduler; the buffered message remains available to drain later.
   Interrupt priority 6 is no more urgent than the generated FreeRTOS
   `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5`.
-- **Dual-core build flag:** ST's HAL EXTI source uses
+- **Dual-core device macro:** ST's HAL EXTI source uses
   `#if defined(DUAL_CORE)` to select the M4-specific `C2IMR` /
-  `C2PR` registers. Both CubeIDE `.cproject` build configurations
-  explicitly define `DUAL_CORE`, including HAL driver compilation.
-  **CubeMX regeneration may overwrite these project settings**; audit
-  both Debug/Release configurations after every regeneration. This
-  setting is vendor-defined, not a new application-level protocol.
+  `C2PR` registers. STM32H745's CMSIS header already provides
+  `#define DUAL_CORE`. Do **not** also pass `-DDUAL_CORE` through
+  either CubeIDE `.cproject` or ARM test compiler arguments:
+  redefinition causes a warning that fails under `-Werror`.
+  No vendor HAL/CMSIS files are modified. The test checks both
+  this automatic macro and absence of the manual flag.
 - **Reservation:** EXTI0 and EXTI1 are allocated to IPC and cannot also
   serve independent GPIO interrupt sources. Confirm actual board pin /
   EXTI assignments before final PCB/peripheral configuration. ST's
@@ -494,7 +496,8 @@ bash Firmware/Tests/check_intercore_notifications.sh
 
 This cross-compiles the shared `intercore_notifications.c` adapter and
 each generated core IRQ file against the **real** STM32 HAL/FreeRTOS
-headers, checks `DUAL_CORE` project settings and startup ordering.
+headers, checks ST's device-defined `DUAL_CORE` macro and the
+absence of duplicate project flags, and checks startup ordering.
 It must pass before the two full CubeIDE builds.
 
 **CubeIDE synchronization gate:** with the IDE closed, synchronize
