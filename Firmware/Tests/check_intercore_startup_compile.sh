@@ -79,7 +79,7 @@ for f in \
     echo "PASS: $(basename "$f") compiles for CM4"
 done
 "$NM" "$OUT/CM4-intercore_startup_validation.c.o" |
-    grep -Eq ' T intercore_startup_validate || {
+    grep -Eq ' T intercore_startup_validate' || {
     echo "FAIL: CM4 validation function not exported" >&2; exit 1;
 }
 python3 - "$FW/CM4/Core/Src/main.c" <<'PY'
