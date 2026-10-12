@@ -23,3 +23,13 @@ A6-EC.xml
 .vscode/
 .DS_Store
 Thumbs.db
+
+# STM32CubeIDE/CubeMX firmware build artifacts (generated project tracked)
+Firmware/STM32H745/**/Debug/
+Firmware/STM32H745/**/Release/
+Firmware/STM32H745/**/*.elf
+Firmware/STM32H745/**/*.hex
+Firmware/STM32H745/**/*.bin
+Firmware/STM32H745/**/*.map
+Firmware/STM32H745/**/*.list
+Firmware/STM32H745/**/*.su
