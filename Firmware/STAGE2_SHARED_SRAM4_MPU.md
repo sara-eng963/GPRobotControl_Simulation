@@ -370,10 +370,21 @@ application-file changes.
   CM4 reported 0 errors, 0 warnings (5.389 s; text 18012 B);
   CM7 reported 0 errors, 0 warnings (3.151 s; text 23316 B).
   These are operator-provided IDE build results, not physical execution.
-- **Still pending:** final per-core ELF symbols for EXTI handlers and
-  notification functions; real two-core interrupt delivery and latency;
-  scheduling and message-drain integration; fault/reset handling and
-  machine safety validation on physical hardware.
+- **Stage 2E-4 — final static ELF symbol inspection PASS (2026-10-12):**
+  The user inspected both CM7/CM4 Debug ELFs with
+  `arm-none-eabi-nm --defined-only`. Both contain strong (`T`)
+  definitions of `intercore_notifications_initialize`,
+  `intercore_notifications_handle_irq`, and the vendor FreeRTOS
+  `xStreamBufferSendCompletedFromISR`.
+  CM7: `EXTI1_IRQHandler` is strong (`T`) at `0x08000B2C`;
+  `EXTI0_IRQHandler` is a weak (`W`) default.
+  CM4: `EXTI0_IRQHandler` is strong (`T`) at `0x081007A8`;
+  `EXTI1_IRQHandler` is a weak (`W`) default.
+  These opposite-core weak handlers are expected startup defaults,
+  not active receiver implementations.
+- **Still pending:** physical two-core interrupt delivery and latency;
+  application scheduling and message draining; partial-core reset
+  recovery and machine safety validation.
 
 **Important:** ST's example covers cold-boot sequencing and one-way
 Message Buffer demonstration. It does not establish safe partial-core
@@ -522,12 +533,55 @@ Windows verification project. Restart CubeIDE, refresh each project,
 clean/build both, then inspect ELF symbols. Re-stage canonical
 `Intercore` headers/sources using the existing scripts if changed.
 
-**Stage 2E-4 acceptance status: software compilation/build gate PASS.**
-Both core builds and the ARM compile/startup checks passed. **ELF symbol
-inspection is the final static evidence gate**, while physical
-bidirectional interrupt delivery, application task response, coalescing,
-and reset recovery still require hardware tests. A clean build does
-not constitute an end-to-end communication or functional-safety test.
+**Stage 2E-4 acceptance status: all static software gates PASS.**
+Both ARM compilation/startup checks, both CubeIDE builds (0 errors /
+0 warnings), and both final ELF symbol/IRQ ownership inspections
+passed. **Stage 2E-4 is closed at static software-verification level**.
+Physical bidirectional interrupt delivery, application-task response,
+coalescing and reset recovery still require hardware testing.
+A correct ELF does not prove end-to-end communication or safety.
+
+**Reproduce final ELF symbol inspection** (already executed by
+the user):
+
+```bash
+DEST="/mnt/d/University/Graduation Project/STM32/GP_Repo_Verification"
+for core in CM7 CM4; do
+    ELF="$DEST/$core/Debug/GP_STM32H745_${core}.elf"
+    echo "=== $core ==="
+    arm-none-eabi-nm --defined-only "$ELF" |
+        grep -E 'intercore_notifications_initialize$|intercore_notifications_handle_irq$|EXTI[01]_IRQHandler$|xStreamBufferSendCompletedFromISR
+
+- **2B — memory contract:** fixed address and alignment contract verified
+  using core-specific FreeRTOS 10.6.2 headers. Bootstrap metadata remains.
+- **2C — linker sections:** synthetic ARM ELF tests passed for all four
+  linker scripts; independent CubeIDE clean builds passed for CM7 and CM4.
+- **2D — M7 MPU attributes:** generated code and `.ioc` committed; independent
+  CubeIDE builds passed. Hardware MPU behavior remains untested.
+- **2E — vendor-derived initialization and notifications:** adopt
+  ST's STM32H745 dual-FreeRTOS AMP sequence: M7 creates shared Message
+  Buffers before HSEM-0 releases M4, and EXTI0/FreeRTOS ISR completion
+  delivers inter-core notifications. Validate application-specific reset,
+  ABI and trajectory-ownership requirements independently.
+
+**No device-level claims** until both new firmware images execute on actual
+hardware and pass visibility, reset and timing checks.
+
+## 5. Source references
+
+- [Verified Stage 1 report](STAGE1_DUAL_CORE_FOUNDATION.md)
+- [Trajectory type definitions](../Intercore/trajectory_stream.h)
+- [IPC target/host type definitions](../Intercore/ipc_mailbox.h)
+- [IPC integration contract](../Intercore/README.md)
+- [CM7 generated Flash linker](STM32H745/CM7/STM32H745IITX_FLASH.ld)
+- [CM4 generated Flash linker](STM32H745/CM4/STM32H745IITX_FLASH.ld)
+
+done
+```
+
+Symbol class `T` indicates the strong receiving handler; `W`
+indicates the unused weak vector default on the other core.
+This is a static link check, not execution evidence.
 
 ## 4. Follow-up implementation checkpoints
 
