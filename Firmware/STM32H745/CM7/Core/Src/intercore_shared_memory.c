@@ -4,7 +4,8 @@
  * Memory placement uses the existing linker sections. The objects have NO
  * initializers: startup must not independently clear memory the M4 may use.
  * ST's dual-FreeRTOS AMP example initializes shared message buffers on M7
- * before the HSEM-0 wakeup of M4; that boot integration is a separate step.
+ * before the HSEM-0 wakeup of M4. CM7 main.c invokes the initializer here
+ * from its CubeMX boot user-code section before that wakeup.
  *
  * There is exactly ONE definition of each shared object, in the M7 image.
  * The M4 image must reference the same physical SRAM4 addresses, not
