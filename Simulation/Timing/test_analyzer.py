@@ -94,7 +94,31 @@ def main() -> None:
         assert "Feedback not fresh while 2 ms command already due: 1" in report
         assert "Actual trajectory command calls: 2" in report
 
-    print("PASS: v1/v2 analyzer and path-execution wait reason counts")
+        v3_source = root / "schema_v3.csv"
+        with v3_source.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(v2_fields + ["value"])
+            writer.writerows([
+                [3, "path_samples_skipped", "counter", 0, 0,
+                 300, 300, 0, 0, "", 1, 0, 4],
+                [3, "path_feedback_age_axis_1", "gauge", 0, 0,
+                 301, 301, 0, 0, "", 1, 0, 2000],
+                [3, "path_feedback_age_axis_1", "gauge", 1, 0,
+                 302, 302, 0, 1, "", 1, 0, 5000],
+            ])
+        subprocess.run(
+            [sys.executable, sys.argv[1], str(v3_source), "--output-dir",
+             str(root / "v3-report"), "--no-plots"],
+            check=True, capture_output=True, text=True, timeout=8)
+        with (root / "v3-report" / "summary_metrics.csv").open(
+                newline="", encoding="utf-8") as f:
+            v3 = {row["source"]: row for row in csv.DictReader(f)}
+        assert v3["path_samples_skipped"]["value_total"] == "4"
+        assert v3["path_feedback_age_axis_1"]["value_max"] == "5000"
+        assert "Explicitly skipped samples: 4" in (
+            root / "v3-report" / "timing_report.md").read_text()
+
+    print("PASS: v1/v2/v3 analyzer, event gauges and skip counts")
 
 
 if __name__ == "__main__":

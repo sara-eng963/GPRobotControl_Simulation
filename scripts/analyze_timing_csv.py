@@ -27,6 +27,7 @@ V2_FIELDS = (
     "start_us", "finish_us", "duration_us", "interval_us",
     "execution_budget_overrun", "success", "dropped_total",
 )
+V3_FIELDS = V2_FIELDS + ("value",)
 OUTPUT_FIELDS = (
     "source", "kind", "samples", "span_s", "period_us",
     "duration_p50_us", "duration_p95_us", "duration_p99_us", "duration_max_us",
@@ -35,6 +36,7 @@ OUTPUT_FIELDS = (
     "interval_max_us", "interval_abs_jitter_p99_us",
     "intervals_over_150pct_period", "operation_failures",
     "logger_dropped", "missing_sequences",
+    "value_total", "value_p50", "value_p95", "value_p99", "value_max",
 )
 
 
@@ -56,14 +58,17 @@ def parse(path: Path) -> dict[str, list[dict]]:
     with path.open(newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
         headers = set(reader.fieldnames or [])
-        if set(V2_FIELDS).issubset(headers):
+        if set(V3_FIELDS).issubset(headers):
+            schema = 3
+            fields = V3_FIELDS
+        elif set(V2_FIELDS).issubset(headers):
             schema = 2
             fields = V2_FIELDS
         elif set(V1_FIELDS).issubset(headers):
             schema = 1
             fields = V1_FIELDS
         else:
-            raise ValueError("Unsupported timing CSV: expected schema v1 or v2 fields")
+            raise ValueError("Unsupported timing CSV: expected schema v1, v2 or v3 fields")
         for line, original in enumerate(reader, start=2):
             if not original["source"]:
                 continue
@@ -109,6 +114,7 @@ def summarize(source: str, values: list[dict]) -> dict:
         long_gaps = None
     missing = sum(max(0, b["sequence"] - a["sequence"] - 1)
                   for a, b in zip(values, values[1:]))
+    measured_values = [r["value"] for r in values if r.get("value") is not None]
     return {
         "source": source, "kind": values[0]["kind"],
         "samples": len(values),
@@ -133,6 +139,11 @@ def summarize(source: str, values: list[dict]) -> dict:
         "operation_failures": sum(r["success"] == 0 for r in values),
         "logger_dropped": max(r["dropped_total"] for r in values),
         "missing_sequences": missing,
+        "value_total": sum(measured_values) if measured_values else "",
+        "value_p50": percentile(measured_values, 50),
+        "value_p95": percentile(measured_values, 95),
+        "value_p99": percentile(measured_values, 99),
+        "value_max": max(measured_values) if measured_values else "",
     }
 
 
@@ -182,6 +193,8 @@ def make_plots(groups: dict[str, list[dict]], folder: Path) -> list[Path]:
         return []
     generated: list[Path] = []
     for source, items in groups.items():
+        if items[0]["kind"] in ("counter", "gauge"):
+            continue
         durations = [i["duration_us"] for i in items]
         if not durations:
             continue
@@ -250,7 +263,8 @@ def main() -> None:
         "**Raw schema:** version " + str(next(iter(groups.values()))[0]["schema_version"]) + ". "
         "For legacy v1 files, missed_deadline and first-anchored lateness fields "
         "accumulate POSIX/WSL tick drift and are deliberately **ignored**. "
-        "Schema v2 no longer emits those fields.",
+        "Schema v2/v3 no longer emit those fields. Numeric v3 "
+        "diagnostics are stored separately in the value column.",
         "",
         "Execution-budget overrun means a measured task BODY took longer than "
         "its nominal period after it started. It does not determine whether "
@@ -262,6 +276,8 @@ def main() -> None:
         "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for s in summaries:
+        if s["kind"] in ("counter", "gauge"):
+            continue
         over = str(s["execution_budget_overruns"]) if s["period_us"] else "N/A"
         gap = str(s["intervals_over_150pct_period"]) if s["period_us"] else "N/A"
         lines.append(
@@ -273,6 +289,8 @@ def main() -> None:
         )
     lines.extend(["", "## Interpretation", ""])
     for s in summaries:
+        if s["kind"] == "counter" or s["kind"] == "gauge":
+            continue
         if s["period_us"]:
             lines.append(
                 f"- **{s['source']}**: {s['execution_budget_overruns']} measured "
@@ -333,9 +351,9 @@ def main() -> None:
             "",
             "These are **poll counts** at successive Supervisor iterations, "
             "**not** numbers of independently missed commands or motor failures. "
-            "The feedback gate is checked before the period gate. "
-            "A late-feedback event means feedback was still unavailable "
-            "when the trajectory command became due.",
+            "In legacy recordings, the feedback gate was checked before "
+            "the period gate; new absolute-clock runs should record zero "
+            "feedback-gate wait events.",
         ])
         if "path_commands" in groups:
             timing = can_bursts(groups["path_commands"])
@@ -357,6 +375,31 @@ def main() -> None:
             "One NEW scenario run is needed for attribution.",
         ])
 
+    if "path_samples_skipped" in groups or any(
+            f"path_feedback_age_axis_{axis}" in groups
+            for axis in range(1, 7)):
+        skipped = sum(row.get("value") or 0
+                      for row in groups.get("path_samples_skipped", []))
+        lines.extend(["", "## Absolute trajectory scheduling and TPDO age", "",
+                      f"Explicitly skipped samples: {skipped}.",
+                      "Skipped samples indicate missed trajectory deadlines; "
+                      "they are NOT successful commands or a performance improvement.",
+                      "",
+                      "| Axis | TPDO-age P50 (us) | P95 (us) | P99 (us) | Max (us) | Lost rows |",
+                      "|---|---:|---:|---:|---:|---:|"])
+        for axis in range(1, 7):
+            key = f"path_feedback_age_axis_{axis}"
+            if key not in groups:
+                lines.append(f"| {axis} | N/A | N/A | N/A | N/A | N/A |")
+                continue
+            item = next(x for x in summaries if x["source"] == key)
+            lines.append(
+                f"| {axis} | {pretty(item['value_p50'])} | "
+                f"{pretty(item['value_p95'])} | "
+                f"{pretty(item['value_p99'])} | "
+                f"{item['value_max']} | {item['logger_dropped']} |")
+        lines.append("Age includes CAN receive processing and host RTOS tick "
+                     "quantization; physical TPDO bus-arrival times are not measured.")
     lines.extend([
         "", "## What to conclude",
         "",
@@ -375,6 +418,8 @@ def main() -> None:
     print("[TIMING] Ignoring flawed schema-v1 cumulative 'missed_deadline' field (if present).")
     print("[TIMING] Body overruns != actual RTOS deadline misses.")
     for s in summaries:
+        if s["kind"] in ("counter", "gauge"):
+            continue
         flag = "WARN" if (s["execution_budget_overruns"] or s["logger_dropped"]) else "INFO"
         overruns = (s["execution_budget_overruns"]
                     if s["period_us"] else "N/A")
@@ -397,6 +442,17 @@ def main() -> None:
                   can_bursts(groups["path_commands"]))
     else:
         print("No path-specific diagnostics (legacy CSV); collect a new run.")
+    if "path_samples_skipped" in groups:
+        print("Skipped samples:", sum(x.get("value") or 0
+              for x in groups["path_samples_skipped"]))
+    for axis in range(1, 7):
+        key = f"path_feedback_age_axis_{axis}"
+        if key in groups:
+            item = next(x for x in summaries if x["source"] == key)
+            print(f"Axis {axis} TPDO age: p50 {pretty(item['value_p50'])}, "
+                  f"p95 {pretty(item['value_p95'])}, "
+                  f"p99 {pretty(item['value_p99'])}, "
+                  f"max {item['value_max']} us")
     print("Saved:", out_dir / "summary_metrics.csv")
     print("Saved:", report)
     if charts:
