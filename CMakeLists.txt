@@ -54,6 +54,27 @@ add_test(NAME intercore_trajectory_stream_test
 set_tests_properties(intercore_trajectory_stream_test
     PROPERTIES TIMEOUT 20)
 
+# Verify the actual PathExecutionServices callback ABI can consume the
+# M7-owned side of the cross-core stream. Existing SIL Kit path unchanged.
+add_library(intercore_trajectory_path_port STATIC
+    Intercore/trajectory_stream_path_port.c)
+target_link_libraries(intercore_trajectory_path_port PUBLIC
+    intercore_trajectory_stream)
+target_compile_features(intercore_trajectory_path_port PUBLIC c_std_11)
+target_compile_options(intercore_trajectory_path_port PRIVATE
+    -Wall -Wextra -Werror)
+
+add_executable(intercore_trajectory_path_port_test
+    Intercore/Tests/test_trajectory_stream_path_port.c)
+target_link_libraries(intercore_trajectory_path_port_test PRIVATE
+    intercore_trajectory_path_port)
+target_compile_options(intercore_trajectory_path_port_test PRIVATE
+    -Wall -Wextra -Werror)
+add_test(NAME intercore_trajectory_path_port_test
+    COMMAND intercore_trajectory_path_port_test)
+set_tests_properties(intercore_trajectory_path_port_test
+    PROPERTIES TIMEOUT 15)
+
 
 # FreeRTOS runs with its existing POSIX host port.
 add_library(freertos_config INTERFACE)
