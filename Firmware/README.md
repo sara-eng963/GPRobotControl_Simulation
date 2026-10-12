@@ -123,19 +123,20 @@ or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
   Full CM4 CubeIDE build: 0 errors, 0 warnings. The M4 ELF contains
   the validation functions but defines no M7-owned shared objects;
   its reserved linker sections have zero length.
-- **2E-4 (code committed, verification pending):** the vendor HAL EXTI
-  SW-interrupt adapter in `Common/Src/intercore_notifications.c`
-  sends M7→M4 notifications through EXTI0 and M4→M7 through EXTI1.
-  Native `xMessageBufferSendCompletedFromISR()` is used only when
-  the local scheduler is running; neither FreeRTOS scheduler nor HAL
-  driver source is replaced. STM32H745's
-  device header already defines `DUAL_CORE` so the HAL uses
-  CPU2-specific EXTI registers; the redundant compiler defines
-  were removed from both CubeIDE projects.
-  Run `bash Firmware/Tests/check_intercore_notifications.sh` and then
-  clean/build **both** cores in CubeIDE after staging the changed files.
-  Application receive APIs remain nonblocking; no task waiter or
-  physical inter-core notification behavior has yet been verified.
+- **2E-4 (verified at software-build level, 2026-10-12):**
+  `Common/Src/intercore_notifications.c` adapts ST's EXTI
+  SW-interrupt pattern bidirectionally: EXTI0 signals M7→M4,
+  EXTI1 signals M4→M7. FreeRTOS
+  `xMessageBufferSendCompletedFromISR()` is invoked only when
+  the recipient's kernel is running. The STM32H745 vendor device
+  header supplies `DUAL_CORE` without a redundant compiler define.
+  `bash Firmware/Tests/check_intercore_notifications.sh` passed
+  CM7/CM4 compilation, IRQ binding and startup-order checks. The
+  user then successfully built **both STM32CubeIDE projects**:
+  CM7 and CM4 each had **0 errors and 0 warnings**. Final ELF
+  inspection, physical bidirectional EXTI delivery, application
+  IPC-task response, and reset-recovery verification remain pending.
+  Message Buffer application receives are still nonblocking.
 
 See the [Stage 2 engineering record](STAGE2_SHARED_SRAM4_MPU.md)
 for detailed decision rationale, test evidence and remaining risks.
