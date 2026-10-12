@@ -45,6 +45,11 @@ MEMORY
 {
 FLASH (rx)     : ORIGIN = 0x08100000, LENGTH = 1024K
 RAM (xrw)      : ORIGIN = 0x10000000, LENGTH = 288K
+  /* Physical SRAM4 shared by CM7 and CM4; disjoint reserved slots. */
+  GP_SRAM4_IPC        (rw)  : ORIGIN = 0x38000000, LENGTH = 4K
+  GP_SRAM4_TRAJECTORY (rw)  : ORIGIN = 0x38001000, LENGTH = 16K
+  GP_SRAM4_RESERVED   (rw)  : ORIGIN = 0x38005000, LENGTH = 12K
+  GP_SRAM4_REMAINING  (xrw) : ORIGIN = 0x38008000, LENGTH = 32K
 }
 
 /* Define output sections */
@@ -149,6 +154,38 @@ SECTIONS
     _ebss = .;         /* define a global symbol at bss end */
     __bss_end__ = _ebss;
   } >RAM
+
+  /* Stage 2C: shared SRAM4 objects, NOT part of either core's .bss clear.
+   * These sections must hold only uninitialized objects. Cross-core
+   * initialization and MPU cache policy are separate future gates. */
+  .gp_shared_ipc (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __gp_shared_ipc_start__ = .;
+    KEEP(*(.gp_shared_ipc))
+    KEEP(*(.gp_shared_ipc.*))
+    . = ALIGN(32);
+    __gp_shared_ipc_end__ = .;
+  } >GP_SRAM4_IPC
+
+  .gp_shared_trajectory (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __gp_shared_trajectory_start__ = .;
+    KEEP(*(.gp_shared_trajectory))
+    KEEP(*(.gp_shared_trajectory.*))
+    . = ALIGN(32);
+    __gp_shared_trajectory_end__ = .;
+  } >GP_SRAM4_TRAJECTORY
+
+  ASSERT(ADDR(.gp_shared_ipc) == ORIGIN(GP_SRAM4_IPC),
+         "Shared IPC base does not match STM32H745 SRAM4 contract")
+  ASSERT(ADDR(.gp_shared_trajectory) == ORIGIN(GP_SRAM4_TRAJECTORY),
+         "Shared trajectory base does not match STM32H745 SRAM4 contract")
+  ASSERT(SIZEOF(.gp_shared_ipc) <= LENGTH(GP_SRAM4_IPC),
+         "Shared IPC exceeds 4 KiB")
+  ASSERT(SIZEOF(.gp_shared_trajectory) <= LENGTH(GP_SRAM4_TRAJECTORY),
+         "Shared trajectory exceeds 16 KiB")
 
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack :
