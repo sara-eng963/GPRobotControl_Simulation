@@ -108,10 +108,12 @@ or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
   `0x38000000..0x38007FFF` (normal, shareable, non-cacheable,
   non-executable) committed; both firmware builds passed. Actual caches
   are currently disabled, and hardware MPU effects remain unverified.
-- **2E (next):** declare and link production shared objects, coordinate
-  one-time M7 initialization, and gate M4 access behind a separate
-  application-ready/ABI handshake. ST HSEM 0 wakes M4 **before** the
-  M7 kernel initialization; do not treat that wakeup as IPC readiness.
+- **2E (in progress):** adopt ST's official STM32H745
+  `FreeRTOS_AMP_Dual_RTOS` example: M7 creates static shared Message
+  Buffers **before releasing M4 through HSEM-0**, M4 verifies them, and
+  ST's FreeRTOS/EXTI completion pattern notifies the peer. The obsolete
+  `configUSE_STREAM_BUFFERS` guard and probe-only shims were removed;
+  production object placement and boot/notification wiring are pending.
 
 See the [Stage 2 engineering record](STAGE2_SHARED_SRAM4_MPU.md)
 for detailed decision rationale, test evidence and remaining risks.
