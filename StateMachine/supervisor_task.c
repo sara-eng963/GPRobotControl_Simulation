@@ -107,10 +107,11 @@ static StaticTask_t g_validation_task_control;
 static StackType_t g_validation_task_stack[VALIDATION_TASK_STACK_WORDS];
 #endif
 
-/* Validation worker owns the PathValidationState and all flash I/O.
- * It MUST run below Supervisor priority so erase/program/verification cannot
- * monopolize control cycles. Cancellation is cooperative between calls: an
- * in-flight NOR command is not interrupted or reset mid-transaction. */
+/* The lower-priority validation worker owns numerical validation state.
+ * With a synchronous backend it also owns storage. With the optional async
+ * M7/M4 bridge, callbacks only enqueue samples and poll durable status;
+ * a separate M4-role task owns all flash erase/program/commit operations.
+ * Cancellation is cooperative and never interrupts in-flight NOR I/O. */
 static void validation_worker_entry(void *argument)
 {
     SupervisorTaskContext *context = (SupervisorTaskContext *)argument;
