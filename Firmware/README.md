@@ -88,3 +88,12 @@ See [Stage 2 design/audit log](STAGE2_SHARED_SRAM4_MPU.md).
 First run `bash Firmware/Tests/check_shared_layout.sh` to establish
 actual CM7/CM4 shared-object sizes using the generated FreeRTOS 10.6.2 headers.
 Do not edit linker maps until this audit passes.
+
+### Stage 2C linker validation (no MCU hardware)
+
+`bash Firmware/Tests/check_sram4_linkers.sh` cross-compiles synthetic typed
+shared objects against the vendored FreeRTOS 10.6.2 configuration for each
+core, then links them using **each of the four** CubeIDE FLASH/RAM linker
+scripts. It verifies fixed SRAM4 symbols, dedicated partitions and NOLOAD
+sections. This does **not** replace complete CM7/CM4 CubeIDE firmware builds
+or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
