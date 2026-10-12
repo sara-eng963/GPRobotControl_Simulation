@@ -85,6 +85,7 @@ if(ENABLE_SILKIT)
         control_core
         intercore_ipc
         intercore_validation_storage
+        host_timing_trace
         pthread
         m
     )
