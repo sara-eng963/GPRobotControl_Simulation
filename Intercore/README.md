@@ -35,10 +35,14 @@ not pretend that the existing single-RTOS POSIX simulator is already dual-core.
   M4 validates them on wake. Its `sbSEND_COMPLETED` hook, EXTI0 SW
   interrupt and `xMessageBufferSendCompletedFromISR` implement
   notification to the receiving kernel.
-- **Production EXTI adapter (Stage 2E-4, pending validation):**
+- **Production EXTI adapter (Stage 2E-4: ARM and both
+  CubeIDE firmware builds PASS, 2026-10-12):**
   `Firmware/STM32H745/Common/Src/intercore_notifications.c` adapts
   ST's HAL EXTI SW-interrupt/FreeRTOS completion pattern for both
-  directions. It reuses the backend's **successful zero-timeout send**
+  directions. The ARM cross-compile/startup-order test passed for
+  CM7/CM4, and both corresponding STM32CubeIDE builds reported
+  0 errors and 0 warnings. Per-core ELF symbol inspection and
+  physical two-core operation remain unverified. It reuses the backend's **successful zero-timeout send**
   notifier instead of ST's separate control Message Buffer and
   `sbSEND_COMPLETED` hook. EXTI0 carries M7→M4, EXTI1 carries
   M4→M7; each receiving ISR calls the FreeRTOS
