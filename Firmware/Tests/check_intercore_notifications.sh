@@ -56,6 +56,7 @@ for core, irq, other in [('CM7', 'EXTI1_IRQHandler', 'EXTI0_IRQHandler'),
                          ('CM4', 'EXTI0_IRQHandler', 'EXTI1_IRQHandler')]:
     project = (fw/core/".cproject").read_text()
     assert 'value="DUAL_CORE"' not in project, "do not redefine device-header DUAL_CORE in CubeIDE"
+    assert project.count('value="../../Common/Inc"') >= 2, "Common/Inc must be visible to both CubeIDE compile configurations"
     main = (fw/core/"Core/Src/main.c").read_text()
     it = (fw/core/"Core/Src/stm32h7xx_it.c").read_text()
     assert 'intercore_notifications_initialize()' in main
