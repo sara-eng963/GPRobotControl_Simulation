@@ -1,8 +1,8 @@
 # STM32H745 dual-core firmware — Stage 1 foundation
 
-**Status: generator handoff; the two actual firmware projects are NOT generated yet.**
-Do not mistake the existing Linux POSIX FreeRTOS simulator or isolated ARM
-compilation checks for a complete firmware build.
+**Status: Stage 1 generated and independently rebuilt for CM7 and CM4, each with 0 errors and 0 warnings (2026-10-12).**
+
+See **[Stage 1 engineering report](STAGE1_DUAL_CORE_FOUNDATION.md)** for detailed design rationale, generated configuration audit, reproducibility evidence, limits, and Stage 2 handoff. Firmware builds do **not** establish hardware execution or physical IPC correctness.
 
 ## Authoritative generator
 
@@ -34,7 +34,7 @@ its own target FreeRTOSConfig.h from CubeMX. Do not reuse the host config.
 
 ## Generation handoff
 
-1. In Windows STM32CubeIDE: File → New → STM32 Project → MCU/MPU Selector.
+1. In the installed workflow, open standalone **STM32CubeMX** → New Project → MCU Selector; afterward open the generated project in STM32CubeIDE.
 2. Choose the *correct, exact STM32H745II... order number* (select an H745
    dual-core **MCU**, not a specific evaluation board).
 3. Set project name `GP_STM32H745`, language C, project type STM32Cube.
@@ -56,15 +56,14 @@ its own target FreeRTOSConfig.h from CubeMX. Do not reuse the host config.
 
 ### Stage 1 acceptance
 
-- [ ] Exact intended MCU order number/package is recorded, or explicitly
-      marked provisional pending PCB selection.
-- [ ] One CubeMX .ioc exists and matches the selected H745 MCU.
-- [ ] Both CM7 and CM4 contain generated startup code and linker scripts.
-- [ ] Both have separate, real target FreeRTOS configurations.
-- [ ] Both firmware projects compile and link independently (two ELFs).
-- [ ] The generated sources and settings are tracked in
+- [x] Package-level MCU is recorded as **provisional** (`STM32H745IITx`, LQFP176); exact order code pending PCB selection.
+- [x] One CubeMX .ioc exists and matches the selected H745 MCU.
+- [x] Both CM7 and CM4 contain generated startup code and linker scripts.
+- [x] Both have separate, real target FreeRTOS configurations.
+- [x] Both firmware projects compile and link independently (two ELFs).
+- [x] The generated sources and settings are tracked in
       `Firmware/STM32H745/` without build products.
-- [ ] Existing `build-can-silkit` and its host tests are unaffected.
+- [ ] Re-run existing `build-can-silkit` host regression tests after repository firmware addition (no host-code changes intentionally made).
 
 ### Not covered by Stage 1
 
@@ -77,3 +76,8 @@ Official references:
 - [ST dual-core firmware project guidance](https://www.st.com/resource/en/application_note/an5361-getting-started-with-projects-based-on-dualcore-stm32h7-microcontrollers-in-stm32cubeide-stmicroelectronics.pdf)
 - [ST dual-core CubeIDE project guide](https://dev.st.com/stm32cube-docs/stm32cubeide-vscode/1.0.1/en/docs/markup/tutorials/dual_core.html)
 - [STM32H745II part variants](https://www.st.com/en/microcontrollers-microprocessors/stm32h745ii.html)
+
+## Stage 1 record / Stage 2 entry point
+
+- [Verified Stage 1 dual-core firmware engineering report](STAGE1_DUAL_CORE_FOUNDATION.md)
+- Stage 2 begins with a **SRAM4 memory-map and object-size audit** before any generated linker/MPU modification.
