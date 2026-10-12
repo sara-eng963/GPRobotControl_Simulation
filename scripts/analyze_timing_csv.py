@@ -167,9 +167,15 @@ def can_bursts(values: list[dict], max_gap_us: int = 5000,
     return {
         "bursts": len(bursts), "intervals": len(intervals),
         "abs_jitter_p99_us": percentile([abs(x - 2000) for x in intervals], 99),
+        "interval_p50_us": percentile(intervals, 50),
+        "interval_p95_us": percentile(intervals, 95),
         "interval_p99_us": percentile(intervals, 99),
         "interval_max_us": max(intervals) if intervals else float("nan"),
         "intervals_over_2500us": sum(x > 2500 for x in intervals),
+        "excluded_boundaries": sum(
+            b["start_us"] - a["start_us"] > max_gap_us
+            for a, b in zip(values, values[1:])),
+
     }
 
 
@@ -322,12 +328,16 @@ def main() -> None:
             "",
             f"Detected {c['bursts']} burst(s) with at least 10 commands, "
             f"{c['intervals']} within-burst intervals.",
-            f"P99 absolute deviation from 2,000 us: {pretty(c['abs_jitter_p99_us'])} us. "
+            f"P50/P95/P99 intervals: {pretty(c['interval_p50_us'])}/"
+            f"{pretty(c['interval_p95_us'])}/{pretty(c['interval_p99_us'])} us. "
+            f"P99 absolute deviation: {pretty(c['abs_jitter_p99_us'])} us. "
             f"Maximum within-burst interval: {pretty(c['interval_max_us'])} us. "
             f"Intervals > 2,500 us: {c['intervals_over_2500us']}.",
             "These are intervals between host calls to send six RPDO4 frames "
             "and SYNC, **not** physical CAN frame arrival timestamps. "
-            "When command bursts are interrupted, no 500 Hz conclusion "
+            f"Excluded across-burst boundaries (>5 ms): {c['excluded_boundaries']}. "
+            "These must not be interpreted as good cadence or zero skips. "
+            "When bursts are interrupted, no 500 Hz conclusion "
             "should be drawn from a whole-run average.",
         ])
     if any(name in groups for name in (
@@ -360,10 +370,13 @@ def main() -> None:
             lines.extend([
                 f"Trajectory-only burst intervals: {timing['intervals']} "
                 f"across {timing['bursts']} bursts.",
-                f"Trajectory command P99 interval: "
+                f"Trajectory command P50/P95/P99 intervals: "
+                f"{pretty(timing['interval_p50_us'])}/"
+                f"{pretty(timing['interval_p95_us'])}/"
                 f"{pretty(timing['interval_p99_us'])} us; "
-                f"maximum interval within classified bursts: "
-                f"{pretty(timing['interval_max_us'])} us.",
+                f"max {pretty(timing['interval_max_us'])} us; "
+                f">2,500 us: {timing['intervals_over_2500us']}; "
+                f"excluded >5-ms boundaries: {timing['excluded_boundaries']}.",
                 "Unlike the generic can_targets source, path_commands "
                 "excludes guided/homing/other CAN transactions.",
             ])
