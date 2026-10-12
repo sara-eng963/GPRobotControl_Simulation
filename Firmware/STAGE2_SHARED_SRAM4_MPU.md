@@ -500,6 +500,14 @@ headers, checks ST's device-defined `DUAL_CORE` macro and the
 absence of duplicate project flags, and checks startup ordering.
 It must pass before the two full CubeIDE builds.
 
+**CubeIDE include-path integration:** both core `.cproject` files
+now include `../../Common/Inc` for the linked `Common` folder, in
+Debug and Release tool settings. This lets `main.c`,
+`stm32h7xx_it.c` and `Common/Src/intercore_notifications.c`
+include `intercore_notifications.h` and `sram4_memory_map.h`
+without duplicating the canonical headers in `Core/Inc`. The Stage
+2E-4 test enforces this configuration.
+
 **CubeIDE synchronization gate:** with the IDE closed, synchronize
 `Firmware/STM32H745/Common/Inc/intercore_notifications.h`,
 `Common/Src/intercore_notifications.c`, both core `main.c` and
