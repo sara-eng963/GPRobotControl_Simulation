@@ -4,7 +4,7 @@
 /* Inherit the existing project host configuration, but build an isolated
  * FreeRTOS kernel instance with static allocation enabled for MessageBuffers.
  * Never use this configuration in the production Cortex-M7/M4 firmware. */
-#include "../../../FreeRTOSConfig.h"
+#include "../../../../FreeRTOSConfig.h"
 #undef configSUPPORT_STATIC_ALLOCATION
 #define configSUPPORT_STATIC_ALLOCATION 1
 #define configUSE_STREAM_BUFFERS 1
