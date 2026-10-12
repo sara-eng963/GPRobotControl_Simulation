@@ -358,17 +358,22 @@ application-file changes.
   Its empty `.gp_shared_*` sections have 0-byte sizes and are not
   memory allocations. The M4 checks after HSEM-0 wake and before the
   scheduler are therefore verified **at build level**.
-- **Stage 2E-4 — code committed, awaiting verification:** The vendor HAL
-  EXTI software interrupt routing, per-core ISR and FreeRTOS Message
-  Buffer completion call are integrated in
-  `Common/Src/intercore_notifications.c`, the CM7/CM4 `main.c`
-  startup user sections, and each core's
-  `Core/Src/stm32h7xx_it.c`. The STM32H745 CMSIS device header
-  already defines `DUAL_CORE`; no redundant CubeIDE compiler
-  definition is permitted.
-- **Still pending:** compile Stage 2E-4 against the installed ARM SDK;
-  both clean CubeIDE builds; physical dual-core EXTI traffic, delivery
-  metrics, fault/reset behavior, and machine safety validation.
+- **Stage 2E-4 — verified at ARM and CubeIDE build level
+  (2026-10-12):** The user ran `check_intercore_notifications.sh`
+  successfully for CM7 and CM4 against the vendored HAL/FreeRTOS
+  headers (including `-Werror`). It checked the device-defined
+  `DUAL_CORE` macro, both IRQ translation units, per-core EXTI
+  routing and generated startup order. After syncing
+  `Common/Src/intercore_notifications.c`, both `.cproject`
+  settings, both core `main.c` and `stm32h7xx_it.c` sources,
+  the user independently built **CM4 and CM7 in STM32CubeIDE**:
+  CM4 reported 0 errors, 0 warnings (5.389 s; text 18012 B);
+  CM7 reported 0 errors, 0 warnings (3.151 s; text 23316 B).
+  These are operator-provided IDE build results, not physical execution.
+- **Still pending:** final per-core ELF symbols for EXTI handlers and
+  notification functions; real two-core interrupt delivery and latency;
+  scheduling and message-drain integration; fault/reset handling and
+  machine safety validation on physical hardware.
 
 **Important:** ST's example covers cold-boot sequencing and one-way
 Message Buffer demonstration. It does not establish safe partial-core
@@ -488,7 +493,7 @@ and `sbSEND_COMPLETED` hook.
   channel is not an E-stop, fail-safe, robot motion authorization or
   guaranteed-delivery service.
 
-**Source and ARM verification (run after fetching the commit):**
+**Source and ARM verification (passed on 2026-10-12):**
 
 ```bash
 bash Firmware/Tests/check_intercore_notifications.sh
@@ -498,7 +503,8 @@ This cross-compiles the shared `intercore_notifications.c` adapter and
 each generated core IRQ file against the **real** STM32 HAL/FreeRTOS
 headers, checks ST's device-defined `DUAL_CORE` macro and the
 absence of duplicate project flags, and checks startup ordering.
-It must pass before the two full CubeIDE builds.
+Both CM7 and CM4 builds subsequently succeeded with 0 errors /
+0 warnings. The test does not verify electrical EXTI delivery.
 
 **CubeIDE include-path integration:** both core `.cproject` files
 now include `../../Common/Inc` for the linked `Common` folder, in
@@ -516,9 +522,12 @@ Windows verification project. Restart CubeIDE, refresh each project,
 clean/build both, then inspect ELF symbols. Re-stage canonical
 `Intercore` headers/sources using the existing scripts if changed.
 
-**Acceptance is pending** until ARM tests and both full builds pass;
-physical bidirectional interrupt delivery and recovery require actual
-hardware. A compile success alone is not an end-to-end communication test.
+**Stage 2E-4 acceptance status: software compilation/build gate PASS.**
+Both core builds and the ARM compile/startup checks passed. **ELF symbol
+inspection is the final static evidence gate**, while physical
+bidirectional interrupt delivery, application task response, coalescing,
+and reset recovery still require hardware tests. A clean build does
+not constitute an end-to-end communication or functional-safety test.
 
 ## 4. Follow-up implementation checkpoints
 
