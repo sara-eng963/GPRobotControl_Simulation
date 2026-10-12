@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
-#include "gp_shared_sram4_layout.h"
+#include "sram4_memory_map.h"
 
 _Static_assert(sizeof(GpIpcShared) <= GP_SHARED_IPC_BYTES,
                "IPC object exceeds linker IPC reservation");
