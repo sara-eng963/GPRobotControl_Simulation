@@ -8,7 +8,7 @@
 
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
-#include "gp_shared_sram4_layout.h"
+#include "sram4_memory_map.h"
 
 _Static_assert(sizeof(void *) == 4U, "Expected ARM 32-bit pointer layout");
 _Static_assert(sizeof(size_t) == 4U, "Expected ARM 32-bit size_t layout");
