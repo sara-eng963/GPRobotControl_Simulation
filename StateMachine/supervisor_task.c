@@ -859,6 +859,11 @@ static void run_active_state(SupervisorTaskContext *context)
             break;
 
         case ROBOT_STATE_PATH_EXECUTION:
+            /* Incoming operator messages never own trajectory clock time. */
+            context->path_execution_inputs.now_ms = supervisor_now_ms();
+            context->path_execution_inputs.now_us =
+                (uint64_t)xTaskGetTickCount() * UINT64_C(1000000) /
+                (uint64_t)configTICK_RATE_HZ;
             context->path_execution_inputs.motion_permission =
                 context->machine.safety.motionPermitted;
             context->path_execution_inputs.estop_active =

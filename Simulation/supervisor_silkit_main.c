@@ -573,6 +573,12 @@ static bool execution_read_prefetched(uint32_t sample_index,
     return trajectory_prefetch_take(&validated_prefetch, sample_index, sample);
 }
 
+static bool execution_skip_prefetched(uint32_t first, uint32_t count, void *ctx)
+{
+    (void)ctx;
+    return trajectory_prefetch_skip(&validated_prefetch, first, count);
+}
+
 static bool execution_stream_ready(uint32_t next_index, uint32_t count, void *ctx)
 {
     (void)ctx;
@@ -1819,7 +1825,8 @@ static bool start_system(void)
         .read_sample=execution_read_prefetched, .set_wire_feed_enabled=relay,
         .prepare_retraction=retract_prepare, .step_retraction=retract_step,
         .clearance_verified=clearance, .controlled_stop=hold,
-        .context=&validated_storage, .stream_ready=execution_stream_ready,
+        .context=&validated_storage, .skip_samples=execution_skip_prefetched,
+        .stream_ready=execution_stream_ready,
         .end_stream=execution_end_stream
     };
     paused_services=(PausedServices){hold,off,NULL};fault_services=(FaultServices){safe,NULL};emergency_services=(EmergencyStopServices){safe,NULL};

@@ -88,6 +88,7 @@ typedef struct
     bool protective_stop_active;
     bool external_fault_active;
     uint32_t now_ms;
+    uint64_t now_us; /* Platform monotonic clock supplied by Supervisor. */
 } PathExecutionInputs;
 
 typedef struct
@@ -122,6 +123,8 @@ typedef struct
     PathExecClearanceFn clearance_verified;
     PathExecControlledStopFn controlled_stop;
     void *context;
+    /* O(1) SRAM-only discard; required if trajectory timestamps are missed. */
+    bool (*skip_samples)(uint32_t first, uint32_t count, void *context);
     /* Optional SRAM-only, nonblocking preflight. Called before motion and
      * before enabling wire feed, including PAUSED resume. Never refill/wait. */
     bool (*stream_ready)(uint32_t next_index, uint32_t sample_count, void *context);
@@ -141,6 +144,8 @@ typedef struct
     uint32_t phase_started_ms;
     uint32_t clearance_stable_cycles;
     uint32_t command_period_ms;
+    uint32_t skipped_samples;
+    uint64_t feedback_age_us[JOINT_DRIVE_AXES];
     bool wire_feed_commanded;
 } PathExecutionOutputs;
 
@@ -162,10 +167,18 @@ typedef struct
     uint32_t clearance_stable_cycles;
 
     uint32_t command_period_ms;
-    uint32_t last_command_ms;
+    uint64_t trajectory_t0_us;
+    uint32_t segment_start_index;
     bool command_clock_started;
-    bool awaiting_feedback;
-    uint32_t command_tpdo_count[JOINT_DRIVE_AXES];
+    uint32_t skipped_samples;
+
+    bool feedback_watch_started;
+    uint64_t feedback_watch_started_us;
+    uint32_t initial_tpdo_count[JOINT_DRIVE_AXES];
+    uint32_t final_command_tpdo_count[JOINT_DRIVE_AXES];
+    JointDriveAxisFeedback latest_feedback[JOINT_DRIVE_AXES];
+    bool fresh_since_start[JOINT_DRIVE_AXES];
+    uint64_t feedback_age_us[JOINT_DRIVE_AXES];
 
     bool wire_feed_commanded;
     bool initialized;

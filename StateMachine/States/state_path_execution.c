@@ -17,7 +17,9 @@
 #define PATH_TIMING_END(source, ok) ((void)0)
 #endif
 
-#define PATH_EXEC_CYCLIC_FEEDBACK_TIMEOUT_MS 100U
+/* Ten missed 2-ms updates; provisional until physical PDO latency is measured.
+ * Host receive timestamps are quantized to the injected FreeRTOS tick. */
+#define PATH_EXEC_FEEDBACK_MAX_AGE_US UINT64_C(20000)
 
 static bool elapsed(uint32_t now, uint32_t start, uint32_t duration)
 {
@@ -61,7 +63,8 @@ static StateStepResult fail(
          * A successful callback acknowledges issuing the command, NOT
          * verified deceleration, and is never a certified safety stop. */
         if ((error == PATH_EXEC_ERR_STORAGE_READ ||
-             error == PATH_EXEC_ERR_TRAJECTORY_NOT_READY) &&
+             error == PATH_EXEC_ERR_TRAJECTORY_NOT_READY ||
+             error == PATH_EXEC_ERR_CYCLIC_FEEDBACK) &&
             state->phase == PATH_EXEC_PHASE_FOLLOW_TRAJECTORY)
         {
             bool acknowledged = false;
@@ -146,83 +149,47 @@ static bool master_motion_ready(
         joint_drive_port_ready(&state->drive, now_ms);
 }
 
-static bool capture_tpdo_counts(PathExecutionState *state)
+static bool feedback_watchdog(PathExecutionState *s, uint64_t now_us)
 {
-    for (size_t axis = 0U;
-         axis < JOINT_DRIVE_AXES;
-         ++axis)
-    {
-        if (!joint_drive_port_feedback_sequence(&state->drive, axis, &state->command_tpdo_count[axis]))
+    if (!s->feedback_watch_started) return true;
+    for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis) {
+        JointDriveAxisFeedback feedback = {0};
+        if (!joint_drive_port_read_axis(&s->drive, axis, &feedback) ||
+            !feedback.feedback_valid || !feedback.operation_enabled)
+            return false;
+        s->latest_feedback[axis] = feedback;
+        if (feedback.sequence != s->initial_tpdo_count[axis])
+            s->fresh_since_start[axis] = true;
+        /* The first feedback must arrive within the watchdog interval;
+         * afterwards use the newest independent TPDO4 per-axis timestamp. */
+        const uint64_t reference = s->fresh_since_start[axis]
+            ? feedback.timestamp_us : s->feedback_watch_started_us;
+        if (now_us < reference) return false;
+        s->feedback_age_us[axis] = now_us - reference;
+        if (s->feedback_age_us[axis] > PATH_EXEC_FEEDBACK_MAX_AGE_US)
             return false;
     }
     return true;
 }
 
-static bool fresh_feedback_arrived(
-    const PathExecutionState *state
-)
+static bool final_feedback_arrived(const PathExecutionState *s)
 {
-    for (size_t axis = 0U;
-         axis < JOINT_DRIVE_AXES;
-         ++axis)
-    {
-        uint32_t current_sequence = 0U;
-        if (
-            !joint_drive_port_feedback_sequence(&state->drive, axis, &current_sequence) ||
-            current_sequence <= state->command_tpdo_count[axis]
-        )
-        {
+    for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis)
+        if (!s->fresh_since_start[axis] ||
+            s->latest_feedback[axis].sequence ==
+                s->final_command_tpdo_count[axis]) return false;
+    return true;
+}
+
+static bool send_execution_sample(PathExecutionState *s,
+                                  const PvExecutionSample *sample)
+{
+    if (s == NULL || sample == NULL || !drive_valid(s)) return false;
+    for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis)
+        if (!joint_drive_port_feedback_sequence(&s->drive, axis,
+                                                &s->final_command_tpdo_count[axis]))
             return false;
-        }
-    }
-
-    return true;
-}
-
-static bool command_due(
-    const PathExecutionState *state,
-    uint32_t now_ms
-)
-{
-    return
-        !state->command_clock_started ||
-        elapsed(
-            now_ms,
-            state->last_command_ms,
-            state->command_period_ms
-        );
-}
-
-static bool send_execution_sample(
-    PathExecutionState *state,
-    const PvExecutionSample *sample,
-    uint32_t now_ms
-)
-{
-    if (
-        state == NULL ||
-        sample == NULL ||
-        !drive_valid(state)
-    )
-    {
-        return false;
-    }
-
-    if (!capture_tpdo_counts(state))
-        return false;
-
-    if (!joint_drive_port_send_targets(
-            &state->drive,
-            sample->target_position_units))
-    {
-        return false;
-    }
-
-    state->last_command_ms = now_ms;
-    state->command_clock_started = true;
-    state->awaiting_feedback = true;
-
-    return true;
+    return joint_drive_port_send_targets(&s->drive, sample->target_position_units);
 }
 
 void state_path_execution_enter(
@@ -360,50 +327,10 @@ StateStepResult state_path_execution_step(
         );
     }
 
-    /*
-     * Every trajectory command is six RPDO4 frames followed by one SYNC.
-     * The next sample is forbidden until TPDO4 has advanced on all six axes.
-     */
-    if (state->awaiting_feedback)
-    {
-        if (fresh_feedback_arrived(state))
-        {
-            state->awaiting_feedback = false;
-        }
-        else if (
-            elapsed(
-                inputs->now_ms,
-                state->last_command_ms,
-                PATH_EXEC_CYCLIC_FEEDBACK_TIMEOUT_MS
-            )
-        )
-        {
-            return fail(
-                state,
-                PATH_EXEC_ERR_CYCLIC_FEEDBACK
-            );
-        }
-        else
-        {
-            /* Feedback is the first gate. If the 2 ms command is already
-             * due, all-six-TPDO wait is now delaying trajectory progress.
-             * Otherwise this is an ordinary pre-deadline feedback wait.
-             * These count polls, NOT one distinct missed sample per event. */
-            if (state->phase == PATH_EXEC_PHASE_FOLLOW_TRAJECTORY)
-            {
-                if (command_due(state, inputs->now_ms))
-                    PATH_TIMING_EVENT(GP_TIMING_PATH_FEEDBACK_LATE);
-                else
-                    PATH_TIMING_EVENT(GP_TIMING_PATH_FEEDBACK_WAIT);
-            }
-            state_path_execution_get_outputs(
-                state,
-                outputs
-            );
-
-            return STATE_STEP_RUNNING;
-        }
-    }
+    /* All feedback is monitored but none gates the next time-due command. */
+    if (state->phase == PATH_EXEC_PHASE_FOLLOW_TRAJECTORY &&
+        !feedback_watchdog(state, inputs->now_us))
+        return fail(state, PATH_EXEC_ERR_CYCLIC_FEEDBACK);
 
     switch (state->phase)
     {
@@ -519,16 +446,14 @@ StateStepResult state_path_execution_step(
                 );
             }
 
-            /*
-             * Reaching sample_count here means the final command has already
-             * received fresh TPDO4 feedback, because awaiting_feedback is
-             * processed before the phase switch above.
-             */
+            /* Final TPDO4 acknowledgement remains mandatory; it is not
+             * used to pace intermediate trajectory commands. */
             if (
                 state->sample_index >=
                 state->request.trajectory->sample_count
             )
             {
+                if (!final_feedback_arrived(state)) break;
                 enter_phase(
                     state,
                     PATH_EXEC_PHASE_DISABLE_WIRE_FEED,
@@ -537,39 +462,73 @@ StateStepResult state_path_execution_step(
                 break;
             }
 
-            if (!command_due(
-                    state,
-                    inputs->now_ms))
-            {
+            /* Sample n belongs to t0+n*period, NOT to last actual send.
+             * Pause/resume starts a new segment at its unconsumed index. */
+            if (!state->command_clock_started) {
+                state->trajectory_t0_us = inputs->now_us;
+                state->segment_start_index = state->sample_index;
+                state->command_clock_started = true;
+            }
+            if (inputs->now_us < state->trajectory_t0_us)
+                return fail(state, PATH_EXEC_ERR_COMMUNICATION);
+            const uint32_t period_us =
+                state->request.trajectory->sample_period_us;
+            const uint64_t due_relative =
+                (inputs->now_us - state->trajectory_t0_us) / period_us;
+            const uint64_t raw_due =
+                (uint64_t)state->segment_start_index + due_relative;
+            const uint32_t count = state->request.trajectory->sample_count;
+            const uint32_t due_index =
+                raw_due >= count ? count - 1U : (uint32_t)raw_due;
+            if (due_index < state->sample_index) {
                 PATH_TIMING_EVENT(GP_TIMING_PATH_PERIOD_WAIT);
                 break;
             }
 
-            PvExecutionSample sample;
-
-            if (!state->services.read_sample(
-                    state->sample_index,
-                    &sample,
-                    state->services.context))
-            {
-                return fail(
-                    state,
-                    PATH_EXEC_ERR_STORAGE_READ
-                );
+            /* Drop only samples whose deadlines are more than one
+             * period old. At most two due indices can remain. */
+            const uint64_t first_deadline = state->trajectory_t0_us +
+                (uint64_t)(state->sample_index - state->segment_start_index) *
+                period_us;
+            if (inputs->now_us > first_deadline + period_us) {
+                uint64_t oldest_kept = (inputs->now_us -
+                    state->trajectory_t0_us - period_us - 1U) / period_us + 1U;
+                oldest_kept += state->segment_start_index;
+                if (oldest_kept > due_index) oldest_kept = due_index;
+                if (oldest_kept > state->sample_index) {
+                    const uint32_t skip =
+                        (uint32_t)(oldest_kept - state->sample_index);
+                    if (state->services.skip_samples == NULL ||
+                        !state->services.skip_samples(state->sample_index,
+                                                      skip, state->services.context))
+                        return fail(state, PATH_EXEC_ERR_STORAGE_READ);
+                    state->skipped_samples += skip;
+                    state->sample_index += skip;
+                    PATH_TIMING_EVENT(GP_TIMING_PATH_SAMPLE_SKIPPED);
+                }
             }
 
-            /* This event measures actual trajectory commands, excluding
-             * homing/guidance/hold CAN transmissions in can_targets. */
-            PATH_TIMING_BEGIN(GP_TIMING_PATH_COMMAND);
-            const bool command_sent = send_execution_sample(
-                state, &sample, inputs->now_ms);
-            PATH_TIMING_END(GP_TIMING_PATH_COMMAND, command_sent);
-            if (!command_sent)
-            {
-                return fail(state, PATH_EXEC_ERR_COMMUNICATION);
+            /* Catch up only nonexpired due samples. A heavy supervisor
+             * overrun is represented as skips, never silent clock drift. */
+            while (state->sample_index <= due_index) {
+                PvExecutionSample sample;
+                if (!state->services.read_sample(
+                        state->sample_index, &sample, state->services.context))
+                    return fail(state, PATH_EXEC_ERR_STORAGE_READ);
+                PATH_TIMING_BEGIN(GP_TIMING_PATH_COMMAND);
+                const bool command_sent = send_execution_sample(state, &sample);
+                PATH_TIMING_END(GP_TIMING_PATH_COMMAND, command_sent);
+                if (!command_sent)
+                    return fail(state, PATH_EXEC_ERR_COMMUNICATION);
+                if (!state->feedback_watch_started) {
+                    state->feedback_watch_started = true;
+                    state->feedback_watch_started_us = inputs->now_us;
+                    for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis)
+                        state->initial_tpdo_count[axis] =
+                            state->final_command_tpdo_count[axis];
+                }
+                state->sample_index++;
             }
-
-            state->sample_index++;
             break;
         }
 
@@ -754,6 +713,9 @@ void state_path_execution_get_outputs(
         state->clearance_stable_cycles;
     outputs->command_period_ms =
         state->command_period_ms;
+    outputs->skipped_samples = state->skipped_samples;
+    memcpy(outputs->feedback_age_us, state->feedback_age_us,
+           sizeof(outputs->feedback_age_us));
     outputs->wire_feed_commanded =
         state->wire_feed_commanded;
 }
@@ -773,7 +735,8 @@ void state_path_execution_resume(
     }
 
     state->command_clock_started = false;
-    state->awaiting_feedback = false;
+    state->feedback_watch_started = false;
+    memset(state->fresh_since_start, 0, sizeof(state->fresh_since_start));
 
     if (
         state->request.mode == ROBOT_EXECUTION_PRODUCTION &&

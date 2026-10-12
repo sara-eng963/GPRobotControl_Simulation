@@ -43,6 +43,12 @@ static bool take(uint32_t index, PvExecutionSample *sample, void *ctx)
     return ok;
 }
 
+static bool discard(uint32_t first, uint32_t count, void *ctx)
+{
+    Test *t = ctx;
+    return trajectory_prefetch_skip(&t->stream, first, count);
+}
+
 static bool ready(uint32_t index, uint32_t count, void *ctx)
 {
     Test *t = ctx;
@@ -91,7 +97,8 @@ static void enter(Test *t, RobotExecutionMode mode)
         .read_sample = take, .set_wire_feed_enabled = relay,
         .prepare_retraction = retract_prepare, .step_retraction = retract_step,
         .clearance_verified = clearance, .controlled_stop = stop,
-        .context = t, .stream_ready = ready, .end_stream = end_stream
+        .context = t, .skip_samples = discard,
+        .stream_ready = ready, .end_stream = end_stream
     };
     JointDrivePort port = fake_joint_drive_make_port(&t->drive);
     state_path_execution_enter(&t->execution, &port, &request, &config, &services);
@@ -119,8 +126,11 @@ static void init(Test *t, uint32_t count, unsigned prefill, uint32_t fail_at)
 static StateStepResult step(Test *t, bool abort_home)
 {
     PathExecutionInputs inputs = {
-        .motion_permission = true, .now_ms = t->next_ms++, .home_requested = abort_home
+        .motion_permission = true, .now_ms = t->next_ms,
+        .now_us = (uint64_t)t->next_ms * 1000U,
+        .home_requested = abort_home
     };
+    ++t->next_ms;
     PathExecutionOutputs outputs;
     unsigned before = t->drive.commands;
     uint32_t index = t->execution.sample_index;
@@ -188,7 +198,7 @@ static void test_final_feedback_replay_pause_abort(void)
     for (unsigned i = 0; i < 5; ++i) {
         assert(trajectory_prefetch_worker_step(&t.stream));
         assert(step(&t, false) == STATE_STEP_RUNNING);
-        assert(t.execution.awaiting_feedback);
+        assert(t.execution.feedback_watch_started);
         assert(__atomic_load_n(&t.stream.consumed, __ATOMIC_ACQUIRE) == 3);
     }
     assert(t.releases == 0 && t.wire_enables == 0);
