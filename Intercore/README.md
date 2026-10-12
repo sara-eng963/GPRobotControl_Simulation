@@ -22,11 +22,25 @@ not pretend that the existing single-RTOS POSIX simulator is already dual-core.
 - The mailbox is not a physical emergency-stop mechanism.
 
 ## Transport
-- Ring depth: 16 entries per direction; 60 bytes per message.
-- Two single-producer/single-consumer rings, aligned 32-bit atomic counters,
-  release/acquire publication, bounded polling, no blocking/mutex/waits.
-- Initialize exactly once while the other core is held waiting. Never reset a
-  live mailbox. Handle full queues and stale messages at the application layer.
+- Host-only simulation uses two fixed-size SPSC rings, 16 entries per
+  direction, with 60-byte application messages.
+- **STM32H745 firmware uses a different, FreeRTOS-native backend:**
+  `ipc_mailbox_freertos.c`, backed by two statically allocated FreeRTOS
+  Message Buffers in shared SRAM4. It uses the **actual pinned** 10.6.2
+  `message_buffer.h`, `stream_buffer.h` and `stream_buffer.c`; the
+  nonstandard application flag `configUSE_STREAM_BUFFERS` is not needed.
+- **Official implementation reference:** ST's
+  [STM32H745I-DISCO FreeRTOS_AMP_Dual_RTOS](https://github.com/STMicroelectronics/STM32CubeH7/tree/master/Projects/STM32H745I-DISCO/Applications/FreeRTOS/FreeRTOS_AMP_Dual_RTOS).
+  It creates shared buffers on M7 **before** the HSEM-0 boot release;
+  M4 validates them on wake. Its `sbSEND_COMPLETED` hook, EXTI0 SW
+  interrupt and `xMessageBufferSendCompletedFromISR` implement
+  notification to the receiving kernel.
+- Our target's current `gp_ipc_set_notifier` API is not the same as
+  ST's published EXTI completion path. We must port or justify a
+  replacement and test reverse-direction notifications explicitly.
+- Initialize shared objects exactly once, with both cores quiescent.
+  Never reset a live mailbox. Handle full queues and stale messages at
+  the application layer. This is not a physical safety mechanism.
 
 See the [verified Stage 1 STM32H745 firmware record](../Firmware/STAGE1_DUAL_CORE_FOUNDATION.md) for the source-backed CubeMX settings and dual-image build evidence.
 
