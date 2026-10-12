@@ -19,7 +19,7 @@ for core in CM7 CM4; do
     echo "[Stage 2E-4] Compiling $core ST-HAL EXTI notification adapter..."
     flags=(-std=gnu11 -O0 -Wall -Wextra -Werror
         -mcpu="$cpu" -mthumb -mfpu="$fpu" -mfloat-abi=hard
-        -DSTM32H745xx -DUSE_HAL_DRIVER -D"CORE_$core=1"
+        -DSTM32H745xx -DDUAL_CORE=1 -DUSE_HAL_DRIVER -D"CORE_$core=1"
         -I"$FW/$core/Core/Inc" -I"$FW/Common/Inc"
         -I"$ROOT/Intercore"
         -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
@@ -46,6 +46,8 @@ assert 'HAL_EXTI_IRQHandler(&exti_rx)' in notify
 assert 'gp_ipc_set_notifier' in notify
 for core, irq, other in [('CM7', 'EXTI1_IRQHandler', 'EXTI0_IRQHandler'),
                          ('CM4', 'EXTI0_IRQHandler', 'EXTI1_IRQHandler')]:
+    project = (fw/core/".cproject").read_text()
+    assert project.count('value="DUAL_CORE"') >= 2, "both CubeIDE build configurations must define DUAL_CORE"
     main = (fw/core/"Core/Src/main.c").read_text()
     it = (fw/core/"Core/Src/stm32h7xx_it.c").read_text()
     assert 'intercore_notifications_initialize()' in main
