@@ -14,6 +14,13 @@ From the repository root, with the existing SIL Kit build configuration:
 bash scripts/run_timing_benchmark.sh
 # optionally add cancellation and flash program failure:
 bash scripts/run_timing_benchmark.sh --include-faults
+
+# Resume only the flash scenario after baseline has completed:
+bash scripts/run_timing_benchmark.sh --flash-only --no-plots
+
+# Analyze a saved baseline without rerunning SIL Kit:
+python3 scripts/analyze_timing_csv.py \
+  .simulation-logs/timing-benchmark/baseline.csv --no-plots
 ```
 
 The script reconfigures/builds the binaries, checks the recorder and analyzer,
