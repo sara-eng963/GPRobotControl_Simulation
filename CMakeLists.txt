@@ -35,6 +35,26 @@ target_compile_options(ipc_mailbox_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME ipc_mailbox_test COMMAND ipc_mailbox_test)
 set_tests_properties(ipc_mailbox_test PROPERTIES TIMEOUT 15)
 
+# M4 owns the flash producer/staging; M7 owns the 500 Hz consumer.
+# Only GpTrajectoryShared crosses the inter-core SRAM boundary.
+add_library(intercore_trajectory_stream STATIC Intercore/trajectory_stream.c)
+target_compile_features(intercore_trajectory_stream PUBLIC c_std_11)
+target_include_directories(intercore_trajectory_stream PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Intercore)
+target_compile_options(intercore_trajectory_stream PRIVATE
+    -Wall -Wextra -Werror=implicit-function-declaration
+    -Werror=incompatible-pointer-types)
+add_executable(intercore_trajectory_stream_test
+    Intercore/Tests/test_trajectory_stream.c)
+target_link_libraries(intercore_trajectory_stream_test PRIVATE
+    intercore_trajectory_stream pthread)
+target_compile_options(intercore_trajectory_stream_test PRIVATE
+    -Wall -Wextra -Werror)
+add_test(NAME intercore_trajectory_stream_test
+    COMMAND intercore_trajectory_stream_test)
+set_tests_properties(intercore_trajectory_stream_test
+    PROPERTIES TIMEOUT 20)
+
+
 # FreeRTOS runs with its existing POSIX host port.
 add_library(freertos_config INTERFACE)
 target_include_directories(freertos_config SYSTEM INTERFACE
