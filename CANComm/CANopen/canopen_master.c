@@ -1,4 +1,12 @@
 #include "canopen_master.h"
+#if defined(GP_HOST_TIMING)
+#include "../../Simulation/Timing/host_timing_trace.h"
+#define TRACE_CAN_BEGIN() gp_timing_begin(GP_TIMING_CAN_TARGET)
+#define TRACE_CAN_END(ok) gp_timing_end(GP_TIMING_CAN_TARGET, ok)
+#else
+#define TRACE_CAN_BEGIN() ((void)0)
+#define TRACE_CAN_END(ok) ((void)0)
+#endif
 
 #include "canopen_heartbeat.h"
 #include "canopen_ids.h"
@@ -581,6 +589,7 @@ bool canopen_master_send_target_cycle(
         return false;
     }
 
+    TRACE_CAN_BEGIN();
     for (uint8_t i = 0U; i < master->node_count; ++i)
     {
         CanFrame frame;
@@ -590,6 +599,7 @@ bool canopen_master_send_target_cycle(
                 target_positions[i],
                 &frame))
         {
+            TRACE_CAN_END(false);
             return false;
         }
 
@@ -597,14 +607,14 @@ bool canopen_master_send_target_cycle(
                 master,
                 &frame))
         {
+            TRACE_CAN_END(false);
             return false;
         }
     }
 
-    return
-        canopen_master_send_sync(
-            master
-        );
+    const bool success = canopen_master_send_sync(master);
+    TRACE_CAN_END(success);
+    return success;
 }
 
 const AvatarMDrive *canopen_master_drive(
