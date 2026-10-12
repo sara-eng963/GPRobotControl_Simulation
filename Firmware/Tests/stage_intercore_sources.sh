@@ -13,18 +13,25 @@ DEST="$1"
     echo "FAIL: not an STM32H745 CubeIDE verification project: $DEST" >&2
     exit 1
 }
-CM7="$DEST/CM7/Core/Src"
-[[ -f "$CM7/intercore_shared_memory.c" ]] || {
-    echo "FAIL: sync Firmware/STM32H745 to the verifier before staging sources" >&2
-    exit 1
-}
-for name in ipc_mailbox_freertos.c trajectory_stream.c; do
-    cp "$ROOT/Intercore/$name" "$CM7/$name"
-    cmp -s "$ROOT/Intercore/$name" "$CM7/$name" || {
-        echo "FAIL: staged copy diverged: $name" >&2
+for core in CM7 CM4; do
+    target="$DEST/$core/Core/Src"
+    if [[ "$core" == CM7 ]]; then
+        owner=intercore_shared_memory.c
+    else
+        owner=intercore_startup_validation.c
+    fi
+    [[ -f "$target/$owner" ]] || {
+        echo "FAIL: sync Firmware/STM32H745 $core into verifier first" >&2
         exit 1
     }
-    echo "PASS: staged canonical CM7 source $name"
+    for name in ipc_mailbox_freertos.c trajectory_stream.c; do
+        cp "$ROOT/Intercore/$name" "$target/$name"
+        cmp -s "$ROOT/Intercore/$name" "$target/$name" || {
+            echo "FAIL: staged copy diverged: $core/$name" >&2
+            exit 1
+        }
+        echo "PASS: staged canonical $core source $name"
+    done
 done
-echo "NOTE: do not compile Intercore/ipc_mailbox.c in the CM7 target."
+echo "NOTE: never compile host-only Intercore/ipc_mailbox.c in either firmware target."
 echo "NOTE: these are build inputs for the separate verifier, not forked sources."
