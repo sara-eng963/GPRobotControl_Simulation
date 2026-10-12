@@ -116,5 +116,6 @@ jobs:
         with:
           name: six-run-path-timing
           path: .timing-results/
-          if-no-files-found: warn
+          if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14
