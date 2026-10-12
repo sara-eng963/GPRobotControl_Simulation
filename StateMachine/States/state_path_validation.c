@@ -1008,7 +1008,8 @@ static void reseed_active_stream_from_accepted_command(
 
 static bool validate_and_store_sample(
     PathValidationState *state,
-    const PvGeneratedSample *generated
+    const PvGeneratedSample *generated,
+    bool *storage_busy
 )
 {
     if (state->sample_index >= state->storage.capacity_samples)
@@ -1369,13 +1370,24 @@ if (
      * STORE THE ACCEPTED 1 ms CSP SAMPLE
      * ------------------------------------------------------------------------ */
 
-    if (
-        !state->storage.write_sample(
-            state->sample_index,
-            &execution_sample,
-            state->storage.context
-        )
-    )
+    if (state->storage.try_write_sample != NULL)
+    {
+        const PvStorageTryResult stored = state->storage.try_write_sample(
+            state->sample_index, &execution_sample, state->storage.context);
+        if (stored == PV_STORAGE_TRY_BUSY)
+        {
+            *storage_busy = true;
+            return false;
+        }
+        if (stored != PV_STORAGE_TRY_ACCEPTED)
+        {
+            set_error(state, PV_ERR_STORAGE);
+            return false;
+        }
+    }
+    else if (!state->storage.write_sample(state->sample_index,
+                                          &execution_sample,
+                                          state->storage.context))
     {
         set_error(state, PV_ERR_STORAGE);
         return false;
@@ -1852,34 +1864,29 @@ StateStepResult state_path_validation_step(
              * ---------------------------------------------------------------- */
             case PV_PHASE_GENERATE_AND_VALIDATE_SAMPLE:
             {
-                PvGeneratedSample generated;
-
-                memset(
-                    &generated,
-                    0,
-                    sizeof(generated)
-                );
-
-                if (
-                    !generate_controlcore_sample(
-                        state,
-                        &generated
-                    )
-                )
+                PvGeneratedSample generated = {0};
+                if (!state->sample_pending)
                 {
+                    if (!generate_controlcore_sample(state, &generated))
+                        break;
+                    /* The generator is stateful. A full flash queue must not
+                     * advance its cursor or duplicate this sample on retry. */
+                    state->pending_generated_q = generated.q;
+                    state->pending_desired_position = generated.desired_position;
+                    state->pending_desired_orientation = generated.desired_orientation;
+                    state->sample_pending = true;
+                }
+                generated.q = state->pending_generated_q;
+                generated.desired_position = state->pending_desired_position;
+                generated.desired_orientation = state->pending_desired_orientation;
+                bool storage_busy = false;
+                if (!validate_and_store_sample(state, &generated, &storage_busy))
+                {
+                    if (storage_busy)
+                        samples_used = sample_budget; /* yield, not error */
                     break;
                 }
-
-                if (
-                    !validate_and_store_sample(
-                        state,
-                        &generated
-                    )
-                )
-                {
-                    break;
-                }
-
+                state->sample_pending = false;
                 ++samples_used;
 
 
@@ -1945,12 +1952,26 @@ StateStepResult state_path_validation_step(
                         state->artifact
                     );
 
-                if (
-                    !state->storage.commit(
-                        state->artifact,
-                        state->storage.context
-                    )
-                )
+                if (state->storage.try_commit != NULL)
+                {
+                    const PvStorageTryResult committed =
+                        state->storage.try_commit(state->artifact,
+                                                  state->storage.context);
+                    if (committed == PV_STORAGE_TRY_BUSY)
+                    {
+                        /* M4 still drains writes / programs pages / verifies
+                         * durable metadata. Never publish VALID early. */
+                        samples_used = sample_budget;
+                        break;
+                    }
+                    if (committed != PV_STORAGE_TRY_ACCEPTED)
+                    {
+                        set_error(state, PV_ERR_STORAGE);
+                        break;
+                    }
+                }
+                else if (!state->storage.commit(state->artifact,
+                                                state->storage.context))
                 {
                     set_error(state, PV_ERR_STORAGE);
                     break;
