@@ -76,6 +76,26 @@ set_tests_properties(intercore_trajectory_path_port_test
     PROPERTIES TIMEOUT 15)
 
 
+# Separate M7 validation math from the M4-owned QSPI/NOR storage.
+add_library(intercore_validation_storage STATIC
+    Intercore/validation_storage_bridge.c)
+target_compile_features(intercore_validation_storage PUBLIC c_std_11)
+target_include_directories(intercore_validation_storage PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/Intercore)
+target_compile_options(intercore_validation_storage PRIVATE
+    -Wall -Wextra -Werror)
+
+add_executable(intercore_validation_storage_test
+    Intercore/Tests/test_validation_storage_bridge.c)
+target_link_libraries(intercore_validation_storage_test PRIVATE
+    intercore_validation_storage pthread)
+target_compile_options(intercore_validation_storage_test PRIVATE
+    -Wall -Wextra -Werror)
+add_test(NAME intercore_validation_storage_test
+    COMMAND intercore_validation_storage_test)
+set_tests_properties(intercore_validation_storage_test
+    PROPERTIES TIMEOUT 15)
+
 # FreeRTOS runs with its existing POSIX host port.
 add_library(freertos_config INTERFACE)
 target_include_directories(freertos_config SYSTEM INTERFACE
