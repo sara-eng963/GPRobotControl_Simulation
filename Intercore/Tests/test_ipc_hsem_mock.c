@@ -1,5 +1,5 @@
-/* Runs the unmodified production HSEM adapter against HAL/FreeRTOS doubles.
- * Tests control flow only. The real HAL binary and interrupts are NOT tested. */
+/* Runs the production HSEM adapter against HAL mocks and real FreeRTOS headers.
+ * Checks control flow; real HAL binaries and interrupts are NOT tested. */
 #include "ipc_stm32h745_hsem.h"
 #include "stm32h7xx_hal.h"
 #include <assert.h>
@@ -43,13 +43,13 @@ void vPortYield(void) { ++yielded; }
 int main(void)
 {
 #if defined(GP_IPC_CORE_M7)
-    const uint32_t incoming = (1U << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M4_TO_M7_DATA) |
-                              (1U << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M7_TO_M4_SPACE);
-    const uint32_t irrelevant = 1U << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M7_TO_M4_DATA;
+    const uint32_t incoming = (UINT32_C(1) << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M4_TO_M7_DATA)) |
+                              (UINT32_C(1) << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M7_TO_M4_SPACE));
+    const uint32_t irrelevant = UINT32_C(1) << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M7_TO_M4_DATA);
 #else
-    const uint32_t incoming = (1U << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M7_TO_M4_DATA) |
-                              (1U << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M4_TO_M7_SPACE);
-    const uint32_t irrelevant = 1U << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M4_TO_M7_DATA;
+    const uint32_t incoming = (UINT32_C(1) << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M7_TO_M4_DATA)) |
+                              (UINT32_C(1) << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M4_TO_M7_SPACE));
+    const uint32_t irrelevant = UINT32_C(1) << GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M4_TO_M7_DATA);
 #endif
     assert(GP_IPC_HSEM_BASE_ID > 3U);
     assert(((incoming | irrelevant) & 1U) == 0U);
