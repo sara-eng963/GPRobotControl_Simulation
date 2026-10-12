@@ -1,0 +1,30 @@
+name: Async validation storage bridge
+
+on:
+  push:
+    branches:
+      - fix/async-validation-storage
+    paths:
+      - 'Intercore/**'
+      - 'StateMachine/States/state_path_validation.*'
+      - '.github/workflows/async-validation-storage.yml'
+  workflow_dispatch:
+
+jobs:
+  bridge-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build host-only storage bridge test
+        run: |
+          set -euo pipefail
+          mkdir -p build-intercore
+          cc -std=c11 -O2 -Wall -Wextra -Werror -pthread \
+            Intercore/validation_storage_bridge.c \
+            Intercore/Tests/test_validation_storage_bridge.c \
+            -o build-intercore/validation_storage_test
+      - name: Verify queue backpressure, commit and cancellation
+        run: |
+          set -euo pipefail
+          timeout 15s ./build-intercore/validation_storage_test
