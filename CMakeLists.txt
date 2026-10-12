@@ -96,6 +96,31 @@ add_test(NAME intercore_validation_storage_test
 set_tests_properties(intercore_validation_storage_test
     PROPERTIES TIMEOUT 15)
 
+# Host-only timing CSV recorder. Written by a background pthread, never
+# from Supervisor/CAN tasks. This library is NOT STM32 firmware code.
+add_library(host_timing_trace STATIC Simulation/Timing/host_timing_trace.c)
+target_compile_features(host_timing_trace PUBLIC c_std_11)
+target_compile_options(host_timing_trace PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(host_timing_trace PUBLIC pthread)
+add_executable(host_timing_trace_test
+    Simulation/Timing/test_host_timing_trace.c)
+target_include_directories(host_timing_trace_test PRIVATE Simulation/Timing)
+target_link_libraries(host_timing_trace_test PRIVATE host_timing_trace)
+target_compile_options(host_timing_trace_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME host_timing_trace_test COMMAND host_timing_trace_test)
+set_tests_properties(host_timing_trace_test PROPERTIES TIMEOUT 10)
+
+# Python analyzer smoke test uses a tiny synthetic fixture and checks the
+# summary reports the expected misses, not hardware timing measurements.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME host_timing_analyzer_test
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/Simulation/Timing/test_analyzer.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/scripts/analyze_timing_csv.py)
+    set_tests_properties(host_timing_analyzer_test PROPERTIES TIMEOUT 10)
+endif()
+
 # FreeRTOS runs with its existing POSIX host port.
 add_library(freertos_config INTERFACE)
 target_include_directories(freertos_config SYSTEM INTERFACE
