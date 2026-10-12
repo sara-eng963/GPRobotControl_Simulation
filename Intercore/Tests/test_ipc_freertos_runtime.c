@@ -230,7 +230,7 @@ static void controller_task(void *parameter)
 
 /* Required by this isolated static-enabled FreeRTOS POSIX kernel build. */
 void vApplicationGetIdleTaskMemory(StaticTask_t **tcb, StackType_t **stack,
-                                   uint32_t *words)
+                                   StackType_t *words)
 {
     static StaticTask_t idle_tcb;
     static StackType_t idle_stack[configMINIMAL_STACK_SIZE];
