@@ -61,6 +61,14 @@ else()
     message(STATUS "IPC ARM compile test not registered (bash or arm-none-eabi-gcc unavailable)")
 endif()
 
+# HSEM adapter HAL/RTOS contract test. Uses isolated mocks, not physical IRQs.
+if(GP_BASH_EXECUTABLE)
+    add_test(NAME intercore_ipc_hsem_mock_test
+        COMMAND "${GP_BASH_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Intercore/Tests/run_ipc_hsem_mock.sh")
+    set_tests_properties(intercore_ipc_hsem_mock_test PROPERTIES TIMEOUT 20)
+endif()
+
 # M4 owns the flash producer/staging; M7 owns the 500 Hz consumer.
 # Only GpTrajectoryShared crosses the inter-core SRAM boundary.
 add_library(intercore_trajectory_stream STATIC Intercore/trajectory_stream.c)

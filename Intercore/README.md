@@ -339,3 +339,19 @@ interleave rather than execute simultaneously on two independent STM32 cores.
 Notifications tested here are project callback invocation, **not HSEM IRQ
 delivery**. The test cannot prove shared SRAM cache coherence, core reset
 behavior, HAL integration, or physical 500 Hz determinism.
+
+### STM32 HSEM adapter mock tests
+
+`bash Intercore/Tests/run_ipc_hsem_mock.sh` executes the actual
+`ipc_stm32h745_hsem.c` with small HAL/FreeRTOS test doubles and compiles
+**both** `GP_IPC_CORE_M7` and `GP_IPC_CORE_M4` configurations.
+CTest name: `intercore_ipc_hsem_mock_test`.
+
+The test checks HSEM clock/notification configuration, all four
+notification IDs, correct per-core incoming masks, successful nonblocking
+take/release, failed FastTake counter with no release, irrelevant IRQ masks,
+local task notification and ISR yield, and null task behavior.
+
+This is **logic verification against mocks**, not proof of actual STM32 HAL
+header compatibility, HSEM IRQ dispatch, interrupt priority correctness,
+cross-core timing, missed IRQ recovery, or hardware coherency.
