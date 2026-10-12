@@ -22,6 +22,7 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "intercore_notifications.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -174,5 +175,9 @@ void TIM6_DAC_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
-
+/* Peer FreeRTOS Message Buffer wakeup via STM32 HAL software EXTI. */
+void EXTI1_IRQHandler(void)
+{
+  intercore_notifications_handle_irq();
+}
 /* USER CODE END 1 */
