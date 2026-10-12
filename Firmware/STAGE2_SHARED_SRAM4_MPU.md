@@ -1,21 +1,23 @@
 ---
 title: "Stage 2 — Shared SRAM4, Linker, MPU and IPC ABI"
 stage: 2
-status: "2A/2B verified; 2C linker sections committed, ARM link test pending"
+status: "2A/2B pass; 2C link-and-clean-build pass; 2D CubeMX MPU generated and builds pass; 2E pending"
 date: 2026-10-12
 tags: [stm32h745, shared-memory, freertos, firmware]
 ---
 
 # Stage 2 — Shared SRAM4 / MPU integration
 
-**Current substage: 2A, object footprint and ABI audit.** The purpose is to
-design the physical memory boundary *before* touching the CubeMX-generated
-linker scripts or MPU configuration.
+**Current substage: 2E, shared-memory initialization and startup sequencing.**
+Stages 2A–2D established the object sizes, address allocation, linker
+sections and generated M7 MPU settings. No production shared objects have
+yet been linked into both firmware images or exercised across real cores.
 
 > [!IMPORTANT]
-> The object-size check is compile-only. It does **not** place the objects into
-> target SRAM4, configure the MPU, run on actual dual-core hardware, or prove
-> multi-kernel FreeRTOS Message Buffer correctness.
+> Size and synthetic linker tests, and independent CubeIDE firmware builds,
+> are **software-only evidence**. A linkable MPU configuration is now present,
+> but production IPC/trajectory objects are not yet in those firmware ELFs,
+> and no hardware cache-coherency or two-kernel FreeRTOS IPC test has occurred.
 
 ## 1. Established memory map
 
@@ -23,7 +25,7 @@ These are **current generated linker script** declarations, not new decisions.
 
 | Address range | Region | Current CM7 linker | Current CM4 linker |
 | --- | --- | --- | --- |
-| `0x38000000–0x3800FFFF` | Shared SRAM4, 64 KiB | Declares `RAM_D3`, 64 KiB; does not place IPC | No SRAM4 region yet |
+| `0x38000000–0x3800FFFF` | SRAM4, 64 KiB | Partitioned into shared IPC/trajectory/reserved (lower 32 KiB) and `RAM_D3` (upper 32 KiB) | Matching lower shared partitions; `GP_SRAM4_REMAINING` upper 32 KiB |
 | `0x24000000` | M7 AXI SRAM, 512 KiB | `RAM_D1`, default data/BSS/stack | Not used as default |
 | `0x10000000` | Generated M4 RAM, 288 KiB | Not used as default | `RAM`, default data/BSS/stack |
 | `0x08000000` | CM7 program Flash bank, 1024 KiB | CM7 `FLASH` | — |
@@ -123,15 +125,14 @@ The single C-side address contract is
 The stage 2 compile probe asserts both actual object sizes fit their
 respective slots and checks adjacency and MPU alignment.
 
-**Status:** the shared-memory layout is a **compile-time design contract**
-only. No physical placement, NOLOAD section, MPU region, or startup
-initialization is implemented. The next gate is to validate the new size
-checks; then add matching linker sections to both firmware targets and
-inspect both ELF maps. Do not treat a passing size test as a cache
-coherency or multi-kernel IPC validation.
+**Status:** physical reservations are now encoded in both linker scripts
+and the corresponding M7 MPU Region 1 configuration is generated. The
+production objects are not yet linked, nor is the startup/ready protocol
+implemented. A passing size test is not a cache-coherency or inter-kernel
+runtime validation.
 
 
-## 3B. Stage 2C — shared SRAM4 linker sections (pending validation)
+## 3B. Stage 2C — shared SRAM4 linker sections (verified in software)
 
 Both Cortex-M7 and Cortex-M4 linker scripts now declare **nonoverlapping
 SRAM4 partitions**:
@@ -178,9 +179,12 @@ resulting ELF symbol positions and `NOBITS` section types with
 addresses are `0x38000000` (2,208-byte IPC) and `0x38001000`
 (12,352-byte trajectory).
 
-**This test does not build the full firmware images and must not be
-interpreted as a physical memory/cache-coherency test.** Full CM7/CM4
-CubeIDE builds are the next integration gate after this synthetic test.
+**Recorded results (2026-10-12):** all four combinations (CM7/CM4 ×
+FLASH/RAM linker) passed synthetic ARM linking, symbol-address checks,
+object-size checks and `NOLOAD`/`NOBITS` checks. The repository-derived
+verification workspace then produced successful clean firmware builds for
+both cores (operator-reported 0 errors / 0 warnings). These firmware ELFs
+still lack the production shared objects and do not prove runtime IPC.
 
 ### Regeneration and safety
 
@@ -191,22 +195,111 @@ script after every regeneration and review the linker diff. Do not place
 these shared structures in ordinary `.bss`, duplicate-initialize them
 from both cores, or use startup HSEM ID 0 for application notifications.
 
-**Deferred:** a production composition root that actually declares
-the section-annotated objects, initialization/ready/version protocol,
-the Cortex-M7 non-cacheable MPU region, ISR plumbing, complete firmware
-linking and hardware validation.
+**Deferred:** production section-annotated objects, their single-owner
+initialization/ready/version protocol, IPC HSEM ISR plumbing, application
+integration and hardware execution/cache-coherency validation.
+
+
+
+## 3C. Stage 2D — Cortex-M7 MPU configuration (source-verified)
+
+**Commit:** `184147f` — `feat(firmware): configure M7 MPU for non-cacheable shared SRAM4`.
+
+Using STM32CubeMX 6.18.1, the operator enabled **MPU Region 1** for the
+lower 32 KiB of shared SRAM4. CubeMX regenerated the MCU `.ioc` and
+`CM7/Core/Src/main.c`; both were copied from the verification workspace
+into the tracked firmware with the original CRLF line endings preserved.
+The reviewed Git diff was limited to **11 added lines in M7 `main.c`**
+and the **8 additions / 1 replacement** required by the `.ioc` file.
+The unrelated CubeMX-generated `rtos.0.ip` change was excluded.
+
+| M7 MPU attribute | Generated value | Why |
+| --- | --- | --- |
+| Region | `MPU_REGION_NUMBER1` | Higher-priority override of existing Region 0 |
+| Base address | `0x38000000` | Beginning of our shared SRAM4 reservation |
+| Size | `MPU_REGION_SIZE_32KB` | One power-of-two region covers the lower 32 KiB |
+| Subregions disabled | `0x00` | Include all eight subregions |
+| TEX | `MPU_TEX_LEVEL1` | Normal memory when combined with C=0, B=0 |
+| Access | `MPU_REGION_FULL_ACCESS` | Access from M7 firmware |
+| Execute never | `MPU_INSTRUCTION_ACCESS_DISABLE` | Shared data is not executable |
+| Shareable | `MPU_ACCESS_SHAREABLE` | Shared-memory attributes |
+| Cacheable | `MPU_ACCESS_NOT_CACHEABLE` | Prevent stale M7 data-cache reads |
+| Bufferable | `MPU_ACCESS_NOT_BUFFERABLE` | Chosen normal/noncacheable encoding |
+
+**CubeMX code-generation detail:** Region 1 writes only its changed
+`MPU_InitStruct` fields before calling `HAL_MPU_ConfigRegion()`.
+The last four memory attributes listed above are set for Region 0 and
+retained in the same struct when Region 1 is configured. The generated
+`MPU_Config()` enables MPU operation after both region registrations.
+There is no hand-written MPU register code.
+
+**Verification:** CubeMX-generated source reviewed; both CM7 and CM4
+firmware builds reported successful (0 errors, 0 warnings). Prior to
+generation, the Stage 2C linker sections remained present in the
+verification copy. Only the regenerated `.ioc` and M7 `main.c` were
+transferred into Git, keeping the committed linker changes untouched.
+
+**Limits:** both M7 I-Cache and D-Cache were **disabled** in the baseline
+CubeMX setup. The explicit MPU mapping prepares for later cache use;
+it does not itself demonstrate caching performance or cross-core data
+visibility. No actual STM32H745 was flashed or tested.
+
+## 3D. Stage 2E — implementation plan and acceptance gates
+
+**Goal:** make the production shared objects exist at the reserved
+addresses, and define a deterministic, fault-detecting protocol so M4
+cannot access the regions before they have been initialized by M7.
+
+1. **Production placement:** define a **single physical instance** of
+   `GpIpcShared` at `0x38000000` and `GpTrajectoryShared` at
+   `0x38001000`, with dedicated linker section attributes on the M7
+   owner side. M4 shall reference **the same absolute addresses**, not
+   define a second physical object or attempt separate initialization.
+   Inspect both final ELF maps and prevent accidental `.bss` ownership.
+2. **Boot ordering:** generated ST HSEM **ID 0** wakes M4 **before**
+   M7 reaches `osKernelInitialize()`. Therefore the HSEM-0 wakeup
+   means *clocks are ready*, **not** *shared IPC is ready*. Preserve ST's
+   boot choreography; add an independent, bounded application-level
+   readiness gate on M4 before any IPC/trajectory access.
+3. **Initialization ownership:** initialize both shared structures
+   exactly once from M7, when its kernel prerequisites are satisfied.
+   Use the existing `gp_ipc_initialize` and
+   `gp_traj_shared_initialize` APIs; publish an explicit compatible
+   ABI/ready state **only after** both return valid.
+4. **Readiness metadata:** reserve a small fixed, aligned bootstrap
+   record in the Stage 2B shared spare slot (not in either object's
+   active payload), with magic, ABI revision, lifecycle epoch, flags
+   and error indication. Define release/acquire publication and a
+   response to stale or incompatible version.
+5. **Failure handling:** implement bounded wait, startup-timeout and
+   incompatible ABI branches. No robot motion or shared-memory use
+   before both cores acknowledge readiness. Plan partial-core reset
+   recovery separately; never simply clear a live `NOLOAD` block.
+6. **Compatibility and tests:** pin the target IPC to both vendored
+   FreeRTOS 10.6.2 configurations (including resolving the explicit
+   `configUSE_STREAM_BUFFERS` guard). Test lifecycle protocol with
+   deterministic host and ARM compile/link checks. Keep ST HAL/HSEM
+   IRQ wiring and target-specific service-task notifications separate
+   from HSEM-0 boot wakeup; reserve IPC HSEM IDs 24–27.
+7. **Hardware gate:** physical reset sequences, both-cores data
+   visibility, cache-enabled operation, HSEM interrupts, timing and
+   recovery must eventually be verified on real silicon.
+
+**Do not treat a linked mailbox as a validated cross-kernel transport.**
+The existing target FreeRTOS Message Buffer implementation was tested
+in isolation; running its control blocks across **two independent
+schedulers** requires explicit verification, not merely matching sizes.
+No current 500 Hz or functional-safety claim follows from these stages.
 
 
 ## 4. Follow-up implementation checkpoints
 
-- **2B — memory contract:** fixed slot addresses and alignments proposed;
-  compile-time ABI/capacity gate awaits rerun. Initialization/version
-  metadata remain to be designed.
-- **2C — linker sections:** sections and assertions committed to both cores'
-  FLASH/RAM scripts; synthetic ARM ELF test and full CubeIDE rebuild pending.
-- **2D — M7 MPU attributes:** make the selected physical shared region normal,
-  shareable **non-cacheable** memory with the correct region size/alignment.
-  Preserve unrelated MPU guards and other memory's cache configuration.
+- **2B — memory contract:** fixed address and alignment contract verified
+  using core-specific FreeRTOS 10.6.2 headers. Bootstrap metadata remains.
+- **2C — linker sections:** synthetic ARM ELF tests passed for all four
+  linker scripts; independent CubeIDE clean builds passed for CM7 and CM4.
+- **2D — M7 MPU attributes:** generated code and `.ioc` committed; independent
+  CubeIDE builds passed. Hardware MPU behavior remains untested.
 - **2E — lifecycle & verification:** M7 initializes once while M4 is stopped,
   independent from ST's HSEM-0 boot sync; IPC HSEM IDs 24–27 remain reserved.
   Handle resets, loss of readiness and mismatched ABI deliberately.
