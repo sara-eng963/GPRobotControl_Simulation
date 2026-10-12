@@ -91,6 +91,9 @@ bool intercore_notifications_initialize(void)
      * releasing CM4 with ST's existing HSEM-0 boot sequence. */
     EXTI_ConfigTypeDef cfg = {0};
 
+    /* ST HAL's GPIO-backed EXTI configuration writes SYSCFG->EXTICR. */
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+
     cfg.Line = EXTI_LINE_0;
     cfg.Mode = EXTI_MODE_CORE2_INTERRUPT;
     cfg.Trigger = EXTI_TRIGGER_RISING;
