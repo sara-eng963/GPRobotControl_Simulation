@@ -11,15 +11,17 @@ mkdir -p "$LOG_DIR"
 
 # Resume a completed baseline without repeating the 66-second scenario.
 FLASH_ONLY=0
+PATH_ONLY=0
 INCLUDE_FAULTS=0
 NO_PLOTS=0
 for arg in "$@"; do
     case "$arg" in
         --flash-only) FLASH_ONLY=1 ;;
+        --path-only) PATH_ONLY=1 ;;
         --include-faults) INCLUDE_FAULTS=1 ;;
         --no-plots) NO_PLOTS=1 ;;
         *)
-            echo "Usage: bash scripts/run_timing_benchmark.sh [--flash-only] [--include-faults] [--no-plots]" >&2
+            echo "Usage: bash scripts/run_timing_benchmark.sh [--flash-only|--path-only] [--include-faults] [--no-plots]" >&2
             exit 2 ;;
     esac
 done
@@ -62,6 +64,13 @@ run_scenario() {
     echo "[TIMING] Summary: $analysis_dir/summary_metrics.csv"
     echo "[TIMING] Report: $analysis_dir/timing_report.md"
 }
+
+if ((PATH_ONLY)); then
+    # Do not overwrite the user's previously verified baseline.csv/flash.csv.
+    run_scenario path_diagnostics supervisor_silkit_flash_sequence
+    echo "[TIMING] Path diagnostic complete; existing baseline/flash logs unchanged."
+    exit 0
+fi
 
 if ((!FLASH_ONLY)); then
     run_scenario baseline supervisor_silkit_sequence
