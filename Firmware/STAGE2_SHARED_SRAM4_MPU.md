@@ -79,12 +79,14 @@ requirements. That is **not yet a finalized layout**: pad to suitable
 alignment, include shared init/version metadata, and reserve any future
 shared blocks only after a full allocation review.
 
-**Important compatibility gap:** the generated `FreeRTOSConfig.h` files do
-not explicitly define `configUSE_STREAM_BUFFERS`, although the current
-project IPC header requires it. The **probe only** defines this flag when
-absent; no firmware source or production macro is changed. FreeRTOS 10.6.2's
-stream buffer API is separate from that project guard. Resolve this gate
-during real IPC integration without silently rewriting vendor code.
+**FreeRTOS 10.6.2 compatibility gate (first Stage 2E code change):**
+The vendor's `message_buffer.h` includes `stream_buffer.h` directly and
+does **not** define or require `configUSE_STREAM_BUFFERS`. Our own
+nonstandard check was removed from `Intercore/ipc_mailbox.h`; both ARM
+probes now compile against the actual generated core configs **without
+defining an artificial switch**. The firmware must still compile/link
+the vendor's `stream_buffer.c` and verify its real two-core behavior.
+Re-run both source-level ARM scripts after fetching this change.
 
 ## 3A. Stage 2A measured result and Stage 2B memory layout
 
@@ -244,53 +246,87 @@ CubeMX setup. The explicit MPU mapping prepares for later cache use;
 it does not itself demonstrate caching performance or cross-core data
 visibility. No actual STM32H745 was flashed or tested.
 
-## 3D. Stage 2E — implementation plan and acceptance gates
+## 3D. Stage 2E — reference implementation adoption
 
-**Goal:** make the production shared objects exist at the reserved
-addresses, and define a deterministic, fault-detecting protocol so M4
-cannot access the regions before they have been initialized by M7.
+### Official ST baseline — not a new custom transport
 
-1. **Production placement:** define a **single physical instance** of
+- **[ST AN5617: Introduction to inter-processor communications for
+  STM32H745/755 and STM32H747/757](https://www.st.com/resource/en/application_note/an5617-introduction-to-interprocessor-communications-for-stm32h745755-and-stm32h747757-mcus-stmicroelectronics.pdf)**:
+  dual-core IPC mechanisms and FreeRTOS Message Buffer reference (section
+  4.2), HSEM startup/notification discussion (section 4.3).
+- **[ST STM32CubeH7 / STM32H745I-DISCO /
+  FreeRTOS_AMP_Dual_RTOS](https://github.com/STMicroelectronics/STM32CubeH7/tree/master/Projects/STM32H745I-DISCO/Applications/FreeRTOS/FreeRTOS_AMP_Dual_RTOS)**:
+  vendor C implementation of *separate FreeRTOS kernels* with statically
+  created Message Buffers in shared SRAM4 and inter-core notification.
+- **[ST AN5361](https://www.st.com/resource/en/application_note/an5361-getting-started-with-projects-based-on-dualcore-stm32h7-microcontrollers-in-stm32cubeide-stmicroelectronics.pdf)**:
+  generated dual-core boot/build workflow.
+- **[ST AN4838](https://www.st.com/resource/en/application_note/an4838-managing-memory-protection-unit-mpu-in-stm32-mcus-stmicroelectronics.pdf)**:
+  MCU MPU regions and memory attributes.
+
+**ST's actual AMP example (verified against upstream sources):**
+
+1. M4 enables HSEM-0 wake notification, enters D2 STOP and waits.
+2. M7 configures MPU/cache, initializes the clock and HAL, sets up EXTI0
+   software interrupt routing, then calls `xMessageBufferCreateStatic()`
+   for shared control/data buffers **before releasing M4**.
+3. M7 releases HSEM ID 0; M4 wakes and validates shared buffer handles.
+4. M7's `sbSEND_COMPLETED()` FreeRTOS hook sends a notification through a
+   control Message Buffer and `HAL_EXTI_GenerateSWInterrupt(EXTI_LINE0)`.
+   M4's EXTI handler calls `xMessageBufferSendCompletedFromISR()` to
+   wake a local receiving task. This is **EXTI-based data notification**;
+   HSEM-0 is a distinct **boot/wakeup** mechanism.
+5. ST's demonstration primarily transmits **M7→M4**, not our full
+   bidirectional HMI/status/storage and real-time trajectory traffic.
+   We must qualify bidirectional adaptations and IRQ priorities rather
+   than imply the example implements our robot-specific data flow.
+
+### Required implementation order
+
+1. **Use vendor primitives:** FreeRTOS 10.6.2's native
+   `xMessageBufferCreateStatic`, `xMessageBufferSend/Receive`,
+   `sbSEND_COMPLETED`, ISR completion API, CubeH7 HAL HSEM/EXTI and
+   CubeMX-generated boot. Do not write a second queue, message framing
+   layer, peripheral HAL or custom FreeRTOS scheduler.
+2. **Actual physical allocation:** define one M7-owned, section-annotated
    `GpIpcShared` at `0x38000000` and `GpTrajectoryShared` at
-   `0x38001000`, with dedicated linker section attributes on the M7
-   owner side. M4 shall reference **the same absolute addresses**, not
-   define a second physical object or attempt separate initialization.
-   Inspect both final ELF maps and prevent accidental `.bss` ownership.
-2. **Boot ordering:** generated ST HSEM **ID 0** wakes M4 **before**
-   M7 reaches `osKernelInitialize()`. Therefore the HSEM-0 wakeup
-   means *clocks are ready*, **not** *shared IPC is ready*. Preserve ST's
-   boot choreography; add an independent, bounded application-level
-   readiness gate on M4 before any IPC/trajectory access.
-3. **Initialization ownership:** initialize both shared structures
-   exactly once from M7, when its kernel prerequisites are satisfied.
-   Use the existing `gp_ipc_initialize` and
-   `gp_traj_shared_initialize` APIs; publish an explicit compatible
-   ABI/ready state **only after** both return valid.
-4. **Readiness metadata:** reserve a small fixed, aligned bootstrap
-   record in the Stage 2B shared spare slot (not in either object's
-   active payload), with magic, ABI revision, lifecycle epoch, flags
-   and error indication. Define release/acquire publication and a
-   response to stale or incompatible version.
-5. **Failure handling:** implement bounded wait, startup-timeout and
-   incompatible ABI branches. No robot motion or shared-memory use
-   before both cores acknowledge readiness. Plan partial-core reset
-   recovery separately; never simply clear a live `NOLOAD` block.
-6. **Compatibility and tests:** pin the target IPC to both vendored
-   FreeRTOS 10.6.2 configurations (including resolving the explicit
-   `configUSE_STREAM_BUFFERS` guard). Test lifecycle protocol with
-   deterministic host and ARM compile/link checks. Keep ST HAL/HSEM
-   IRQ wiring and target-specific service-task notifications separate
-   from HSEM-0 boot wakeup; reserve IPC HSEM IDs 24–27.
-7. **Hardware gate:** physical reset sequences, both-cores data
-   visibility, cache-enabled operation, HSEM interrupts, timing and
-   recovery must eventually be verified on real silicon.
+   `0x38001000`, using existing linker sections and exact type sizes.
+   M4 uses the same physical addresses and **does not reinitialize**.
+   Verify symbol maps in BOTH firmware ELFs; do not silently add shared
+   blocks in ordinary `.bss`.
+3. **Initialize-before-release:** follow ST's AMP example: initialize
+   both shared resources using the actual `gp_ipc_initialize()` and
+   `gp_traj_shared_initialize()` before M7 releases HSEM-0. Preserve
+   generated clock/MPU/ST boot prerequisites and fail closed if setup
+   fails. M4 validates the native Message Buffer handles and trajectory
+   structure after waking but before starting IPC work.
+4. **Notifications:** port the ST EXTI/software-interrupt completion
+   pattern, first in a small one-directional test, and only then adapt
+   for the second direction. Our existing custom HSEM notifier callback
+   is **not** identical to ST's published EXTI example: do not present it
+   as vendor-derived until replaced or explicitly justified.
+5. **Kernel compatibility:** current firmware ships FreeRTOS 10.6.2
+   with static allocation enabled and `stream_buffer.c` linked.
+   The nonstandard `configUSE_STREAM_BUFFERS` requirement is now
+   removed from the target IPC header and from the ARM probes.
+   Re-run both firmware ABI/linker tests before integrating sources.
+6. **Application-only requirements:** fixed message IDs and payloads,
+   trajectory producer/consumer ownership, motion gating, timeouts and
+   reset/recovery are particular to this robot, **not standardized by
+   ST's demonstration**. Define the minimum needed requirements,
+   documenting exactly where the vendor pattern does not cover them.
+   Do **not** introduce a custom bootstrap magic/epoch state machine
+   merely because the earlier design note suggested it.
+7. **Acceptance:** independent full CM7/CM4 CubeIDE clean builds;
+   map-file proof that shared objects occupy the reserved SRAM4
+   addresses; startup/notification fault-injection tests; eventual
+   hardware interrupt, cache visibility, power-up and partial-reset
+   measurements. A build or simulator does not prove dual-core runtime
+   correctness or functional safety.
 
-**Do not treat a linked mailbox as a validated cross-kernel transport.**
-The existing target FreeRTOS Message Buffer implementation was tested
-in isolation; running its control blocks across **two independent
-schedulers** requires explicit verification, not merely matching sizes.
-No current 500 Hz or functional-safety claim follows from these stages.
-
+**Current implementation state:** Step 5's obsolete application-level
+FreeRTOS guard and ARM probe shims were removed and committed. Steps 2–4
+are **not yet integrated into the production firmware**. Do not
+describe Stage 2E as complete.
 
 ## 4. Follow-up implementation checkpoints
 
@@ -300,9 +336,11 @@ No current 500 Hz or functional-safety claim follows from these stages.
   linker scripts; independent CubeIDE clean builds passed for CM7 and CM4.
 - **2D — M7 MPU attributes:** generated code and `.ioc` committed; independent
   CubeIDE builds passed. Hardware MPU behavior remains untested.
-- **2E — lifecycle & verification:** M7 initializes once while M4 is stopped,
-  independent from ST's HSEM-0 boot sync; IPC HSEM IDs 24–27 remain reserved.
-  Handle resets, loss of readiness and mismatched ABI deliberately.
+- **2E — vendor-derived initialization and notifications:** adopt
+  ST's STM32H745 dual-FreeRTOS AMP sequence: M7 creates shared Message
+  Buffers before HSEM-0 releases M4, and EXTI0/FreeRTOS ISR completion
+  delivers inter-core notifications. Validate application-specific reset,
+  ABI and trajectory-ownership requirements independently.
 
 **No device-level claims** until both new firmware images execute on actual
 hardware and pass visibility, reset and timing checks.
