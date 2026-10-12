@@ -23,7 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "intercore_shared_memory.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -123,6 +123,12 @@ int main(void)
   SystemClock_Config();
 /* USER CODE BEGIN Boot_Mode_Sequence_2 */
 #if defined(DUAL_CORE_BOOT_SYNC_SEQUENCE)
+/* Follow STM32CubeH7 FreeRTOS_AMP_Dual_RTOS: create shared message
+   buffers while CM4 is in STOP, before releasing HSEM-0. */
+if (!intercore_shared_memory_initialize())
+{
+  Error_Handler();
+}
 /* When system initialization is finished, Cortex-M7 will release Cortex-M4 by means of
 HSEM notification */
 /*HW semaphore Clock enable*/
