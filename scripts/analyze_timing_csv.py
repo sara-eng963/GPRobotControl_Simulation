@@ -16,11 +16,16 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
-FIELDS = (
+V1_FIELDS = (
     "schema_version", "source", "kind", "sequence", "period_us",
     "start_us", "finish_us", "duration_us", "interval_us",
     "scheduled_us", "start_lateness_us", "finish_lateness_us",
     "missed_deadline", "success", "dropped_total",
+)
+V2_FIELDS = (
+    "schema_version", "source", "kind", "sequence", "period_us",
+    "start_us", "finish_us", "duration_us", "interval_us",
+    "execution_budget_overrun", "success", "dropped_total",
 )
 OUTPUT_FIELDS = (
     "source", "kind", "samples", "span_s", "period_us",
@@ -50,17 +55,23 @@ def parse(path: Path) -> dict[str, list[dict]]:
     groups: dict[str, list[dict]] = defaultdict(list)
     with path.open(newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
-        absent = set(FIELDS) - set(reader.fieldnames or [])
-        if absent:
-            raise ValueError(f"Unsupported timing CSV; missing columns: {sorted(absent)}")
+        headers = set(reader.fieldnames or [])
+        if set(V2_FIELDS).issubset(headers):
+            schema = 2
+            fields = V2_FIELDS
+        elif set(V1_FIELDS).issubset(headers):
+            schema = 1
+            fields = V1_FIELDS
+        else:
+            raise ValueError("Unsupported timing CSV: expected schema v1 or v2 fields")
         for line, original in enumerate(reader, start=2):
             if not original["source"]:
                 continue
             try:
-                if int(original["schema_version"]) != 1:
-                    raise ValueError("unsupported schema_version")
+                if int(original["schema_version"]) != schema:
+                    raise ValueError("schema_version does not match the header")
                 item = {k: int(original[k]) if original[k] not in ("", None)
-                        else None for k in FIELDS
+                        else None for k in fields
                         if k not in ("source", "kind")}
             except ValueError as error:
                 raise ValueError(f"{path}:{line}: {error}") from error
@@ -236,10 +247,10 @@ def main() -> None:
         "**Host observations only — not STM32H745 worst-case execution time "
         "or hardware deadline certification.**",
         "",
-        "**Schema-v1 warning:** the raw CSV fields missed_deadline, "
-        "scheduled_us and start/finish_lateness_us use a first-sample-anchored "
-        "ideal timeline. They accumulate POSIX/WSL tick drift and are deliberately "
-        "**ignored** when producing this report.",
+        "**Raw schema:** version " + str(next(iter(groups.values()))[0]["schema_version"]) + ". "
+        "For legacy v1 files, missed_deadline and first-anchored lateness fields "
+        "accumulate POSIX/WSL tick drift and are deliberately **ignored**. "
+        "Schema v2 no longer emits those fields.",
         "",
         "Execution-budget overrun means a measured task BODY took longer than "
         "its nominal period after it started. It does not determine whether "
@@ -315,7 +326,7 @@ def main() -> None:
     report = out_dir / "timing_report.md"
     report.write_text("\n".join(lines), encoding="utf-8")
     charts = [] if args.no_plots else make_plots(groups, out_dir)
-    print("[TIMING] Ignoring flawed schema-v1 cumulative 'missed_deadline' field.")
+    print("[TIMING] Ignoring flawed schema-v1 cumulative 'missed_deadline' field (if present).")
     print("[TIMING] Body overruns != actual RTOS deadline misses.")
     for s in summaries:
         flag = "WARN" if (s["execution_budget_overruns"] or s["logger_dropped"]) else "INFO"
