@@ -1,0 +1,115 @@
+name: Compare 500 Hz SIL Kit path timing
+on:
+  push:
+    branches:
+      - fix/trajectory-time-paced-scheduling
+    paths:
+      - '.github/workflows/trajectory-silkit-benchmark.yml'
+  workflow_dispatch:
+jobs:
+  six-run-path-timing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Host build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev \
+            libxi-dev libgl1-mesa-dev libxcursor-dev libxinerama-dev \
+            libxkbcommon-dev unzip
+          git clone --depth 1 --branch V11.2.0 \
+            https://github.com/FreeRTOS/FreeRTOS-Kernel.git ../FreeRTOS-Kernel
+      - name: Download official stable Ubuntu SIL Kit binary
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/silkit"
+          curl -fsSL --retry 3 \
+            https://api.github.com/repos/vectorgrp/sil-kit/releases/latest \
+            -o "$RUNNER_TEMP/silkit/release.json"
+          python3 - "$RUNNER_TEMP/silkit/release.json" "$RUNNER_TEMP/silkit/asset-url.txt" <<'PY'
+          import json,sys
+          data=json.load(open(sys.argv[1]))
+          packages=[a for a in data["assets"]
+                    if a["name"].lower().endswith(".zip")
+                    and "ubuntu-24.04" in a["name"].lower()
+                    and "x86_64" in a["name"].lower()
+                    and "gcc" in a["name"].lower()]
+          assert len(packages)==1,[(a["name"]) for a in data["assets"]]
+          open(sys.argv[2],"w").write(packages[0]["browser_download_url"])
+          print("SIL Kit:",data["tag_name"],packages[0]["name"])
+          PY
+          curl -fsSL --retry 3 -L "$(cat "$RUNNER_TEMP/silkit/asset-url.txt")" \
+            -o "$RUNNER_TEMP/silkit/package.zip"
+          unzip -q "$RUNNER_TEMP/silkit/package.zip" -d "$RUNNER_TEMP/silkit/install"
+          python3 - "$RUNNER_TEMP/silkit/install" >> "$GITHUB_ENV" <<'PY'
+          from pathlib import Path
+          import sys
+          found=list(Path(sys.argv[1]).rglob("SilKitConfig.cmake"))
+          assert len(found)==1,found
+          print("SILKIT_ROOT="+str(found[0].parents[3]))
+          PY
+      - name: Prepare original branch in separate worktree
+        run: |
+          git fetch origin fix/path-execution-timing-diagnostics
+          git worktree add --detach ../path-baseline FETCH_HEAD
+          git -C ../path-baseline submodule update --init --recursive
+      - name: Configure and build original and modified SIL Kit simulations
+        run: |
+          set -euo pipefail
+          cmake -S ../path-baseline -B "$RUNNER_TEMP/build-base" \
+            -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT" \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build "$RUNNER_TEMP/build-base" --parallel 4 \
+            --target supervisor_silkit_sim avatar_m_silkit_motor_bank host_timing_trace_test
+          cmake -S . -B "$RUNNER_TEMP/build-changed" \
+            -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT" \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build "$RUNNER_TEMP/build-changed" --parallel 4 \
+            --target supervisor_silkit_sim avatar_m_silkit_motor_bank host_timing_trace_test
+      - name: Run matching three baseline and three changed scenarios
+        run: |
+          set -euo pipefail
+          for n in 1 2 3; do
+            (cd ../path-baseline &&
+              BUILD_DIR="$RUNNER_TEMP/build-base" \
+              TIMING_RESULTS_DIR="$GITHUB_WORKSPACE/.timing-results/baseline-run$n" \
+              bash scripts/run_timing_benchmark.sh --path-only --no-plots)
+            BUILD_DIR="$RUNNER_TEMP/build-changed" \
+            TIMING_RESULTS_DIR="$GITHUB_WORKSPACE/.timing-results/changed-run$n" \
+            bash scripts/run_timing_benchmark.sh --path-only --no-plots
+          done
+      - name: Report original vs modified runs without hiding dropped rows or skips
+        if: success()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from scripts.analyze_timing_csv import parse,can_bursts,percentile
+          for kind in ("baseline","changed"):
+              for run in range(1,4):
+                  path=Path(f".timing-results/{kind}-run{run}/path_diagnostics.csv")
+                  groups=parse(path)
+                  events=groups.get("path_commands",[])
+                  gaps=can_bursts(events)
+                  skipped=sum(row.get("value") or 0
+                              for row in groups.get("path_samples_skipped",[]))
+                  drops=max((row["dropped_total"] for values in groups.values()
+                             for row in values),default=0)
+                  print(f"{kind} run {run}: commands={len(events)}, "
+                        f"p50={gaps['interval_p50_us']:.0f}, "
+                        f"p95={gaps['interval_p95_us']:.0f}, "
+                        f"p99={gaps['interval_p99_us']:.0f}, "
+                        f"max={gaps['interval_max_us']:.0f}, "
+                        f">2500us={gaps['intervals_over_2500us']}, "
+                        f"excluded>5000us={gaps['excluded_boundaries']}, "
+                        f"skips={skipped}, dropped={drops}")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: six-run-path-timing
+          path: .timing-results/
+          if-no-files-found: warn
+          retention-days: 14
