@@ -128,8 +128,10 @@ or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
   sends M7→M4 notifications through EXTI0 and M4→M7 through EXTI1.
   Native `xMessageBufferSendCompletedFromISR()` is used only when
   the local scheduler is running; neither FreeRTOS scheduler nor HAL
-  driver source is replaced. Both CubeIDE projects define the vendor
-  `DUAL_CORE` build macro so the HAL uses CPU2-specific EXTI registers.
+  driver source is replaced. STM32H745's
+  device header already defines `DUAL_CORE` so the HAL uses
+  CPU2-specific EXTI registers; the redundant compiler defines
+  were removed from both CubeIDE projects.
   Run `bash Firmware/Tests/check_intercore_notifications.sh` and then
   clean/build **both** cores in CubeIDE after staging the changed files.
   Application receive APIs remain nonblocking; no task waiter or
