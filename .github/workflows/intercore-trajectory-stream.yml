@@ -1,0 +1,40 @@
+name: Cross-core trajectory stream
+
+on:
+  push:
+    branches:
+      - fix/cross-core-trajectory-stream
+    paths:
+      - 'Intercore/**'
+      - '.github/workflows/intercore-trajectory-stream.yml'
+      - 'CMakeLists.txt'
+      - 'StateMachine/States/state_path_execution.h'
+  workflow_dispatch:
+
+jobs:
+  host-stream-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+
+      - name: Build standalone M4/M7 tests
+        run: |
+          set -euo pipefail
+          mkdir -p build-intercore
+          cc -std=c11 -O2 -Wall -Wextra -Werror -pthread \
+            Intercore/trajectory_stream.c \
+            Intercore/Tests/test_trajectory_stream.c \
+            -o build-intercore/trajectory_stream_test
+          cc -std=c11 -O2 -Wall -Wextra -Werror -pthread \
+            Intercore/trajectory_stream.c \
+            Intercore/trajectory_stream_path_port.c \
+            Intercore/Tests/test_trajectory_stream_path_port.c \
+            -o build-intercore/path_port_test
+
+      - name: Run concurrent stream and path adapter regressions
+        run: |
+          set -euo pipefail
+          timeout 20s ./build-intercore/trajectory_stream_test
+          timeout 15s ./build-intercore/path_port_test
