@@ -123,7 +123,7 @@ should **not** be interpreted as one contiguous free region. Some bytes
 are inside fixed slots or are deliberately reserved.
 
 The single C-side address contract is
-[`Common/Inc/gp_shared_sram4_layout.h`](STM32H745/Common/Inc/gp_shared_sram4_layout.h).
+[`Common/Inc/sram4_memory_map.h`](STM32H745/Common/Inc/sram4_memory_map.h).
 The stage 2 compile probe asserts both actual object sizes fit their
 respective slots and checks adjacency and MPU alignment.
 
@@ -323,10 +323,20 @@ visibility. No actual STM32H745 was flashed or tested.
    measurements. A build or simulator does not prove dual-core runtime
    correctness or functional safety.
 
+**Production naming:** the new firmware storage source is
+`CM7/Core/Src/intercore_shared_memory.c`, with symbols
+`intercore_ipc_shared` and `intercore_trajectory_shared`. The layout
+header is `Common/Inc/sram4_memory_map.h`. The existing `.gp_shared_*`
+linker-section names and historical `Gp*` / `GP_*` application ABI are
+preserved temporarily; renaming those requires one coordinated,
+ABI-validated cross-core migration, not a cosmetic text substitution.
+CubeMX's `GP_STM32H745.ioc` identity is also separate from these
+application-file changes.
+
 **Current implementation state:** the nonstandard FreeRTOS guard and
 ARM probe shims have been removed. The first production **M7-owned typed
 object definitions** have now been committed as
-`CM7/Core/Src/gp_shared_objects.c`. They use the existing `NOLOAD`
+`CM7/Core/Src/intercore_shared_memory.c`. They use the existing `NOLOAD`
 sections, 32-byte alignment and exact ABI size checks. M4 must **not**
 define duplicate physical storage. Full CM7/CM4 firmware linking, M7
 initialization-before-HSEM-0-release and peer notification are pending.
