@@ -18,8 +18,11 @@
 #define GP_IPC_RING_CAPACITY 16U
 #define GP_IPC_WORDS 12U
 
-/* No pointers, size_t, task handles, or FreeRTOS objects cross cores.
- * Fixed-size little-endian 32-bit wire ABI. */
+/* Application messages never contain pointers, size_t or FreeRTOS task
+ * handles. The 60-byte payload is a fixed 32-bit little-endian wire ABI.
+ * In the STM32 backend, shared mailbox metadata separately contains
+ * native FreeRTOS buffer control blocks and handles to shared memory;
+ * those are not portable application-message fields. */
 typedef enum {
     GP_IPC_HMI_COMMAND = 1,
     GP_IPC_CONTROLLER_STATUS = 2,
