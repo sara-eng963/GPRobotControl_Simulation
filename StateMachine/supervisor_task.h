@@ -99,10 +99,10 @@ typedef struct
     bool (*validation_enter_ready)(void *context);
     void *validation_enter_context;
 
-    /* If enabled, ALL validation (including blocking storage begin/write/
-     * commit) runs in a lower-priority task, not the 1 kHz Supervisor.
-     * Never report VALID until that worker completed durable commit.
-     * The worker priority must be strictly below Supervisor priority. */
+    /* Run numerical validation in a task below Supervisor priority.
+     * Legacy synchronous storage runs in the same worker; the optional
+     * async bridge delegates NOR to M4 and waits for durable acknowledgment.
+     * Never report VALID before the backend has committed successfully. */
     bool validation_run_in_worker;
     UBaseType_t validation_worker_priority;
     /* Caller-provided persistent snapshot; avoids forcing another ~KB-sized
