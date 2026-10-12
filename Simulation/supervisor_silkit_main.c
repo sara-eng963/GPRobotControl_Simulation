@@ -8,6 +8,7 @@
 #include "../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../ControlCore/Kinematics/control_fk.h"
 #include "Storage/trajectory_prefetch.h"
+#include "../Intercore/validation_storage_bridge.h"
 #include "Renode/Storage/qspi_nor_validated_storage.h"
 #include "Tests/w25q_nor_model.h"
 #include <arpa/inet.h>
@@ -58,6 +59,13 @@ static bool host_flash_mode, host_flash_first_valid;
 static TaughtProgram host_flash_validation_snapshot;
 static TrajectoryPrefetch validated_prefetch;
 static TaskHandle_t prefetch_task_handle;
+/* Two-core target ownership model: M7 numerical validation worker only
+ * enqueues storage requests; M4 owns the QSPI and durable commit backend.
+ * POSIX simulation models the two roles with independent FreeRTOS tasks. */
+static GpValidationShared flash_validation_shared;
+static GpValidationM7Client flash_validation_client;
+static GpValidationM4Worker flash_validation_worker;
+static TaskHandle_t flash_storage_task_handle;
 static PathValidationStorage path_validation_storage;
 static ValidatedTrajectory validated_trajectory;
 static ApproachConfig approach_config;
@@ -224,9 +232,24 @@ static bool ram_prefetch_read_batch(uint32_t first, PvExecutionSample *out,
 static bool prefetch_ready_for_validation(void *ignored)
 {
     (void)ignored;
+    /* Do not start a new validation while M4 still has a pending commit,
+     * failed transaction, or in-flight cancellation to acknowledge. */
+    if (host_flash_mode && !gp_validation_m4_idle(&flash_validation_shared))
+        return false;
     if (trajectory_prefetch_stopped(&validated_prefetch)) return true;
     if (!trajectory_prefetch_request_stop(&validated_prefetch)) return false;
     return trajectory_prefetch_stopped(&validated_prefetch);
+}
+
+/* Flash/backend callbacks are called ONLY from this M4-role task.
+ * Never run this function from Supervisor's 1 kHz control loop. */
+static void flash_storage_worker_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        (void)gp_validation_m4_step(&flash_validation_worker);
+        vTaskDelay(1);
+    }
 }
 
 static void prefetch_worker_task(void *arg)
@@ -1743,7 +1766,9 @@ static bool start_system(void)
     if (host_flash_mode && !host_flash_initialize()) return false;
     configure_robot();configure_state_dependencies();
     if (host_flash_mode) {
-        path_validation_storage=(PathValidationStorage){
+        /* M4-private flash callbacks. The M7 validator sees ONLY the
+         * nonblocking queue proxy; it cannot erase/write/QSPI directly. */
+        const PathValidationStorage m4_flash_backend = {
             .begin=host_flash_begin,
             .write_sample=qspi_nor_validated_storage_write_sample,
             .commit=host_flash_commit,
@@ -1751,6 +1776,18 @@ static bool start_system(void)
             .capacity_samples=SIM_PV_STORAGE_CAPACITY,
             .context=&host_flash_storage
         };
+        gp_validation_shared_initialize(&flash_validation_shared);
+        gp_validation_m7_init(&flash_validation_client,
+                              &flash_validation_shared);
+        if (!gp_validation_m4_init(&flash_validation_worker,
+                                   &flash_validation_shared,
+                                   &m4_flash_backend)) {
+            fprintf(stderr, "[STARTUP] M4 flash storage bridge init failed\n");
+            return false;
+        }
+        path_validation_storage =
+            gp_validation_m7_storage(&flash_validation_client,
+                                     SIM_PV_STORAGE_CAPACITY);
         approach_services.storage_context=&host_flash_storage;
     }
 
@@ -1812,6 +1849,13 @@ static bool start_system(void)
         fprintf(stderr, "[STARTUP] SimInputs allocation failed; "
                 "heap remaining=%zu bytes\n",
                 (size_t)xPortGetFreeHeapSize());
+        return false;
+    }
+    if (host_flash_mode &&
+        xTaskCreate(flash_storage_worker_task,"FlashM4",2048,NULL,1,
+                    &flash_storage_task_handle)!=pdPASS) {
+        fprintf(stderr, "[STARTUP] M4 flash worker allocation failed; "
+                "heap remaining=%zu bytes\n", (size_t)xPortGetFreeHeapSize());
         return false;
     }
     if (xTaskCreate(prefetch_worker_task,"TrajPrefetch",1024,NULL,2,
