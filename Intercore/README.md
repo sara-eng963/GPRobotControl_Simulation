@@ -215,7 +215,7 @@ compile success, interrupt correctness, or 500 Hz execution guarantees**.
    call `gp_ipc_stm32_hsem_on_free(mask)`. Enable `HSEM1_IRQn` on M7 or
    `HSEM2_IRQn` on M4, with an ISR priority compatible with FreeRTOS
    `...FromISR` calls. Call `HAL_HSEM_IRQHandler()` from the IRQ handler.
-   Reserve HSEM IDs 0..3 for IPC (see enum); do not share them with other
+   Reserve HSEM IDs 24..27 for IPC, keeping HSEM 0 available for ST's boot handshake (see enum); do not share them with other
    boot/IPC code. Do not overwrite existing HAL callbacks blindly.
 6. These operations use **zero timeout**. No sender or receiver is permitted
    to block on the shared message buffer because that can install a foreign
@@ -355,3 +355,20 @@ local task notification and ISR yield, and null task behavior.
 This is **logic verification against mocks**, not proof of actual STM32 HAL
 header compatibility, HSEM IRQ dispatch, interrupt priority correctness,
 cross-core timing, missed IRQ recovery, or hardware coherency.
+
+### HSEM adapter tests: STM32CubeH7 HAL wiring (mock peripheral)
+
+Run `bash Intercore/Tests/run_ipc_hsem_mock.sh` or the CTest case
+`intercore_ipc_hsem_mock_test`. The adapter is compiled separately with
+`GP_IPC_CORE_M7` and `GP_IPC_CORE_M4`, the **real installed FreeRTOS
+POSIX headers** and HAL-only test doubles. Tests cover the exact receiving
+core masks, 24..27 semaphore-ID mapping, one-shot rearm, failure counters,
+no release on a failed take, IRQ notification and yield, and NULL task.
+
+**Reservation constraint:** The STM32CubeH7 H745 dual-core startup examples
+use HSEM ID 0 for releasing CM4. The IPC event enum values 0..3 are logical
+notification types, **not physical HSEM IDs**. The adapter now reserves
+HSEM IDs 24..27. Both STM32 firmware images must reserve these four IDs
+exclusively and check against all future boot/RTOS/driver semaphore uses.
+The unit test does not run ST HAL or hardware interrupts; target CubeH7
+header integration, NVIC priority, MPU and real inter-core wake-up remain.

@@ -1,5 +1,5 @@
 /* STM32CubeH7 HAL/HSEM port for the nonblocking FreeRTOS IPC backend.
- * No direct peripheral-register programming. Target-only, not host tested. */
+ * No direct peripheral-register programming. HAL calls covered by host mocks. */
 #include "ipc_stm32h745_hsem.h"
 #include "stm32h7xx_hal.h"
 
@@ -11,15 +11,17 @@
 #error "Define exactly one GP_IPC_CORE_M7 or GP_IPC_CORE_M4"
 #endif
 
+_Static_assert(GP_IPC_HSEM_BASE_ID + GP_IPC_NOTIFY_M4_TO_M7_SPACE < 32U,
+               "IPC HSEM IDs must fit in 32-bit mask");
 #define GP_IPC_HSEM_BIT(id) (UINT32_C(1) << (uint32_t)(id))
 #if defined(GP_IPC_CORE_M7)
 #define GP_IPC_INCOMING_MASK \
-    (GP_IPC_HSEM_BIT(GP_IPC_NOTIFY_M4_TO_M7_DATA) | \
-     GP_IPC_HSEM_BIT(GP_IPC_NOTIFY_M7_TO_M4_SPACE))
+    (GP_IPC_HSEM_BIT(GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M4_TO_M7_DATA)) | \
+     GP_IPC_HSEM_BIT(GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M7_TO_M4_SPACE)))
 #else
 #define GP_IPC_INCOMING_MASK \
-    (GP_IPC_HSEM_BIT(GP_IPC_NOTIFY_M7_TO_M4_DATA) | \
-     GP_IPC_HSEM_BIT(GP_IPC_NOTIFY_M4_TO_M7_SPACE))
+    (GP_IPC_HSEM_BIT(GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M7_TO_M4_DATA)) | \
+     GP_IPC_HSEM_BIT(GP_IPC_HSEM_ID(GP_IPC_NOTIFY_M4_TO_M7_SPACE)))
 #endif
 
 static TaskHandle_t local_service_task;
@@ -29,9 +31,9 @@ static void stm32_hsem_notify(GpIpcNotifyEvent event, void *unused)
 {
     (void)unused;
     /* Only unique, reserved HSEM IDs are used. No wait/retry on M7 path. */
-    if (HAL_HSEM_FastTake((uint32_t)event) == HAL_OK) {
+    if (HAL_HSEM_FastTake(GP_IPC_HSEM_ID(event)) == HAL_OK) {
         __DMB();
-        HAL_HSEM_Release((uint32_t)event, 0U);
+        HAL_HSEM_Release(GP_IPC_HSEM_ID(event), 0U);
     } else {
         __atomic_add_fetch(&signal_failures, 1U, __ATOMIC_RELAXED);
         /* Message remains queued; consumer must also poll/recheck. */
