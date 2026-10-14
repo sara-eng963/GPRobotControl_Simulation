@@ -20,4 +20,23 @@ bool gp_traj_path_skip_samples(uint32_t first, uint32_t count,
                                void *context);
 void gp_traj_path_end_stream(void *context);
 
+/* B1 production service composition. Physical welding/stop/retraction
+ * callbacks retain their original context; only the path samples come from
+ * the M7-owned SRAM4 consumer. The validated artifact stays M7-private.
+ * Allocate the binding in persistent M7 RAM (not the boot task stack). */
+typedef struct {
+    GpTrajectoryConsumer consumer;
+    GpTrajectoryPathPort stream;
+    const ValidatedTrajectory *artifact;
+    PathExecutionServices physical;
+    PathExecutionServices services;
+} GpTrajectoryExecutionBinding;
+
+/* Rejects duplicate stream providers or absent physical stop/relay hooks.
+ * No prepared stream or hardware readiness is synthesized here. */
+bool gp_traj_execution_bind(GpTrajectoryExecutionBinding *binding,
+                            GpTrajectoryShared *shared,
+                            const ValidatedTrajectory *artifact,
+                            const PathExecutionServices *physical);
+
 #endif

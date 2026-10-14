@@ -13,6 +13,7 @@
 #include "fdcan_classic_backend.h"
 #include "ipc_mailbox.h"
 #include "sram4_memory_map.h"
+#include "trajectory_stream_path_port.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -110,6 +111,8 @@ static GpFdcanClassicBackend g_fdcan_state;
 static CanBackend g_can_backend;
 static CanopenMaster g_canopen_master;
 static bool g_board_prepared;
+/* Stream consumer and wrapper must outlive every Supervisor state transition. */
+static GpTrajectoryExecutionBinding g_motion_binding;
 
 /* This hook remains weak for compatibility with a future fully physical
  * board provider, but it implements an opt-in safe composition path.
@@ -224,6 +227,21 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
     config.timing.start = gp_timer_start;
     config.timing.wait_next = gp_timer_wait;
     config.timing.context = NULL;
+
+    /* Only the M7 Supervisor consumes SRAM4 samples. Preserve the real
+     * board's wire-feed/retraction/stop callbacks and their own context.
+     * No M4 producer is commissioned at this point; stream_ready must
+     * remain false until a matching durable trajectory is published. */
+    GpTrajectoryShared *const trajectory =
+        (GpTrajectoryShared *)(uintptr_t)GP_SHARED_TRAJECTORY_BASE;
+    if (!gp_traj_execution_bind(&g_motion_binding, trajectory,
+                                config.validated_trajectory,
+                                config.path_execution_services))
+    {
+        revoke_unstarted_board(board);
+        return false;
+    }
+    config.path_execution_services = &g_motion_binding.services;
     if (!supervisor_task_init(&config) || !supervisor_task_start(4U))
     {
         revoke_unstarted_board(board);
