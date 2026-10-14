@@ -41,8 +41,8 @@ def audit():
         "M7 Supervisor":4*pick(r"^\s*#define SUPERVISOR_TASK_STACK_WORDS\s+(\d+)U",sup,"supervisor stack"),
         "M7 validation worker":4*pick(r"^\s*#define VALIDATION_TASK_STACK_WORDS\s+(\d+)U",sup,"M7 validation stack"),
         "M4 NOR worker (only with physical provider)":4*pick(r"^\s*#define GP_M4_VALIDATION_STACK_WORDS\s+(\d+)U",m4,"M4 flash stack"),
-        "M7 CubeMX defaultTask":pick(r"\.stack_size\s*=\s*(\d+)\s*\*\s*(\d+)",m7_main,"M7 default") * 4,
-        "M4 CubeMX defaultTask":pick(r"\.stack_size\s*=\s*(\d+)\s*\*\s*(\d+)",m4_main,"M4 default") * 4,
+        "M7 CubeMX defaultTask":pick(r"\.stack_size\s*=\s*(\d+)\s*\*\s*4",m7_main,"M7 default") * 4,
+        "M4 CubeMX defaultTask":pick(r"\.stack_size\s*=\s*(\d+)\s*\*\s*4",m4_main,"M4 default") * 4,
     }
     irq={}
     for name in ("TIM2","TIM3"):
