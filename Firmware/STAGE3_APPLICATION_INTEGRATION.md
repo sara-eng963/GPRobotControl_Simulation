@@ -27,11 +27,35 @@ tags: [stm32h745, freertos, robotics, firmware]
 | **3C-3 M7 path execution** | Portable trajectory/IPC contracts, host simulation/streaming work | Connect and exercise real firmware trajectory consumer/PathExecution port; bounded sample clock, starvation, following-error handling and ARM/map evidence |
 | **3D-1 cross-core validation memory** | Stage 2 SRAM4 base slots/MPU/linkers verified | Reserve, initialize, cross-check `GpValidationShared` ABI and link map; integrate client/worker and failure tests |
 | **3D-2 M4 NOR/HMI** | Separate simulated/file/Renode memory work and M4 IPC task | CubeMX/HAL external flash port and M4 producer/validation, refill/cancel/CRC tests; implement chosen physical HMI transport |
-| **3E regression/reproducibility** | Current Windows verifier builds CM7: text 159792/data 112/bss 91536, CM4: text 24644/data 100/bss 21148; both 0 errors and 0 warnings. HAL1 test mocks passed earlier. | **Fresh source checkout + clean CubeIDE builds**, symbol/map verification, host integration/fault-path regressions and release evidence pack. Physical tests separately governed by `HARDWARE_ARRIVAL_VERIFICATION_PLAN.md`. |
+| **3E regression/reproducibility** | Current Windows verifier builds CM7: text 159792/data 112/bss 91536, CM4: text 24644/data 100/bss 21148; both 0 errors and 0 warnings. HAL1 test mocks passed earlier. | ****Independent checkout + clean CubeIDE builds PASSED 2026-10-14**; follow-up symbol/map + host runtime regressions**, symbol/map verification, host integration/fault-path regressions and release evidence pack. Physical tests separately governed by `HARDWARE_ARRIVAL_VERIFICATION_PLAN.md`. |
 
 **Known board-provider result:** CM7 ELF contains `080198a2 W application_supervisor_board_configure`, a weak fail-closed fallback. `gp_fdcan_classic_backend_open` is present in `CM7/Debug/Board/Src/fdcan_classic_backend.o` but discarded in final ELF as unreferenced. Thus "STM32 HAL FDCAN builds" **does not** mean the motor CANopen stack is active.
 
-**Immediately next:** reproduce both Debug builds from committed `809882f` on a **new independent checkout/workspace**, without copying old generated builds, without overwriting the known-good Windows verifier, and without accidentally adding unrelated WSL untracked files. Verify the relative HAL linked resource in `CM7/.project`. Then compose actual board integration and finish the remaining 3C/3D work. Do not classify any hardware gate as passed without board evidence.
+**Reproducibility progress:** an independent checkout/workspace clean-build **PASSED** at `a331dea` as detailed below; remaining major work is 3C board/CANopen and motion scheduling, 3D SRAM4 validation/NOR/HMI and 3E host/target failure regression. Do not classify any hardware gate as passed without board evidence.
+
+
+## Stage 3E — Independent dual-core clean-build reproducibility (2026-10-14)
+
+**Evidence supplied by operator via separate STM32CubeIDE screenshot for each target.** Source checkout: `git worktree add --detach ~/gp-stage3-repro-src origin/sara/can-replacement`, resolved **`a331dea`**. Independent project: `D:\\University\\Graduation Project\\STM32\\GP_Stage3_Repro` with its own `CubeIDE_Stage3_Repro_Workspace`. The canonical `Firmware/STM32H745` tree was copied from the fresh worktree, and the tracked `stage_intercore_headers.sh`, `stage_intercore_sources.sh`, `stage_m7_application_sources.sh` commands completed with all reported PASS messages. No preexisting Debug objects, legacy verification project, or manual ST HAL fixes were copied. Root/Cortex-M7/Cortex-M4 Eclipse projects imported successfully with "Copy projects into workspace" disabled, and M7 FDCAN relative `PARENT-1-PROJECT_LOC` link was source-checked.
+
+The operator selected **Clean Project → Build Project** for each core, with the following clean-build console evidence:
+
+| Target | text | data | bss | dec | IDE result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Cortex-M7 | 159792 B | 112 B | 91536 B | 251440 B | **0 errors, 0 warnings** (15:28:05) |
+| Cortex-M4 | 24644 B | 100 B | 21148 B | 45892 B | **0 errors, 0 warnings** (15:29:52) |
+
+Both `GP_STM32H745_CM7.elf` and `GP_STM32H745_CM4.elf` linked; sizes **exactly match** the previously working standalone verifier. **Stage 3E's fresh-checkout dual-build compile/link gate is PASSED** for the pinned toolchain/project and generated source configuration. A full reproducibility artifact should still include ELF symbol/map audit and host regressions at the final Stage 3 integration baseline. Identical sizes alone do **not** prove byte-identical output, live IPC/CANopen operation, 500 Hz motion timing, or safety validation. The HAL ↔ CANopen adapter is still discarded from M7 ELF, and the board provider is still weak fail-closed until integrated.
+
+## Planned larger-batch execution cadence (2026-10-14)
+
+To avoid incremental one-file-at-a-time reviews, group the remaining software work into cohesive **end-to-end batches** with one acceptance report per batch:
+
+1. **Batch A — M7 CANopen board composition + timing (3C-1/2):** close the HAL FDCAN-to-CANopen owner call path; define initialization/fault policy and transport diagnostics; implement a verified monotonic timebase and bounded 2 ms software-cycle contract using CubeMX/ST/FreeRTOS primitives. No fake drive-ready/safety signals or unqualified motion authorization. Preserve hardware-absent fail-closed operation. Acceptance: HAL-active adapter retained and referenced in image, both ELF links, host mocks/fault tests, and explicit unsupported-hardware gates.
+2. **Batch B — Motion execution + cross-core validation/storage (3C-3/3D-1/3D-2):** connect M7 trajectory consumer and path-execution services, M4 validation shared ABI/linker allocation, official HAL storage port abstraction and producer with predictable refill/CRC/cancel semantics. Bind physical HMI only when transport is actually specified. Acceptance: source-backed ARM/linker/section checks, boundary/underrun/cancel/recovery host tests and both firmware builds. Keep physical flash tests pending hardware.
+3. **Batch C — Software release qualification (3E):** whole-system integration regressions, target stack/heap/memory budgets, scheduling and CAN load feasibility models, fault injection, deterministic test scripts, reproducible clean source rebuild and documentation sign-off. Acceptance must explicitly separate **simulation/static verification** from physical measurements. The existing separate `HARDWARE_ARRIVAL_VERIFICATION_PLAN.md` remains the gate for powered board, bus, real-time and safety testing.
+
+**Standards-first constraints:** use STM32CubeMX-generated low-level FDCAN/QSPI/timers; official ST HAL/LL/CMSIS/FreeRTOS interfaces; verify CANopen CiA-301/402 behavior against established stacks and vendor EDS; only use custom glue for robot-specific application protocols. Reject placeholder motion-enabling board hooks, ad-hoc drivers, invented memory/stack budgets or declaring hardware validation from simulation. Track actual test commands/results by commit. 
 
 ## 3A. Source-backed architecture decisions
 
