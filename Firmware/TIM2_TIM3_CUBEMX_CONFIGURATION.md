@@ -137,3 +137,21 @@ TIM3.Prescaler=63
 ```
 
 **PASS: CubeMX project configuration now persists the desired 2 ms / 500 Hz TIM3 period setting** (given previously screenshot-confirmed APB1 timer input 64 MHz). This does **not yet** verify regenerated `CM7/Core/Src/main.c` or a firmware build. Operator's next gate: regenerate code from the saved working `.ioc`, verify `htim2.Init.{Prescaler,Period} = {63,4294967295}` and `htim3.Init.{Prescaler,Period} = {63,1999}` in generated M7 `main.c`, then audit generated changes against the independent pre-timer backup and target builds before software acceptance.
+
+
+## TIM2/TIM3 regenerated source parameters verified — 2026-10-14
+
+After persisting the TIM3 period in `GP_STM32H745.ioc`, the operator regenerated CubeMX output and inspected the **actual generated** `GP_Stage3_Repro/CM7/Core/Src/main.c` with WSL `grep`. Console evidence:
+
+```text
+=== TIM2 ===
+  htim2.Init.Prescaler = 63;
+  htim2.Init.Period = 4294967295;
+=== TIM3 ===
+  htim3.Init.Prescaler = 63;
+  htim3.Init.Period = 1999;
+```
+
+**PASS: generated timer PSC/ARR match the verified GUI design.** With the previously displayed APB1 timer clock of 64 MHz, TIM2 has nominal 1 µs tick resolution and TIM3 update events are nominally 500 Hz / 2 ms. The corresponding IRQ handlers were already observed in `CM7/Core/Src/stm32h7xx_it.c` in the earlier generated-file audit.
+
+**Not yet passed:** complete post-regeneration diff review of critical MPU/IPC, FreeRTOS, CAN/FDCAN and CM4 files; HAL timer module project links and clean dual-core CubeIDE firmware builds; explicit timer starts; overflow-safe 64-bit timestamp implementation; TIM3 task notification scheduling, cycle overrun detection, or physical timing measurements. Neither `HAL_TIM_Base_Init` nor a TIM IRQ handler definition starts a timer automatically. The independent pre-timer project backup remains the rollback reference. Do not imply 500 Hz trajectory execution from configuration alone.
