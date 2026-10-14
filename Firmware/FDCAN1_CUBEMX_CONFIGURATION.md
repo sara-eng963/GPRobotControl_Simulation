@@ -327,3 +327,27 @@ Combined observed build results in the Windows verifier on this date:
 The operator ran `arm-none-eabi-nm --defined-only` against both newly linked ELF files. Confirmed **CM7** symbols: `HAL_FDCAN_Init` at `0x0801ac64`, `HAL_FDCAN_MspInit` at `0x0801a060`, `application_supervisor_start` at `0x080198b8`. Confirmed **CM4** symbols: `application_ipc_service_run` at `0x08100a5c` and `gp_ipc_m4_receive` at `0x08100dea`.
 
 **Important missing symbol:** `gp_fdcan_classic_backend_open` was **not** present in the *final CM7 ELF* symbol output. The existing `fdcan_classic_backend.o` had previously been reported as present under `CM7/Debug/Board/Src/`, but has **not yet been inspected with `nm` directly**. This can be an expected consequence of linker `--gc-sections` discarding the unreferenced adapter while the M7 board-provider remains weak/fail-closed, or a sign the adapter's conditional `HAL_FDCAN_MODULE_ENABLED` branch was inactive/stale. **Do not claim the portable CANopen ↔ HAL FDCAN adapter is wired and retained in the final firmware.** Next verify the exact symbol in the **object file**, linker map discarded-sections record, and the weak board-provider status. This is a separate firmware *wiring* gate from the completed ST HAL compile/link gate.
+
+
+### FDCAN adapter object/ELF/linker map diagnosis (2026-10-14)
+
+The operator completed `arm-none-eabi-nm` checks and inspected the CM7 linker map:
+
+```text
+CM7/Debug/Board/Src/fdcan_classic_backend.o:
+00000000 T gp_fdcan_classic_backend_open
+
+CM7/Debug/GP_STM32H745_CM7.elf:
+NOT FOUND in ELF
+
+CM7/Debug/GP_STM32H745_CM7.elf:
+080198a2 W application_supervisor_board_configure
+
+CM7/Debug/GP_STM32H745_CM7.map (discarded input sections):
+.text.gp_fdcan_classic_backend_open
+    0x00000000  0xcc ./Board/Src/fdcan_classic_backend.o
+```
+
+**Conclusion:** HAL-active adapter code compiled in the CM7 object, but `gp_fdcan_classic_backend_open` was removed by linker garbage collection because no retained call path referenced it. This is **not** a HAL compilation or linkage error. The M7 board configuration provider remains the intentionally **weak fail-closed fallback**. The upstream CANopen master is **not yet connected to FDCAN at runtime**; the robot controller/drive operational gate is **not** implemented or satisfied.
+
+**Next planned operations:** first preserve the working local STM32CubeMX/CubeIDE-generated firmware sources and project metadata in GitHub and reproduce a clean dual-core build from source. Subsequently implement a strong production board-provider integration with explicit non-motion, safety, drive authorization and CANopen startup policy, not a dummy strong provider that bypasses fail-closed checks. Do not promote this source-level test to hardware verification.
