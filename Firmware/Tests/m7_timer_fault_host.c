@@ -71,7 +71,7 @@ static uint32_t last_fault;
 static void emit_step_failure(SupervisorTaskContext *ctx, uint32_t code)
 { ++faults; last_fault = code; ctx->machine.activeState = ROBOT_STATE_FAULT; }
 static void vTaskDelayUntil(TickType_t *last, TickType_t ticks)
-{ (void)last; (void)ticks; assert(!"unexpected desktop scheduling fallback"); }
+{ (void)last; (void)ticks; assert(0 && "unexpected desktop scheduling fallback"); }
 static uint64_t now_us;
 static uint64_t supervisor_now_us(void) { return now_us; }
 static uint32_t delivered;
