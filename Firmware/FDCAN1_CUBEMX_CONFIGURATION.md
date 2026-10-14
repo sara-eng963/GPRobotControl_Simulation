@@ -320,3 +320,10 @@ Combined observed build results in the Windows verifier on this date:
 | CM4 | 24644 | 100 | 21148 | PASS: 0 errors, 0 warnings |
 
 **Stage 3C-2 acceptance, scoped precisely:** Both updated Cortex-M7/M4 firmware projects compile/link; the CM7 project now includes the official ST HAL FDCAN linked source. Still pending: ARM ELF symbol inspection; import the generated HAL files, updated CM7/CM4 project metadata and initialization into source control; clean reproduction from source; physical CAN bus, motors, STM32 board power/boot, and timing verification. The weak M7 board provider remains fail-closed, so **neither successful build implies usable robot drive output**.
+
+
+### Actual ELF symbol checks after dual-core builds (2026-10-14)
+
+The operator ran `arm-none-eabi-nm --defined-only` against both newly linked ELF files. Confirmed **CM7** symbols: `HAL_FDCAN_Init` at `0x0801ac64`, `HAL_FDCAN_MspInit` at `0x0801a060`, `application_supervisor_start` at `0x080198b8`. Confirmed **CM4** symbols: `application_ipc_service_run` at `0x08100a5c` and `gp_ipc_m4_receive` at `0x08100dea`.
+
+**Important missing symbol:** `gp_fdcan_classic_backend_open` was **not** present in the *final CM7 ELF* symbol output. The existing `fdcan_classic_backend.o` had previously been reported as present under `CM7/Debug/Board/Src/`, but has **not yet been inspected with `nm` directly**. This can be an expected consequence of linker `--gc-sections` discarding the unreferenced adapter while the M7 board-provider remains weak/fail-closed, or a sign the adapter's conditional `HAL_FDCAN_MODULE_ENABLED` branch was inactive/stale. **Do not claim the portable CANopen ↔ HAL FDCAN adapter is wired and retained in the final firmware.** Next verify the exact symbol in the **object file**, linker map discarded-sections record, and the weak board-provider status. This is a separate firmware *wiring* gate from the completed ST HAL compile/link gate.
