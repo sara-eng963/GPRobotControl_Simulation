@@ -221,3 +221,18 @@ The operator's screenshot of **Project Manager → Code Generator** shows the fo
 | Before / After Code Generation actions | **Blank** | No custom external generation hooks installed |
 
 **Screenshot evidence:** CubeMX GUI only. The title bar still displayed `GP_STM32H745.ioc*`, consistent with *unsaved* configuration edits at screenshot time. **Next:** take a separate full project snapshot **before saving/generating**, then save the .ioc and inspect its diff, then regenerate in a controlled operation. These Code Generator checkboxes **do not guarantee** preservation of custom SRAM4 linker maps, dual-core HSEM startup, MPU, FreeRTOS application source staging, or `.cproject` entries. Verify each explicitly after generation. No code generation or updated target build is claimed.
+
+
+### Saved .ioc vs tracked repository diff (2026-10-14)
+
+The operator ran `git diff --no-index` comparing the **saved local** `GP_Repo_Verification/GP_STM32H745.ioc` with the **original tracked repository** `Firmware/STM32H745/GP_STM32H745.ioc`. The textual diff shows:
+
+- **Expected:** `FDCAN1` added to `CortexM7.IPs`; `FDCAN1.*` parameters for 1 Mbit/s / prescaler 1 / SJW 8 / Seg1 34 / Seg2 8 / 16-element TX and RX FIFO0 / automatic retransmission.
+- **Expected:** `PA11=FDCAN1_RX`, `PA12=FDCAN1_TX`, both M7; `Mcu.IPNb=9→10`, `Mcu.PinsNb=4→6`, and generated function-list additions `MX_GPIO_Init`, `MX_FDCAN1_Init`.
+- **Expected:** `RCC.DIVQ2=6`, `RCC.DIVQ2Freq_Value=43000000`, `RCC.FDCANCLockSelection=RCC_FDCANCLKSOURCE_PLL2`, `RCC.FDCANFreq_Value=43000000`. The other RCC output frequencies remain as before in the diff.
+- **Expected:** `ProjectManager.BackupPrevious=false→true`; `ProjectManager.DeletePrevious=true→false`.
+- **Needs explicit review before generation:** `rtos.0.ip=FREERTOS_M4` changed to `rtos.0.ip=FREERTOS_M7` even though the operator did not intentionally change RTOS ownership. The original file lists **both** `FREERTOS_M4` and `FREERTOS_M7` in their respective core IP lists with separate tasks. This metadata key's effect on CubeMX regeneration has **not been established**; verify both FreeRTOS middleware configurations are still active on their intended cores before code generation. **Do not blindly change this key by hand.**
+- **Diff display/metadata:** `100644→100755` may be caused by WSL Windows-mount permission inference; `^M` are carriage-return indicators (CRLF). Neither itself implies an STM32 HAL/runtime change. Preserve ordinary non-executable `.ioc` mode and use a controlled newline policy when importing the file to Git.
+- The earlier `diff` against backup `GP_Repo_Verification_Backup_20261014_140623` was empty, so that snapshot contains **the same .ioc content** as the saved version. Treat it as a complete filesystem rollback for the pre-regeneration sources, **not** as a guaranteed pre-FDCAN configuration snapshot. The original source-controlled .ioc remains available on GitHub.
+
+**Status:** The .ioc contents were reviewed *from operator-provided diff*, but have **not been imported or committed** to GitHub, and no new code generation has occurred. To proceed, confirm CM4/CM7 FreeRTOS configuration in the CubeMX GUI and save a pre-generation copy of the FDCAN-enabled .ioc under version control.
