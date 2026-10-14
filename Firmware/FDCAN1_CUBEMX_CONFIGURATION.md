@@ -161,3 +161,27 @@ Operator screenshot of **FDCAN1 → Parameter Settings → Basic Parameters** sh
 **Rationale:** HAL FDCAN automatic retransmission is a normal reliability mechanism for Classic CAN/CANopen: after a transmission error or arbitration loss, the controller can retry subject to protocol rules. However, a queued motion command must not be treated as delivered on time simply because retries are enabled. The application needs explicit stale-command/feedback detection and measured worst-case latency; a retry can outlive the intended 2 ms cycle. Do not interpret retransmission as guaranteed delivery. CANopen bus-off recovery and safety behavior have **not** been validated.
 
 **Next interface decision:** inspect CubeMX **FDCAN1 → GPIO Settings** and record the actual peripheral RX/TX pin selections. Do not freeze alternate-function pins until the MCU package, intended CAN transceiver, PCB routing and possible FDCAN2 conflicts are reviewed. The current firmware adapter polls the FDCAN RX FIFO directly; NVIC/interrupt configuration is not automatically required for the polling transport, although interrupt-driven error monitoring may be added after design review.
+
+
+### FDCAN1 GPIO pin screenshot (2026-10-14)
+
+The operator provided a CubeMX **Connectivity → FDCAN1 → GPIO Settings** screenshot showing the following provisional alternate-function selections for the currently configured **STM32H745IITx, LQFP176** device:
+
+| MCU pin | CubeMX signal | Core context | GPIO mode | GPIO pull | Max GPIO output speed | MCU package pad (LQFP176) |
+| --- | --- | --- | --- | --- | --- | --- |
+| **PA11** | **FDCAN1_RX** | ARM Cortex-M7 | Alternate function | No pull-up/pull-down | Low | **130** |
+| **PA12** | **FDCAN1_TX** | ARM Cortex-M7 | Alternate function | No pull-up/pull-down | Low | **131** |
+
+**Source verification:** ST [STM32H745xI/G datasheet (DS12923), pin/ball definition and alternate functions](https://www.st.com/resource/en/datasheet/stm32h745xi.pdf) lists PA11 as FDCAN1_RX (also OTG_FS_DM) and PA12 as FDCAN1_TX (also OTG_FS_DP) for the package; pad numbers above refer specifically to **LQFP176**, not an arbitrary STM32H745 package. Exact final part number/board package remains to be confirmed.
+
+**Rationale and decisions:**
+
+- **Core ownership:** FDCAN1 remains on **M7**, matching the single-owner CANopen Master/Supervisor software architecture. This is a peripheral-core ownership choice; the physical pins themselves are chip pins.
+- **PA11/PA12 are provisional**, selected by CubeMX. They are legal alternate functions, but share functions with **USB OTG FS data minus/plus**. Check future USB/other peripheral needs, PCB routing, transceiver location and any conflicts **before freezing the hardware pin map**.
+- **No pull** was the shown GUI setting, **not a separately verified hardware recommendation**. The transceiver's RXD output drives the MCU's RX pin; use transceiver datasheet requirements for line idle state, power sequencing and bus failsafe.
+- **GPIO maximum output speed = Low** was shown for both pins. This is the *GPIO slew/output-drive setting* on MCU pins, **not the FDCAN bit rate**; assess TXD edge integrity at the actual transceiver input, trace load and board design before finalizing. Do not blindly equate a "Low" GPIO speed selection with a 1 Mbit/s bus specification.
+- PA12 (TX) and PA11 (RX) are **digital-side** signals: connect to a compatible external CAN transceiver's TXD/RXD. The physical bus uses transceiver CAN_H/CAN_L with appropriate termination and wiring. No transceiver, pin-level electrical design or safety function has been verified yet.
+
+**Evidence/status:** These mappings are confirmed **only in the local CubeMX GUI screenshot**. The repository's authoritative `.ioc` has not been updated with the new FDCAN configuration or generated for active HAL code. Physical pinout is **provisional**, not approved for the final PCB.
+
+**Next check:** review **FDCAN1 → NVIC Settings** and record selected interrupt lines/priorities. The present `fdcan_classic_backend.c` polls HAL FIFO0 and checks protocol status from task context rather than requiring RX callbacks, so do **not** enable arbitrary interrupt priorities or define ISR handlers before reviewing the final execution/diagnostics architecture.
