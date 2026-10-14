@@ -132,6 +132,9 @@ typedef struct
     /* Supervisor calls this after execution is no longer dispatched.
      * PAUSED retains ownership. Never read storage or wait here. */
     void (*end_stream)(void *context);
+    /* Explicit board policy: nonblocking preflight may poll M4 readback
+     * before enabling welding/issuing targets. 0 preserves fail-fast. */
+    uint32_t prefill_timeout_ms;
 } PathExecutionServices;
 
 typedef struct

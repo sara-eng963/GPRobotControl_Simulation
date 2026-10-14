@@ -84,6 +84,7 @@ static void test_production_binding(void)
         .step_retraction = physical_step,
         .clearance_verified = physical_clearance,
         .controlled_stop = physical_stop,
+        .prefill_timeout_ms = 1000U,
         .context = &physical
     };
     gp_traj_shared_initialize(&shared);

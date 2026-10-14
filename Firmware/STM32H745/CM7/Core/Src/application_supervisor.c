@@ -253,6 +253,13 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
         revoke_unstarted_board(board);
         return false;
     }
+    GpValidationShared *const storage_ipc =
+        (GpValidationShared *)(uintptr_t)GP_SHARED_VALIDATION_BASE;
+    if (!gp_traj_execution_attach_playback(&g_motion_binding, storage_ipc))
+    {
+        revoke_unstarted_board(board);
+        return false;
+    }
     config.path_execution_services = &g_motion_binding.services;
 
     /* A validation transaction cannot proceed without a real M4 storage

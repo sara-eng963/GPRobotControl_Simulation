@@ -382,8 +382,16 @@ StateStepResult state_path_execution_step(
                 );
             }
 
-            if (!stream_ready(state))
-                return fail(state, PATH_EXEC_ERR_TRAJECTORY_NOT_READY);
+            if (!stream_ready(state)) {
+                /* An unready storage worker never enables motion. Poll at
+                 * the normal Supervisor rate; no waiting inside the callback.
+                 * The timeout is supplied by the commissioned board. */
+                if (state->services.prefill_timeout_ms == 0U ||
+                    elapsed(inputs->now_ms, state->phase_started_ms,
+                            state->services.prefill_timeout_ms))
+                    return fail(state, PATH_EXEC_ERR_TRAJECTORY_NOT_READY);
+                break;
+            }
 
             enter_phase(
                 state,

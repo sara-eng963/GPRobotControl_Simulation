@@ -98,8 +98,15 @@ static bool execution_ready(uint32_t index, uint32_t count, void *context)
             .sample_period_us = b->artifact->sample_period_us
         };
     }
-    return identity_matches(b) &&
-           gp_traj_path_stream_ready(index, count, &b->stream);
+    if (!identity_matches(b)) return false;
+    if (b->playback != NULL && !b->consumer.active &&
+        !b->playback_requested) {
+        if (!gp_playback_m7_request(b->playback, b->consumer.shared,
+                                    &b->stream.identity))
+            return false;
+        b->playback_requested = true;
+    }
+    return gp_traj_path_stream_ready(index, count, &b->stream);
 }
 
 static void execution_end(void *context)
@@ -112,6 +119,9 @@ static void execution_end(void *context)
         /* Aborted before prefetch finished: release an unused epoch so M4
          * can acknowledge and safely reuse its producer ring. */
         (void)gp_traj_m7_discard(&b->consumer);
+    if (b->playback != NULL && b->playback_requested)
+        gp_playback_m7_cancel(b->playback);
+    b->playback_requested = false;
 }
 
 static bool execution_wire(bool enabled, void *context)
@@ -180,5 +190,18 @@ bool gp_traj_execution_bind(GpTrajectoryExecutionBinding *binding,
     binding->services.clearance_verified = execution_clearance;
     binding->services.controlled_stop = execution_stop;
     binding->services.context = binding;
+    binding->services.prefill_timeout_ms = physical->prefill_timeout_ms;
+    return true;
+}
+
+bool gp_traj_execution_attach_playback(GpTrajectoryExecutionBinding *binding,
+                                       GpValidationShared *validation)
+{
+    if (binding == NULL || binding->stream.consumer != &binding->consumer ||
+        !gp_validation_shared_valid(validation) ||
+        binding->physical.prefill_timeout_ms == 0U ||
+        binding->playback != NULL)
+        return false;
+    binding->playback = validation;
     return true;
 }

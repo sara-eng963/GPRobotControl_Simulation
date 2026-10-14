@@ -3,6 +3,7 @@
  * storage provider in Batch B4. Its absence leaves worker_ready = 0. */
 #include "application_validation_service.h"
 #include "validation_storage_bridge.h"
+#include "trajectory_storage_service.h"
 #include "sram4_memory_map.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -18,8 +19,13 @@
  * No default fake, RAM backend, NOR register driver, or node IDs. */
 extern bool gp_board_m4_supply_validation_backend(
     PathValidationStorage *out) __attribute__((weak));
+/* Physical-part-specific provider must read the SAME durable artifact that
+ * gp_board_m4_supply_validation_backend commits. No default implementation. */
+extern bool gp_board_m4_supply_trajectory_reader(
+    GpCommittedTrajectoryReader *out) __attribute__((weak));
 
 static GpValidationM4Worker g_worker;
+static GpPlaybackM4Worker g_playback;
 static TaskHandle_t g_worker_handle;
 #if (configSUPPORT_STATIC_ALLOCATION == 1)
 static StaticTask_t g_worker_control;
@@ -33,6 +39,7 @@ static void validation_task(void *arg)
         /* One flash callback per call; this task is lower priority than
          * time-sensitive M7 work and separate from M4 HMI IPC handling. */
         (void)gp_validation_m4_step(&g_worker);
+        (void)gp_playback_m4_step(&g_playback);
         vTaskDelay(GP_M4_VALIDATION_PERIOD_TICKS);
     }
 }
@@ -41,7 +48,8 @@ bool application_validation_service_start(void)
 {
     if (g_worker_handle != NULL ||
         GP_M4_VALIDATION_PERIOD_TICKS == 0U ||
-        gp_board_m4_supply_validation_backend == NULL)
+        gp_board_m4_supply_validation_backend == NULL ||
+        gp_board_m4_supply_trajectory_reader == NULL)
         return false;
 
     GpValidationShared *const shared =
@@ -50,13 +58,22 @@ bool application_validation_service_start(void)
         return false;
 
     PathValidationStorage backend = {0};
+    GpCommittedTrajectoryReader reader = {0};
     if (!gp_board_m4_supply_validation_backend(&backend) ||
         backend.begin == NULL || backend.write_sample == NULL ||
         backend.commit == NULL || backend.abort == NULL ||
-        backend.capacity_samples == 0U)
+        backend.capacity_samples == 0U ||
+        !gp_board_m4_supply_trajectory_reader(&reader) ||
+        reader.read_metadata == NULL || reader.read_samples == NULL ||
+        reader.capacity_samples < backend.capacity_samples)
         return false;
 
-    if (!gp_validation_m4_init(&g_worker, shared, &backend))
+    /* Both providers must be live before advertising worker_ready to M7.
+     * The physical adapter owns storage atomicity, CRC, journal/power fail. */
+    GpTrajectoryShared *const trajectory =
+        (GpTrajectoryShared *)(uintptr_t)GP_SHARED_TRAJECTORY_BASE;
+    if (!gp_playback_m4_init(&g_playback, shared, trajectory, &reader) ||
+        !gp_validation_m4_init(&g_worker, shared, &backend))
         return false;
 
 #if (configSUPPORT_STATIC_ALLOCATION == 1)
