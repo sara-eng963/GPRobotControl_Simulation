@@ -91,27 +91,48 @@ FILES=(
     Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_tim.h
 )
 
-# Never clobber staged or unstaged edits to destination paths.
+# Never clobber unrelated staged/unstaged edits or pre-existing untracked
+# files. If a previous run copied the identical generated file, accept it
+# idempotently. Validate every path before copying any of them.
 for path in "${FILES[@]}"; do
     [[ -f "$SOURCE/$path" ]] || {
         echo "FAIL: generated file missing: $SOURCE/$path" >&2
         exit 1
     }
+    relative="Firmware/STM32H745/$path"
     if [[ -f "$ROOT/$path" ]] &&
-       ! git diff --quiet HEAD -- "Firmware/STM32H745/$path"; then
-        echo "FAIL: destination has local modifications: $path" >&2
-        exit 1
+       ! cmp -s "$SOURCE/$path" "$ROOT/$path"; then
+        if ! git ls-files --error-unmatch -- "$relative" >/dev/null 2>&1; then
+            echo "FAIL: refusing to overwrite differing untracked file: $relative" >&2
+            exit 1
+        fi
+        if ! git diff --quiet HEAD -- "$relative"; then
+            echo "FAIL: refusing to overwrite local edits: $relative" >&2
+            exit 1
+        fi
     fi
 done
 
 for path in "${FILES[@]}"; do
+    if [[ -f "$ROOT/$path" ]] &&
+       cmp -s "$SOURCE/$path" "$ROOT/$path"; then
+        echo "ALREADY SYNCED: $path"
+        continue
+    fi
     mkdir -p "$(dirname "$ROOT/$path")"
     cp "$SOURCE/$path" "$ROOT/$path"
-    cmp -s "$SOURCE/$path" "$ROOT/$path"
+    cmp -s "$SOURCE/$path" "$ROOT/$path" || {
+        echo "FAIL: post-copy verification failed: $path" >&2
+        exit 1
+    }
     echo "SYNCED: $path"
 done
 
-git diff --check -- Firmware/STM32H745
+# CubeMX emits Windows CRLF in generated source and .ioc/.mxproject metadata.
+# Git's whitespace checker treats the CR as trailing whitespace unless
+# cr-at-eol is enabled. This is an invocation-scoped setting: do not rewrite
+# official generated files, change git config, or disable other checks.
+git -c core.whitespace=cr-at-eol diff --check -- Firmware/STM32H745
 echo
 echo "=== Changed generated paths (not yet staged/committed) ==="
 git status --short -- Firmware/STM32H745
