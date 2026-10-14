@@ -203,3 +203,21 @@ The operator's **FDCAN1 → NVIC Settings** screenshot shows all three checkboxe
 **Evidence status:** screenshot of local CubeMX NVIC settings only. The new FDCAN1 `.ioc` and generated active HAL firmware have **not** been committed or verified. Do not interpret disabled RX interrupts as disabling the FDCAN peripheral itself.
 
 **Next configuration gate:** inspect the complete FDCAN1 parameter summary and the CubeMX **Project Manager → Code Generator** options before the first regeneration, then save and compare the changed `.ioc`. Generation must preserve Stage 2 AMP boot, HSEM, SRAM4 MPU/IPC and USER CODE integration.
+
+
+### CubeMX Code Generator settings (2026-10-14)
+
+The operator's screenshot of **Project Manager → Code Generator** shows the following deliberate GUI choices:
+
+| Option | Selected state | Engineering reason |
+| --- | --- | --- |
+| STM32Cube packages — copy only necessary library files | **Selected** | Keep the generated project self-contained without copying unrelated vendor modules |
+| Generate peripheral initialization in separate `.c/.h` files | **Unchecked** | Maintain the existing main-file initialization layout and avoid unnecessary structural churn |
+| Backup previously generated files when re-generating | **Checked** (changed from unchecked) | Ask CubeMX to retain its own backups of replaced generated files, in addition to the required independent project snapshot |
+| Keep User Code when re-generating | **Checked** | Preserve recognized `USER CODE BEGIN/END` regions; this does **not** preserve all custom linker or IDE metadata |
+| Delete previously generated files when not re-generated | **Unchecked** (changed from checked) | Reduce the chance of silently removing custom-staged files or previously generated build inputs |
+| Set all free pins as analog | **Unchecked** | Avoid new pin changes without a PCB review |
+| Enable Full Assert | **Unchecked** | Leave the prior HAL instrumentation setting unchanged during FDCAN-only regeneration |
+| Before / After Code Generation actions | **Blank** | No custom external generation hooks installed |
+
+**Screenshot evidence:** CubeMX GUI only. The title bar still displayed `GP_STM32H745.ioc*`, consistent with *unsaved* configuration edits at screenshot time. **Next:** take a separate full project snapshot **before saving/generating**, then save the .ioc and inspect its diff, then regenerate in a controlled operation. These Code Generator checkboxes **do not guarantee** preservation of custom SRAM4 linker maps, dual-core HSEM startup, MPU, FreeRTOS application source staging, or `.cproject` entries. Verify each explicitly after generation. No code generation or updated target build is claimed.
