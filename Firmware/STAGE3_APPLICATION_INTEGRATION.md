@@ -1,7 +1,7 @@
 ---
 title: "Stage 3 — STM32H745 Application Integration"
 stage: 3
-status: "3A architecture audit documented; portability and firmware gates pending"
+status: "Stage 3B ARM/ELF verified; FDCAN HAL built; board composition, CM4 storage and final regressions pending"
 date: 2026-10-14
 branch: "sara/can-replacement"
 tags: [stm32h745, freertos, robotics, firmware]
@@ -10,7 +10,28 @@ tags: [stm32h745, freertos, robotics, firmware]
 # Stage 3 — STM32H745 Application Integration
 
 **Audit baseline:** `d18bdec71abc62fa835afe588398f9aec074e649` (2026-10-12).  
-**Scope:** repository/source review and an ARM compile-only reconnaissance check. **No Stage 3 application integration or hardware runtime test has passed yet.** Continue using the Stage 1 and Stage 2 records for historical build evidence.
+**Historical Stage 3A audit scope (2026-10-12):** initial repository/source review and ARM compile-only reconnaissance. The historical assessments and pending states **below refer to their original checkpoints**; use the current-status section immediately below for up-to-date verification. No hardware runtime verification has been performed.
+
+
+## Current Stage 3 status — 2026-10-14 (software vs. hardware)
+
+**Authoritative baseline:** branch `sara/can-replacement`; FDCAN-enabled `.ioc` committed as `c3d07a2`; generated dual-core firmware / HAL committed as `d8a2b32`; HAL source file modes corrected in `809882f`. Historical sections below retain their original *as-of* timestamps; a prior phrase such as "not yet generated" must not be mistaken for current status.
+
+| Milestone | Current evidence | Still open to complete Stage 3 |
+| --- | --- | --- |
+| **3A.1 architecture audit** | Documented application ownership and ARM reconnaissance checks | No redo needed |
+| **3A.2 resource/CANopen decision** | M7 motion/CANopen and M4 storage/HMI ownership proposed | Freeze task/priority/memory budgets; select and justify existing CANopen master vs CANopenNode; finalize hardware-dependent allocations |
+| **3B M4 IPC + M7 Supervisor composition** | Both modules ARM-compiled, included in existing CM4/CM7 Debug ELFs; 0 errors / 0 warnings on both final local builds | Real IPC, boot/reset recovery, stack watermarks, HMI producer, safety I/O; board provider currently refuses M7 Supervisor startup |
+| **3C-1 robot application composition** | StateMachine/CANopen/ServoDrive sources staged and statically linked into CM7; `application_supervisor_start` present | Implement board-provided real adapters with **fail-closed startup** (no fake healthy inputs); operational drive and state tests |
+| **3C-2 FDCAN and cycle timing** | CubeMX .ioc + vendor HAL source/header + init + linked HAL symbols verified; HAL-enabled portable adapter compiled in `.o`; 43 MHz PLL2Q, 1 Mbit/s config | Connect `gp_fdcan_classic_backend_open` to the CANopen owner through a **strong board provider**; define safe startup/error policy, actual motor dictionary; monotonic microsecond clock and bounded 2 ms scheduling; physical CAN & bus-load test later. Adapter is **discarded from ELF** until referenced. |
+| **3C-3 M7 path execution** | Portable trajectory/IPC contracts, host simulation/streaming work | Connect and exercise real firmware trajectory consumer/PathExecution port; bounded sample clock, starvation, following-error handling and ARM/map evidence |
+| **3D-1 cross-core validation memory** | Stage 2 SRAM4 base slots/MPU/linkers verified | Reserve, initialize, cross-check `GpValidationShared` ABI and link map; integrate client/worker and failure tests |
+| **3D-2 M4 NOR/HMI** | Separate simulated/file/Renode memory work and M4 IPC task | CubeMX/HAL external flash port and M4 producer/validation, refill/cancel/CRC tests; implement chosen physical HMI transport |
+| **3E regression/reproducibility** | Current Windows verifier builds CM7: text 159792/data 112/bss 91536, CM4: text 24644/data 100/bss 21148; both 0 errors and 0 warnings. HAL1 test mocks passed earlier. | **Fresh source checkout + clean CubeIDE builds**, symbol/map verification, host integration/fault-path regressions and release evidence pack. Physical tests separately governed by `HARDWARE_ARRIVAL_VERIFICATION_PLAN.md`. |
+
+**Known board-provider result:** CM7 ELF contains `080198a2 W application_supervisor_board_configure`, a weak fail-closed fallback. `gp_fdcan_classic_backend_open` is present in `CM7/Debug/Board/Src/fdcan_classic_backend.o` but discarded in final ELF as unreferenced. Thus "STM32 HAL FDCAN builds" **does not** mean the motor CANopen stack is active.
+
+**Immediately next:** reproduce both Debug builds from committed `809882f` on a **new independent checkout/workspace**, without copying old generated builds, without overwriting the known-good Windows verifier, and without accidentally adding unrelated WSL untracked files. Verify the relative HAL linked resource in `CM7/.project`. Then compose actual board integration and finish the remaining 3C/3D work. Do not classify any hardware gate as passed without board evidence.
 
 ## 3A. Source-backed architecture decisions
 

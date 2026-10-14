@@ -4,10 +4,10 @@
 > **Branch:** `sara/can-replacement`  
 > **Stage:** 3C-2 — Classic CAN / physical interface preparation  
 > **MCU/project:** STM32H745IITx, LQFP176; STM32CubeMX 6.18.1; STM32Cube FW_H7 V1.13.0  
-> **Status:** **GUI selections evidenced by operator screenshots; NOT YET SAVED/REGENERATED INTO THE TRACKED .ioc OR LINKED ACTIVE FDCAN HAL.**  
+> **Current status (2026-10-14):** CubeMX `.ioc` committed (`c3d07a2`), official FDCAN HAL generated and committed (`d8a2b32`, permission follow-up `809882f`); CM7 + CM4 Debug builds **PASS, 0 errors / 0 warnings**. The portable FDCAN adapter compiled in its CM7 object but is **unused/discarded from the ELF**; weak board-provider gate remains fail-closed. Physical CAN and motion **NOT TESTED**. Earlier dated sections below are chronological snapshots, not present-tense status.  
 > **Target:** one CANopen bus at **1 Mbit/s** for six drives; real transport and motion remain disabled
 
-## 1. What changed in CubeMX (chronological)
+## 1. What changed in CubeMX (chronological history)
 
 1. Opened the *separate verification workspace's* `GP_STM32H745.ioc` in STM32CubeMX. This is **not** yet a change to the repository's tracked `Firmware/STM32H745/GP_STM32H745.ioc`.
 2. **Connectivity → FDCAN1:** kept **Cortex-M7 selected** (Cortex-M4 unchecked) and checked **Activated**. Selected/observed **Classic mode** and **Normal mode**.
