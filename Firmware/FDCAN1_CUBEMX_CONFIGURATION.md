@@ -61,7 +61,7 @@ These are recorded because they appeared in the user's CubeMX screenshots. They 
 
 | Setting | Currently displayed | Follow-up |
 | --- | --- | --- |
-| Auto Retransmission | **Disable** | Decide on enablement after reviewing CANopen error recovery and latency; ordinarily retransmission is beneficial, but analyze repeated errors and control deadlines |
+| Auto Retransmission | **Enable** (was Disable) | Allow the CAN controller to retry frames following lost arbitration / eligible transmission errors; application must still detect feedback staleness, bus-off and missed deadlines |
 | Transmit Pause | **Disable** | Review with final TX scheduling |
 | Protocol Exception | **Disable** | Keep under review; Classic CAN mode |
 | Clock Calibration | **Disable** | Confirm clock accuracy against actual oscillator |
@@ -108,7 +108,8 @@ Once the CubeMX configuration is complete and the operator saves/generates code,
 - [x] Screenshot confirmation of CM7 ownership, FDCAN1 activation, Classic/Normal mode
 - [x] Screenshot confirmation of PLL2Q 43 MHz without reported CubeMX clock warnings
 - [x] Screenshot confirmation of nominal timing and computed 1 Mbit/s
-- [ ] Complete Auto Retransmission / message RAM / FIFO / filters / GPIO / NVIC configuration
+- [x] Select Auto Retransmission = Enable in CubeMX GUI (hardware behavior still unverified)
+- [ ] Complete message RAM / filters / GPIO / NVIC configuration and review generated settings
 - [ ] Save the updated `.ioc` and inspect the actual diff against this log
 - [ ] Generate matching STM32Cube FW_H7 V1.13.0 HAL FDCAN source using CubeMX
 - [ ] ARM-compile the **active** HAL adapter with the generated official headers
@@ -145,10 +146,18 @@ Once the CubeMX configuration is complete and the operator saves/generates code,
 | Rx Buffers Size | **8 bytes data field** | Shown default; irrelevant with zero dedicated RX buffers |
 | Clock Calibration | **Disable** | Displayed default, not yet evaluated for actual oscillator/transceiver |
 
-**Now confirmed by subsequent operator screenshot (2026-10-14):** `Rx Fifo0 Elmts Nbr = 16`, meeting the prepared HAL adapter's `RxFifo0ElmtsNbr >= 16` requirement. No FIFO timing, occupancy, overflow, or delivery guarantee follows merely from allocation. Message RAM use and interaction with a second FDCAN instance, if selected later, must be checked against the STM32H745 reference manual. Automatic retransmission and physical I/O are still pending.
+**Now confirmed by subsequent operator screenshot (2026-10-14):** `Rx Fifo0 Elmts Nbr = 16`, meeting the prepared HAL adapter's `RxFifo0ElmtsNbr >= 16` requirement. No FIFO timing, occupancy, overflow, or delivery guarantee follows merely from allocation. Message RAM use and interaction with a second FDCAN instance, if selected later, must be checked against the STM32H745 reference manual. Automatic retransmission is now enabled in the CubeMX GUI; physical I/O and bus-error/deadline verification are pending.
 
 **Status:** Both 16-element TX FIFO and 16-element Rx FIFO0 configurations have GUI screenshot evidence. They remain uncommitted to the canonical `.ioc` and unverified in active HAL firmware. No changed CubeMX `.ioc` has been fetched into the repository and no active HAL build has been claimed.
 
 ### Receive FIFO0 confirmation (2026-10-14)
 
 A second screenshot explicitly shows `Rx Fifo0 Elmts Nbr = 16`, `Rx Fifo0 Elmt Size = 8 bytes data field`, `Rx Fifo1 Elmts Nbr = 0`, `Std Filters Nbr = 0`, `Ext Filters Nbr = 0`, and `Message RAM Offset = 0`. The standard-filter count of zero is an intermediate setting; the current board adapter uses HAL's global acceptance for standard frames and rejection for extended/remote frames. This permissive standard-frame policy must be revisited after actual node IDs/COB-IDs and bus traffic are confirmed; do not present it as a production-optimized acceptance filter. No CubeMX generation or physical bus test has happened yet.
+
+### Automatic retransmission confirmed (2026-10-14)
+
+Operator screenshot of **FDCAN1 → Parameter Settings → Basic Parameters** shows **Auto Retransmission = Enable**, **Classic mode**, **Normal mode**, **Transmit Pause = Disable**, **Protocol Exception = Disable**, **Nominal Sync Jump Width = 8**, **Data Prescaler = 1**, **Data Sync Jump Width = 1**, **Data Time Seg1 = 1**, **Data Time Seg2 = 1**, **Message RAM Offset = 0**, and **Std Filters Nbr = 0**. These are **GUI-observed values**, not yet committed configuration values in `Firmware/STM32H745/GP_STM32H745.ioc`.
+
+**Rationale:** HAL FDCAN automatic retransmission is a normal reliability mechanism for Classic CAN/CANopen: after a transmission error or arbitration loss, the controller can retry subject to protocol rules. However, a queued motion command must not be treated as delivered on time simply because retries are enabled. The application needs explicit stale-command/feedback detection and measured worst-case latency; a retry can outlive the intended 2 ms cycle. Do not interpret retransmission as guaranteed delivery. CANopen bus-off recovery and safety behavior have **not** been validated.
+
+**Next interface decision:** inspect CubeMX **FDCAN1 → GPIO Settings** and record the actual peripheral RX/TX pin selections. Do not freeze alternate-function pins until the MCU package, intended CAN transceiver, PCB routing and possible FDCAN2 conflicts are reviewed. The current firmware adapter polls the FDCAN RX FIFO directly; NVIC/interrupt configuration is not automatically required for the polling transport, although interrupt-driven error monitoring may be added after design review.
