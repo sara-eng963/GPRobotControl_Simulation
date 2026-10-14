@@ -364,6 +364,14 @@ add_executable(canopen_master_test
 target_compile_features(canopen_master_test PRIVATE c_std_11)
 target_link_libraries(canopen_master_test PRIVATE canopen_stack m)
 add_test(NAME canopen_master_test COMMAND canopen_master_test)
+# Stage C2: bound one CANopen-owner RX service call even when the backend
+# permanently reports more frames. Real STM32 timing remains unmeasured.
+add_executable(canopen_bounded_rx_test
+    CANComm/Tests/test_canopen_bounded_rx.c)
+target_compile_features(canopen_bounded_rx_test PRIVATE c_std_11)
+target_link_libraries(canopen_bounded_rx_test PRIVATE canopen_stack m)
+add_test(NAME canopen_bounded_rx_test COMMAND canopen_bounded_rx_test)
+
 
 add_executable(can_backend_test CANComm/Tests/test_can_backend.c)
 target_compile_features(can_backend_test PRIVATE c_std_11)
