@@ -185,3 +185,21 @@ On the user's Windows-produced `GP_STM32H745.ioc`, `TIM3.Period=1999`, `TIM3.Pre
 The operator attached a **1012-line terminal paste** ending in `Exit code: 2`. Visible lines are almost entirely `git diff --check` messages such as `Firmware/STM32H745/.mxproject:11: trailing whitespace`, with newly generated `CM7/Core/Src/main.c`, `stm32h7xx_hal_msp.c`, `stm32h7xx_it.c`, `stm32h7xx_it.h`, and `GP_STM32H745.ioc` lines ending in `^M` (Windows CRLF). The script performs `git diff --check` **after** copying the generated sources, so **it likely already copied them into the WSL working tree** before exiting. The paste begins mid-output: the initial PASS and SYNCED lines cannot be independently inspected from this attachment. The CRLF false-positive is not a compiler or CubeMX error, and the source timestamps/PSC/ARR were previously independently verified.
 
 **Fix:** `Firmware/Tests/stage_tim2_tim3_generated.sh` commit `bb351e1` uses invocation-local `git -c core.whitespace=cr-at-eol diff --check`, preserving other Git whitespace checks while allowing official CubeMX CRLF files *without altering their generated content*. The script is now **idempotent**: a previously copied path is accepted iff its bytes equal the authoritative generated source, while modified tracked files that differ, and untracked files that differ, are refused. It validates all paths before writing any. The next operator run should capture only succinct PASS / ALREADY SYNCED / status to avoid a multi-page Git diagnostic scroll. Acceptance awaits a fresh script run ending in PASS; do not auto-commit or mass-add unrelated untracked build files.
+
+
+## TIM2/TIM3 generated-source staging gate PASSED (2026-10-14)
+
+Operator reran `Firmware/Tests/stage_tim2_tim3_generated.sh` after the CRLF and idempotency fixes. `git pull --ff-only origin sara/can-replacement` succeeded, and the staging script exited **0** and printed:
+
+```text
+ALREADY SYNCED: CM7/Core/Src/stm32h7xx_hal_msp.c
+ALREADY SYNCED: CM7/Core/Src/stm32h7xx_it.c
+ALREADY SYNCED: CM7/Core/Inc/stm32h7xx_it.h
+ALREADY SYNCED: Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_tim.h
+PASS: reviewed CubeMX-generated timing inputs copied into Git working tree.
+NOTE: no git add, commit or push performed; review diff before publication.
+```
+
+The operator's `git status --short` within `Firmware/STM32H745` shows six **modified tracked files**: `.mxproject`, `CM7/Core/Inc/stm32h7xx_it.h`, `CM7/Core/Src/main.c`, `CM7/Core/Src/stm32h7xx_hal_msp.c`, `CM7/Core/Src/stm32h7xx_it.c`, `GP_STM32H745.ioc`; plus one **untracked official HAL** header `Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_tim.h`. Tracked-file diff stat: **6 files changed, 252 insertions and 30 deletions** (with generated metadata and CRLF effects in the raw count).
+
+**Gate PASSED:** the independent, locally generated CubeMX inputs are now in the user's **local working tree** and were rechecked, including idempotent rerun and Git whitespace check allowing CRLF. **Not yet done:** source-diff review, staging/committing these seven generated files, pushing to GitHub, implementing any runtime timer start or Supervisor scheduling changes. The existing source-controlled GitHub firmware snapshot remains at its pre-TIM2/TIM3 state until this follow-up commit is completed. Keep the independent pre-timer backup untouched. No claim of hardware execution or motion validation.
