@@ -79,6 +79,9 @@ bool gp_validation_m4_idle(const GpValidationShared *shared)
 {
     if (!gp_validation_shared_valid(shared)) return false;
     return __atomic_load_n(&shared->worker_ready, GP_ACQUIRE) == 1U &&
+           __atomic_load_n(&shared->playback_status, GP_ACQUIRE) == GP_PLAYBACK_IDLE &&
+           __atomic_load_n(&shared->playback_request_seq, GP_ACQUIRE) ==
+               __atomic_load_n(&shared->playback_ack_seq, GP_ACQUIRE) &&
            __atomic_load_n(&shared->flash_status, GP_ACQUIRE) ==
                GP_VALIDATION_FLASH_IDLE &&
            __atomic_load_n(&shared->cancel_request, GP_ACQUIRE) == 0U &&

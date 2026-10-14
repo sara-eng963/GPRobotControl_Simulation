@@ -3,6 +3,7 @@
 
 #include "../StateMachine/States/state_path_validation.h"
 #include "validation_storage_wire.h"
+#include "trajectory_stream.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -43,6 +44,14 @@ typedef struct {
     uint32_t reserved_alignment; /* 8-byte align metadata in wire header */
     ValidatedTrajectory commit_metadata; /* M7 publishes before COMMIT slot */
     GpValidationStorageMessage slots[GP_VALIDATION_QUEUE_CAPACITY];
+    /* B4: M7 single-writer playback request; M4 single-writer response.
+     * These fields are entirely within the existing 12 KiB reservation.
+     * M7 never reads NOR or writes the trajectory ring. */
+    GpTrajectoryIdentity playback_identity;
+    uint32_t playback_request_seq;
+    uint32_t playback_cancel_seq;
+    uint32_t playback_ack_seq;
+    uint32_t playback_status;
 } GpValidationShared;
 
 /* These descriptors are PRIVATE to the respective core. */
