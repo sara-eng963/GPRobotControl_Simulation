@@ -43,3 +43,15 @@ commissioning gates.
 
 **Do not mark B5 accepted until the operator supplies the full script PASS
 and independent target builds.**
+
+## Linker-garbage-collection scope
+
+The full CubeIDE Debug linker may eliminate `supervisor_task_post_hmi`
+(M7 local optional command injection) and
+`application_ipc_service_submit_hmi` (future M4 physical display adapter)
+because neither is reachable from the currently commissioned production
+call graph. Both remain source/ARM compile API requirements but must **not**
+be required as strong target-ELF symbols before hardware UI selection.
+B5's ELF gate tests reachable M7/M4 IPC receivers, status policy and
+service task symbols instead. Do not defeat `--gc-sections` using
+`KEEP` solely to satisfy a test.

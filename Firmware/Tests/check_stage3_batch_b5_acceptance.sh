@@ -91,13 +91,16 @@ strong() {
     }
     echo "PASS: linked $name"
 }
+# Unused external API entry points can be removed by --gc-sections when
+# no physical HMI provider is linked. Require only live, reachable
+# application/runtime symbols in ELFs; the ARM object compilation above
+# verifies public API definitions such as supervisor_task_post_hmi.
 for symbol in gp_ipc_m7_receive gp_ipc_m7_send \
-              supervisor_task_post_hmi application_supervisor_start; do
+              application_supervisor_start; do
     strong "$TEMP/m7.nm" "$symbol"
 done
 for symbol in gp_ipc_m4_receive gp_ipc_m4_send \
               application_ipc_service_initialize \
-              application_ipc_service_submit_hmi \
               application_ipc_service_read_status \
               application_ipc_service_run \
               gp_hmi_status_decode gp_hmi_status_is_fresh \
