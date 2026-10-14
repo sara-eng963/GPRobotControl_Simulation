@@ -2,6 +2,7 @@
 #define GP_VALIDATION_STORAGE_BRIDGE_H
 
 #include "../StateMachine/States/state_path_validation.h"
+#include "validation_storage_wire.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -10,10 +11,6 @@
  * Place GpValidationShared in MPU NON-CACHEABLE memory visible to both cores.
  * Initialize while both cores are quiescent; hardware boot/HSEM is separate.
  */
-#define GP_VALIDATION_MAGIC UINT32_C(0x47505653)
-#define GP_VALIDATION_VERSION UINT32_C(1)
-#define GP_VALIDATION_QUEUE_CAPACITY 64U
-
 typedef enum {
     GP_VALIDATION_FLASH_IDLE = 0,
     GP_VALIDATION_FLASH_WRITING = 1,
@@ -42,6 +39,8 @@ typedef struct {
     uint32_t cancel_request;  /* M7 writes, M4 acknowledges via status/flag */
     uint32_t release_request; /* M7 writes after observed durable commit */
     uint32_t committed_samples; /* M4 writes, diagnostic only */
+    uint32_t worker_ready;     /* M4 publishes only after backend init */
+    uint32_t reserved_alignment; /* 8-byte align metadata in wire header */
     ValidatedTrajectory commit_metadata; /* M7 publishes before COMMIT slot */
     GpValidationStorageMessage slots[GP_VALIDATION_QUEUE_CAPACITY];
 } GpValidationShared;
@@ -64,6 +63,7 @@ typedef struct {
 void gp_validation_shared_initialize(GpValidationShared *shared);
 bool gp_validation_shared_valid(const GpValidationShared *shared);
 void gp_validation_m7_init(GpValidationM7Client *client, GpValidationShared *shared);
+void gp_validation_m4_shutdown(GpValidationM4Worker *worker);
 bool gp_validation_m4_init(GpValidationM4Worker *worker, GpValidationShared *shared,
                            const PathValidationStorage *backend);
 

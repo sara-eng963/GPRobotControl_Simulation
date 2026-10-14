@@ -5,6 +5,12 @@
 #define GP_RELEASE __ATOMIC_RELEASE
 #define GP_RELAXED __ATOMIC_RELAXED
 
+_Static_assert(offsetof(GpValidationShared, worker_ready) ==
+               offsetof(GpValidationWireHeader, worker_ready),
+               "Validation worker-ready wire offset drift");
+_Static_assert(offsetof(GpValidationShared, commit_metadata) ==
+               sizeof(GpValidationWireHeader),
+               "Validation wire prefix drift");
 _Static_assert(sizeof(PvExecutionSample) == 24U,
                "Validation samples must contain six int32 joint targets");
 _Static_assert(sizeof(GpValidationStorageMessage) == 32U,
@@ -41,18 +47,39 @@ bool gp_validation_m4_init(GpValidationM4Worker *worker, GpValidationShared *sha
     if (worker == NULL || !gp_validation_shared_valid(shared) ||
         backend == NULL || backend->begin == NULL ||
         backend->write_sample == NULL || backend->commit == NULL ||
-        backend->abort == NULL || backend->capacity_samples == 0U)
+        backend->abort == NULL || backend->capacity_samples == 0U ||
+        __atomic_load_n(&shared->worker_ready, GP_ACQUIRE) != 0U ||
+        __atomic_load_n(&shared->flash_status, GP_ACQUIRE) != GP_VALIDATION_FLASH_IDLE ||
+        __atomic_load_n(&shared->head, GP_ACQUIRE) !=
+            __atomic_load_n(&shared->tail, GP_ACQUIRE) ||
+        __atomic_load_n(&shared->cancel_request, GP_ACQUIRE) != 0U ||
+        __atomic_load_n(&shared->release_request, GP_ACQUIRE) != 0U)
         return false;
     memset(worker, 0, sizeof(*worker));
     worker->shared = shared;
     worker->backend = *backend;
+    __atomic_store_n(&shared->worker_ready, 1U, GP_RELEASE);
     return true;
+}
+
+void gp_validation_m4_shutdown(GpValidationM4Worker *worker)
+{
+    if (worker == NULL || !gp_validation_shared_valid(worker->shared)) return;
+    GpValidationShared *shared = worker->shared;
+    /* M4 sole owner calls only after in-flight storage IO has returned. */
+    __atomic_store_n(&shared->worker_ready, 0U, GP_RELEASE);
+    if (worker->open) {
+        worker->backend.abort(worker->backend.context);
+        worker->open = false;
+    }
+    __atomic_store_n(&shared->flash_status, GP_VALIDATION_FLASH_FAILED, GP_RELEASE);
 }
 
 bool gp_validation_m4_idle(const GpValidationShared *shared)
 {
     if (!gp_validation_shared_valid(shared)) return false;
-    return __atomic_load_n(&shared->flash_status, GP_ACQUIRE) ==
+    return __atomic_load_n(&shared->worker_ready, GP_ACQUIRE) == 1U &&
+           __atomic_load_n(&shared->flash_status, GP_ACQUIRE) ==
                GP_VALIDATION_FLASH_IDLE &&
            __atomic_load_n(&shared->cancel_request, GP_ACQUIRE) == 0U &&
            __atomic_load_n(&shared->release_request, GP_ACQUIRE) == 0U &&
@@ -96,6 +123,7 @@ static PvStorageTryResult client_write(uint32_t sample_index,
     GpValidationShared *shared = client->shared;
     if (!gp_validation_shared_valid(shared) ||
         __atomic_load_n(&shared->cancel_request, GP_ACQUIRE) != 0U ||
+        __atomic_load_n(&shared->worker_ready, GP_ACQUIRE) != 1U ||
         __atomic_load_n(&shared->flash_status, GP_ACQUIRE) ==
              GP_VALIDATION_FLASH_FAILED)
         return PV_STORAGE_TRY_FAILED;
@@ -118,7 +146,8 @@ static PvStorageTryResult client_commit(const ValidatedTrajectory *metadata,
     GpValidationShared *shared = client->shared;
     if (!gp_validation_shared_valid(shared)) return PV_STORAGE_TRY_FAILED;
     const uint32_t status = __atomic_load_n(&shared->flash_status, GP_ACQUIRE);
-    if (status == GP_VALIDATION_FLASH_FAILED)
+    if (status == GP_VALIDATION_FLASH_FAILED ||
+        __atomic_load_n(&shared->worker_ready, GP_ACQUIRE) != 1U)
         return PV_STORAGE_TRY_FAILED;
     if (!client->commit_queued) {
         const uint32_t head = __atomic_load_n(&shared->head, GP_RELAXED);
@@ -188,7 +217,9 @@ static void fail_storage(GpValidationM4Worker *worker)
 
 bool gp_validation_m4_step(GpValidationM4Worker *worker)
 {
-    if (worker == NULL || !gp_validation_shared_valid(worker->shared)) return false;
+    if (worker == NULL || !gp_validation_shared_valid(worker->shared) ||
+        __atomic_load_n(&worker->shared->worker_ready, GP_ACQUIRE) != 1U)
+        return false;
     GpValidationShared *shared = worker->shared;
     if (__atomic_load_n(&shared->cancel_request, GP_ACQUIRE) != 0U) {
         /* Only M4 touches flash; cancellation never truncates an in-flight IO. */
