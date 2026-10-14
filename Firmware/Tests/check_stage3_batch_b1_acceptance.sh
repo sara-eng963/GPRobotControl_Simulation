@@ -27,6 +27,21 @@ for pair in "${pairs[@]}"; do
     exit 1
   fi
 done
+python3 - "$DEST/CM7/.cproject" <<'PY'
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+path = Path(sys.argv[1])
+root = ET.parse(path).getroot()
+values = [node.get('value') for node in root.iter('listOptionValue')]
+assert values.count('../Application/Intercore') == 4, (
+    'FAIL: CM7 compiler/assembler Debug and Release Intercore include paths missing'
+)
+assert values.count('../Application/StateMachine') == 4, (
+    'FAIL: existing StateMachine include paths changed unexpectedly'
+)
+print("PASS: CM7 Debug/Release compiler and assembler find Application/Intercore")
+PY
 echo "PASS: B1 source parity across independent CubeIDE verifier"
 
 cd "$ROOT"

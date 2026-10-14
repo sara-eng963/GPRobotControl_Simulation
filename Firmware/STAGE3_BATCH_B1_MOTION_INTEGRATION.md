@@ -44,3 +44,22 @@ The gate checks canonical staging parity, ARM object compilation, host trajector
 - B3/B4 must provide validated M4 storage and new prepared stream epochs. A stream without a commissioned M4 producer is **not ready**.
 - The actual board provider must supply physical CANopen node identity, scale, safety and stop/retraction services. Software hold/controlled-stop callbacks are not a substitute for independent safety hardware.
 - Physical scope/logic-analyzer tests must quantify 500 Hz jitter, budget, bus load and reaction to stale/error TPDO, bus-off and power loss.
+
+## STM32CubeIDE header-path correction (2026-10-14)
+
+The first operator CM7 build failed at `application_supervisor.c:16` with
+`fatal error: trajectory_stream_path_port.h: No such file or directory`.
+This was caused by the new header being staged at `CM7/Application/Intercore`
+without an associated project include-path entry. It is **not** evidence that
+the trajectory/CANopen implementation failed.
+
+The authoritative `CM7/.cproject` now includes
+`../Application/Intercore` in the Debug and Release assembler/compiler
+include path options. The B1 staging script adds only these four include-path
+entries to the independent verifier's `.cproject` without replacing
+unrelated CubeIDE settings; the acceptance test validates all four entries
+before reading any ELF. Do not manually duplicate `Intercore` headers into
+`Core/Inc` or alter CubeMX-managed HAL peripheral configuration.
+
+**Acceptance remains open** until a new operator-reported clean CM7/CM4
+target build and B1 consolidated test both pass.
