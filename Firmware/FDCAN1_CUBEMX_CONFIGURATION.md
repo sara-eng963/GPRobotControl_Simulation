@@ -266,3 +266,20 @@ Next, the operator ran STM32CubeMX code generation **in the separate, backed-up 
 - The inventory did **not** show changes to linker scripts or `freertos.c`, subject to rechecking the actual files and successful target build.
 
 **Current acceptance:** generated FDCAN HAL files present and six application preservation substring checks pass. **Pending:** inspect actual `MX_FDCAN1_Init`, `HAL_FDCAN_MspInit`, active HAL module define, project source registration and both core FreeRTOS output; compile/link **both actual CubeIDE projects**. The `FDCAN` adapter's active branch has **not** yet passed a target build. Do **not** sync the older canonical firmware directory over this newly generated local verifier before inspecting/importing its generated changes. Physical bus operation still NOT RUN.
+
+
+### CubeMX regeneration line-by-line preservation check (2026-10-14)
+
+The operator ran a **read-only Python comparison** of `GP_Repo_Verification` against `GP_Repo_Verification_Backup_20261014_140623` after CubeMX generated FDCAN1 (the local working tree, not yet imported into the GitHub firmware source tree). Reported results:
+
+- **PASS:** `HAL_FDCAN_MODULE_ENABLED` is set in CM7 HAL config; `MX_FDCAN1_Init()` is called from M7 `main.c`; `HAL_FDCAN_MspInit` exists; official HAL driver `stm32h7xx_hal_fdcan.c` and header exist.
+- **PASS:** M7 `intercore_shared_memory_initialize()` and `application_supervisor_start(&config)` remain present; M4 `intercore_startup_validate()` and `application_ipc_service_run()` remain present.
+- **PASS:** CM7 `.cproject` still references **Application** and **Board** source folders.
+- **Byte-for-byte unchanged:** both cores' `freertos.c` and `FreeRTOSConfig.h` plus each of the four CM7/CM4 Flash/RAM linker scripts.
+- **M7 main.c generated additions:** `FDCAN_HandleTypeDef hfdcan1`, `MX_GPIO_Init()`, `MX_FDCAN1_Init()`; Classic CAN / Normal mode, auto retransmission enabled, nominal timing `1/8/34/8`, FIFO0 RX 16 × 8 B, TX FIFO 16 × 8 B, 0 dedicated TX/RX buffers, no standard/extended dedicated filters.
+- **M7 MSP generated additions:** `HAL_RCCEx_PeriphCLKConfig` for FDCAN PLL2 (`M=32,N=129,P=2,Q=6,R=2`, PLL2Q selected), peripheral/GPIOA clocks and `PA11 FDCAN1_RX` / `PA12 FDCAN1_TX` (AF9, no pull, Low GPIO speed). This is the selected *provisional* pin arrangement, not a final PCB pin approval.
+- M7 `SystemClock_Config` also gains `__HAL_RCC_PLL_PLLSOURCE_CONFIG(RCC_PLLSOURCE_HSI)`; no other unexpected main/MSP edits appeared in the provided text diff. Generated startup order and runtime clock behavior still need a target/board test.
+
+**HAL data-length interpretation check:** ST's [HAL1 FDCAN header (`stm32h7xx-hal-driver` v1.11.4)](https://github.com/STMicroelectronics/stm32h7xx-hal-driver/blob/v1.11.4/Inc/stm32h7xx_hal_fdcan.h) defines `FDCAN_DLC_BYTES_0=0` through `FDCAN_DLC_BYTES_8=8`. Therefore the portable backend's current `received.dlc=(uint8_t)header.DataLength` agrees with the HAL1 Classic CAN interpretation. The *generated, installed* CubeH7 V1.13.0 header must still be the authoritative build-time version.
+
+**Next pending acceptance gate:** use the **newly generated** project without overwriting it from the older repository snapshot; **Clean → Build** CM7 and CM4 in STM32CubeIDE, capture the first genuine warning/error, and inspect HAL FDCAN and app symbols in the resulting CM7 ELF. This source-level regeneration check is *not* an active HAL compile/link pass, physical CAN pass, or completed robot board composition.
