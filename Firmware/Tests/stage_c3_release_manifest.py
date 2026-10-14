@@ -113,6 +113,25 @@ def main():
     )
     files.append(warning)
 
+    # Keep the release archive self-contained WITHOUT copying temporary
+    # CMake build trees or unrelated user files into the candidate.
+    for name in ("c2_regression.log", "host_configure.log", "host_build.log",
+                 "host_ctest.log", "ctest_inventory.log",
+                 "qualification_manifest.txt", "qualification_status.md",
+                 "c2_evidence_path.txt"):
+        log=out/name
+        if not log.is_file() or not log.stat().st_size:
+            raise ValueError("missing required C3 qualification artifact: "+name)
+        files.append(log)
+    reports=out/"reports"
+    if not reports.is_dir():
+        raise ValueError("missing C2/C1 qualification report copies")
+    for summary in sorted(reports.iterdir()):
+        if summary.is_file() and summary.stat().st_size:
+            files.append(summary)
+    if not any("c1_memory_regions.json" in str(file) for file in files):
+        raise ValueError("linked-memory report missing from release archive")
+
     audit={
         "category":"PRE-HARDWARE SOFTWARE-CANDIDATE — NOT COMMISSIONED",
         "source_revision":revision,
