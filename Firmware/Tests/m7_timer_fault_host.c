@@ -62,7 +62,7 @@ typedef struct {
     struct { struct {
         uint32_t (*wait_next)(void *, TickType_t);
         void *context;
-    } timing; } config;
+    } timing; TickType_t period_ticks; } config;
     uint32_t timer_missed_periods, timer_timeouts;
     uint32_t timer_overruns, timer_max_cycle_us;
 } SupervisorTaskContext;
@@ -70,6 +70,8 @@ static unsigned faults;
 static uint32_t last_fault;
 static void emit_step_failure(SupervisorTaskContext *ctx, uint32_t code)
 { ++faults; last_fault = code; ctx->machine.activeState = ROBOT_STATE_FAULT; }
+static void vTaskDelayUntil(TickType_t *last, TickType_t ticks)
+{ (void)last; (void)ticks; assert(!"unexpected desktop scheduling fallback"); }
 static uint64_t now_us;
 static uint64_t supervisor_now_us(void) { return now_us; }
 static uint32_t delivered;
@@ -87,6 +89,7 @@ static void supervisor_elapsed_block(SupervisorTaskContext *context,
                                      uint64_t cycle_start_us)
 {
     const bool hardware_timed = true;
+    TickType_t last_wake = 0;
     /* PRODUCTION_ELAPSED_BLOCK */
 }
 static void reset(void)
