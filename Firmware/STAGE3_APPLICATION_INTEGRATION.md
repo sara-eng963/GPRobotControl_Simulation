@@ -130,3 +130,14 @@ Then sync the complete tracked firmware tree into the existing standalone STM32C
 User-executed local verification on commit `870e575` failed `check_m4_application_ipc.sh` with `-Werror=type-limits` at `application_ipc_service.c:92`: comparing nonnegative enum `SupervisorHmiCommand` against the first zero-valued enumerator was provably false under the GCC ARM enum representation. Replaced the two-sided comparison with the **unsigned upper-bound** check `(uint32_t)command >= (uint32_t)SUP_HMI_COMMAND_COUNT`. This also rejects negative out-of-range enum casts. No IPC ABI or task behavior changed for legitimate commands.
 
 The user separately ran `check_intercore_startup_compile.sh` and `check_intercore_notifications.sh`; both **passed at ARM/source-check level**. The new corrected application IPC compilation check and full dual-image STM32CubeIDE builds **have not yet been executed**; leave 3B-1 verification pending.
+
+### Stage 3B-1 compile-only check: local user verification (2026-10-14)
+
+The initial ARM test found and corrected an enum range warning. The next local attempt showed a missing include search path for `cmsis_os2.h` **in the standalone test script**, not a missing firmware middleware header. After adding the vendored `Drivers/CMSIS/RTOS2/Include` search path locally, the user reported:
+
+```
+PASS: CM4 task wiring and nonblocking shared transport contract
+PASS: CM4 application IPC ARM compile-only gate (not a firmware link)
+```
+
+This confirms that the tested CM4 application service and generated `main.c` compile with the ARM toolchain and that the source assertions passed. The corrected include path is now committed for reproducibility. **No full CubeIDE link, application symbol/stack budget inspection, live IPC test or hardware test is evidenced.** Stage 3B-1 remains **compile-only verified; dual-image linking pending**.

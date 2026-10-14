@@ -21,6 +21,7 @@ flags=(
   -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F"
   -I"$FW/Drivers/CMSIS/Device/ST/STM32H7xx/Include"
   -I"$FW/Drivers/CMSIS/Include"
+  -I"$FW/Drivers/CMSIS/RTOS2/Include"
   -I"$FW/Drivers/STM32H7xx_HAL_Driver/Inc"
   -I"$FW/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy"
 )
