@@ -2,8 +2,10 @@
 
 Date: 2026-10-14. Branch `sara/can-replacement`.
 
-**Status:** SOURCE IMPLEMENTED, LOCAL ACCEPTANCE PENDING. This report does
-not claim target builds or test runs that have not been supplied.
+**Status:** PASSED B3 software acceptance at revision `734d8f4` based on
+operator-supplied WSL terminal output dated 2026-10-14. The exact results
+are recorded in `STAGE3_BATCH_B3_ACCEPTANCE.md`. Physical storage,
+runtime inter-core behavior and independent reboot are not accepted.
 
 ## Integration
 
@@ -70,6 +72,7 @@ missing repository header. The ARM test's include paths now match the
 relevant existing M7 application checks (`StateMachine`, `CANComm`,
 `Intercore`, and CMSIS RTOS2).
 
-**Status:** target-ELF and entire B3 gate remain pending until a complete
-new acceptance run is supplied. Do not label B3 accepted based on partial
-linker/ABI passes.
+**Historical status (before the successful rerun):** target-ELF and the
+entire B3 gate were still pending at this point. The subsequent complete
+operator-run B3 acceptance PASSED, recorded in
+`STAGE3_BATCH_B3_ACCEPTANCE.md`.
