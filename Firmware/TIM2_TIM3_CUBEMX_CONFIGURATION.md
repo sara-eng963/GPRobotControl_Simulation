@@ -164,3 +164,10 @@ The operator ran a read-only WSL check comparing the independent pre-timer backu
 **Scope:** This is a successful *initial file-equality and symbol-presence preservation audit*, not an exhaustive generated diff or HAL timer link test. In particular the timer initialization and IRQ handler functions merely exist; timer start, ISR notification, overflow-safe timestamp extension, and measured 500 Hz remain pending.
 
 **Next gate:** Refresh and clean-build CM7 and CM4 using the existing STM32CubeIDE reproduction workspace. If M7 encounters undefined `HAL_TIM_Base_Init` or related timer HAL functions, audit the CubeMX-generated HAL TIM driver linkage and project resources rather than manually inventing a driver. Record compile/link output, warning count, ELF symbol inventory and source changes before moving to timer runtime integration.
+
+
+## CubeIDE dual-core build milestone reported PASSED — 2026-10-14
+
+After the operator verified the second CubeMX generation with TIM2 PSC=63/ARR=4294967295 and TIM3 PSC=63/ARR=1999, and the initial 14-point source preservation audit completed successfully, the operator reported that **both Cortex-M7 and Cortex-M4 builds succeeded** in the separate STM32CubeIDE reproduction workspace. **Detailed console warnings, ELF hashes and new sizes were not submitted**; do not assume zero warnings or measured runtime performance.
+
+**Software gate:** compiled and linked target images were reported successful after timer regeneration, with core application/IPC symbols checked by source audit. This is not timer runtime validation or evidence of 500 Hz Supervisor execution. New CubeMX-generated timer files currently reside in the Windows `GP_Stage3_Repro` project; the GitHub `Firmware/STM32H745` snapshot remains **pre-TIM2/TIM3** until reviewed and synchronized. **Next dependency:** import the reviewed official generated diff into source control without overwriting application files or blind whole-directory copy. Then implement the timer-to-Supervisor composition using documented ST HAL/FreeRTOS ISR APIs and separately test deadline/rollover behavior.
