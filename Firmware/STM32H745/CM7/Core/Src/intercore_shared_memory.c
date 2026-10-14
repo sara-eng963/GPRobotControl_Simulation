@@ -15,6 +15,7 @@
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
 #include "intercore_shared_memory.h"
+#include <string.h>
 #include "../../../Common/Inc/sram4_memory_map.h"
 
 _Static_assert(sizeof(GpIpcShared) <= GP_SHARED_IPC_BYTES,
@@ -33,6 +34,12 @@ GpIpcShared intercore_ipc_shared
 GpTrajectoryShared intercore_trajectory_shared
     __attribute__((used, aligned(32), section(".gp_shared_trajectory")));
 
+/* Reserve validation SRAM4 without advertising an active protocol. M7
+ * clears this NOLOAD allocation before waking M4; a stale transaction
+ * must never be recognized as valid after a fresh dual-core boot. */
+uint8_t intercore_validation_storage[GP_SHARED_VALIDATION_BYTES]
+    __attribute__((used, aligned(32), section(".gp_shared_validation")));
+
 /* ST's FreeRTOS_AMP_Dual_RTOS initializes static message buffers before
  * releasing CM4 from STOP via HSEM-0. No separate boot protocol is needed
  * for the initial cold-start sequencing.
@@ -48,5 +55,7 @@ bool intercore_shared_memory_initialize(void)
         return false;
 
     gp_traj_shared_initialize(&intercore_trajectory_shared);
-    return gp_traj_shared_valid(&intercore_trajectory_shared);
+    if (!gp_traj_shared_valid(&intercore_trajectory_shared)) return false;
+    memset(intercore_validation_storage, 0, sizeof(intercore_validation_storage));
+    return true;
 }

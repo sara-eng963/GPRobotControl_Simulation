@@ -178,6 +178,21 @@ SECTIONS
     __gp_shared_trajectory_end__ = .;
   } >GP_SRAM4_TRAJECTORY
 
+  /* Stage 3D reserved validation slot, inactive until protocol binding. */
+  .gp_shared_validation (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __gp_shared_validation_start__ = .;
+    KEEP(*(.gp_shared_validation))
+    KEEP(*(.gp_shared_validation.*))
+    . = ALIGN(32);
+    __gp_shared_validation_end__ = .;
+  } >GP_SRAM4_RESERVED
+
+  ASSERT(ADDR(.gp_shared_validation) == ORIGIN(GP_SRAM4_RESERVED),
+         "Validation address mismatch")
+  ASSERT(SIZEOF(.gp_shared_validation) <= LENGTH(GP_SRAM4_RESERVED),
+         "Validation exceeds 12 KiB")
   ASSERT(ADDR(.gp_shared_ipc) == ORIGIN(GP_SRAM4_IPC),
          "Shared IPC base does not match STM32H745 SRAM4 contract")
   ASSERT(ADDR(.gp_shared_trajectory) == ORIGIN(GP_SRAM4_TRAJECTORY),
