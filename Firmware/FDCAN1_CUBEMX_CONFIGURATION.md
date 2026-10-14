@@ -299,3 +299,24 @@ text    data    bss     dec     hex
 ```
 
 This constitutes **an actual Cortex-M7 compile-and-link PASS with FDCAN included**, not a board-level execution test. Pending before Stage 3C acceptance: build CM4, capture `arm-none-eabi-nm` proof of HAL FDCAN and app/IPC symbols from both new ELFs, inspect and commit local generated HAL source/header and updated CM7 Eclipse link metadata into the repository without overwriting the verifier. The weak M7 board configuration provider still fails closed, and physical CAN operation is unverified.
+
+
+### Cortex-M4 companion firmware build PASS (2026-10-14)
+
+The operator's STM32CubeIDE screenshot confirms a successful **CM4 Debug firmware ELF link** after the M7 HAL FDCAN link fix:
+
+```text
+Finished building target: GP_STM32H745_CM4.elf
+text    data    bss     dec     hex
+24644   100     21148   45892   b344
+14:51:02 Build Finished. 0 errors, 0 warnings.
+```
+
+Combined observed build results in the Windows verifier on this date:
+
+| Core | text (B) | data (B) | bss (B) | Build |
+| --- | ---: | ---: | ---: | --- |
+| CM7 | 159792 | 112 | 91536 | PASS: 0 errors, 0 warnings |
+| CM4 | 24644 | 100 | 21148 | PASS: 0 errors, 0 warnings |
+
+**Stage 3C-2 acceptance, scoped precisely:** Both updated Cortex-M7/M4 firmware projects compile/link; the CM7 project now includes the official ST HAL FDCAN linked source. Still pending: ARM ELF symbol inspection; import the generated HAL files, updated CM7/CM4 project metadata and initialization into source control; clean reproduction from source; physical CAN bus, motors, STM32 board power/boot, and timing verification. The weak M7 board provider remains fail-closed, so **neither successful build implies usable robot drive output**.
