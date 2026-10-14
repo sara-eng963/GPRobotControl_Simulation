@@ -73,3 +73,9 @@ These are **theoretical configuration values**, not measured wake-up latency, co
 ## Interpretation
 
 A verified 500 Hz TIM3 **interrupt source** is not proof of 500 Hz synchronized motion. In particular, a timer ISR may fire every 2 ms while the Supervisor misses deadlines, CAN transmission stalls or motor feedback goes stale. Maintain separate metrics for ISR counts, missed notifications, Supervisor cycle time, CAN RX/TX diagnostics, target-send intervals and path-execution deadline failures.
+
+## TIM3 NVIC enabled — screenshot update (2026-10-14)
+
+After the earlier TIM3 parameter screenshot, the operator provided a **TIM3 NVIC Settings** screenshot showing **TIM3 global interrupt checked (Add enabled), Preemption Priority 5, Sub Priority 0**. The priority field appears read-only in the per-timer NVIC page. Both TIM2 and TIM3 have now been shown with their global interrupts enabled at **displayed priority 5**. The earlier preference for priority 6 was **not applied** in the visible GUI settings; priority 5 meets the currently configured M7 FreeRTOS `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5` threshold for any ISR that calls a FreeRTOS `FromISR` API.
+
+**Remaining before code generation:** confirm settings in the left-side Timers overview, inspect Project Manager/Code Generator preservation options and project output path, verify no unintended TIM6/TIM7, FDCAN, dual-core or SRAM4 settings changes, then save and regenerate once in the working copy. Generated source, runtime timing and hardware tests remain pending.
