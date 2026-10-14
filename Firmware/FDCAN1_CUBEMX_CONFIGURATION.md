@@ -236,3 +236,16 @@ The operator ran `git diff --no-index` comparing the **saved local** `GP_Repo_Ve
 - The earlier `diff` against backup `GP_Repo_Verification_Backup_20261014_140623` was empty, so that snapshot contains **the same .ioc content** as the saved version. Treat it as a complete filesystem rollback for the pre-regeneration sources, **not** as a guaranteed pre-FDCAN configuration snapshot. The original source-controlled .ioc remains available on GitHub.
 
 **Status:** The .ioc contents were reviewed *from operator-provided diff*, but have **not been imported or committed** to GitHub, and no new code generation has occurred. To proceed, confirm CM4/CM7 FreeRTOS configuration in the CubeMX GUI and save a pre-generation copy of the FDCAN-enabled .ioc under version control.
+
+### Dual-core FreeRTOS GUI confirmation (2026-10-14)
+
+The operator supplied screenshots of **both** STM32CubeMX middleware configuration pages after saving the FDCAN-enabled local `.ioc`:
+
+| Core | Middleware page | Runtime context | RTOS API | Kernel / CMSIS-RTOS | Tick |
+| --- | --- | --- | --- | --- | --- |
+| Cortex-M4 | `FREERTOS_M4` | **Cortex-M4 checked**, power domain D2 | CMSIS_V2 | 10.6.2 / 2.1.3 | 1000 Hz |
+| Cortex-M7 | `FREERTOS_M7` | **Cortex-M7 checked**, power domain D1 | CMSIS_V2 | 10.6.2 / 2.1.3 | 1000 Hz |
+
+Both configurations show **USE_PREEMPTION enabled**. Therefore the change from `rtos.0.ip=FREERTOS_M4` to `rtos.0.ip=FREERTOS_M7` in the local text diff did **not** remove either middleware instance in the GUI. **This does not prove it is semantically inert for generated files.** After regeneration, compare both core's `FreeRTOSConfig.h`, `freertos.c`, CMSIS RTOS startup, project metadata, USER CODE regions, and task initialization against the backup, and rebuild both. Do not hand-edit `rtos.0.ip` based solely on intuition.
+
+**Next control:** import the **saved** FDCAN-enabled local `.ioc` into the tracked repository (normalizing Windows-mount file permissions and line endings), commit it separately from generated firmware, and then run CubeMX code generation in the backed-up verification workspace. The present GitHub documentation does not imply this import/generation has occurred.
