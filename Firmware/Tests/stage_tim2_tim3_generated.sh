@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Import only reviewed STM32CubeMX TIM2/TIM3 generation outputs from the
+# independent Windows CubeIDE verifier. Never copy Debug, Backup, project
+# metadata caches or custom robot application directories.
+#
+# Usage: bash Firmware/Tests/stage_tim2_tim3_generated.sh \
+#          "/mnt/d/University/Graduation Project/STM32/GP_Stage3_Repro"
+# Does not git add, commit or push. Review the diff before committing.
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <generated-CubeIDE-project-root>" >&2
+    exit 2
+fi
+REPO="$(git rev-parse --show-toplevel)"
+cd "$REPO"
+[[ "$(git branch --show-current)" == "sara/can-replacement" ]] || {
+    echo "FAIL: must be on sara/can-replacement, not a detached/other branch" >&2
+    exit 1
+}
+SOURCE="$1"
+ROOT="$REPO/Firmware/STM32H745"
+[[ -f "$SOURCE/GP_STM32H745.ioc" && -f "$SOURCE/CM7/.project" ]] || {
+    echo "FAIL: not a generated STM32H745 CubeIDE project: $SOURCE" >&2
+    exit 1
+}
+
+# Reject mismatched timer settings rather than copying defaulted ARR.
+grep -Eq '^TIM3\.Period=1999$' "$SOURCE/GP_STM32H745.ioc"
+grep -Eq '^TIM3\.Prescaler=63$' "$SOURCE/GP_STM32H745.ioc"
+grep -Eq '^TIM2\.Prescaler=63$' "$SOURCE/GP_STM32H745.ioc"
+for token in \
+    'htim2.Init.Prescaler = 63;' \
+    'htim2.Init.Period = 4294967295;' \
+    'htim3.Init.Prescaler = 63;' \
+    'htim3.Init.Period = 1999;' \
+    'MX_FDCAN1_Init();' \
+    'MX_TIM2_Init();' \
+    'MX_TIM3_Init();' \
+    'intercore_shared_memory_initialize()' \
+    'intercore_notifications_initialize()' \
+    'application_supervisor_start(&config)'
+do
+    grep -Fq "$token" "$SOURCE/CM7/Core/Src/main.c" || {
+        echo "FAIL: missing generated source/startup token: $token" >&2
+        exit 1
+    }
+done
+for token in 'TIM2_IRQHandler(void)' 'TIM3_IRQHandler(void)'; do
+    grep -Fq "$token" "$SOURCE/CM7/Core/Src/stm32h7xx_it.c"
+done
+
+# Preserve custom application files and untouched Cortex-M4.
+for path in \
+    CM7/Core/Src/application_supervisor.c \
+    CM7/Board/Src/fdcan_classic_backend.c \
+    CM7/Core/Inc/FreeRTOSConfig.h \
+    CM4/Core/Src/main.c \
+    CM7/.project \
+    CM4/.project
+do
+    cmp -s "$ROOT/$path" "$SOURCE/$path" || {
+        echo "FAIL: custom/core file diverged: $path" >&2
+        exit 1
+    }
+done
+
+FILES=(
+    GP_STM32H745.ioc
+    .mxproject
+    CM7/Core/Src/main.c
+    CM7/Core/Src/stm32h7xx_hal_msp.c
+    CM7/Core/Src/stm32h7xx_it.c
+    CM7/Core/Inc/stm32h7xx_it.h
+    Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_tim.h
+)
+
+# Never clobber staged or unstaged edits to destination paths.
+for path in "${FILES[@]}"; do
+    [[ -f "$SOURCE/$path" ]] || {
+        echo "FAIL: generated file missing: $SOURCE/$path" >&2
+        exit 1
+    }
+    if [[ -f "$ROOT/$path" ]] &&
+       ! git diff --quiet HEAD -- "Firmware/STM32H745/$path"; then
+        echo "FAIL: destination has local modifications: $path" >&2
+        exit 1
+    fi
+done
+
+for path in "${FILES[@]}"; do
+    mkdir -p "$(dirname "$ROOT/$path")"
+    cp "$SOURCE/$path" "$ROOT/$path"
+    cmp -s "$SOURCE/$path" "$ROOT/$path"
+    echo "SYNCED: $path"
+done
+
+git diff --check -- Firmware/STM32H745
+echo
+echo "=== Changed generated paths (not yet staged/committed) ==="
+git status --short -- Firmware/STM32H745
+echo
+echo "=== Tracked-file diff summary ==="
+git diff --stat -- Firmware/STM32H745
+echo
+echo "PASS: reviewed CubeMX-generated timing inputs copied into Git working tree."
+echo "NOTE: no git add, commit or push performed; review diff before publication."
