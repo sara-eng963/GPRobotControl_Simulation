@@ -133,7 +133,8 @@ static void test_production_binding(void)
     assert(gp_traj_m4_step(&producer));
     s->end_stream(s->context); /* Abort before consumer entered the new epoch. */
     assert(gp_traj_m4_step(&producer));
-    assert(gp_traj_m4_release_acknowledged(&shared, id.sample_count ? 2U : 0U));
+    assert(gp_traj_current_epoch(&shared) == 2U);
+    assert(gp_traj_m4_release_acknowledged(&shared, gp_traj_current_epoch(&shared)));
     puts("PASS: composed M7 stream identity, board callback context and release");
 }
 
