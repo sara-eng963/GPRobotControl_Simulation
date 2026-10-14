@@ -23,3 +23,15 @@ Detailed operator evidence: `STAGE3_BATCH_B1_ACCEPTANCE.md`,
 **Not yet completed:** Stage C software-system qualification, powered
 hardware tests, physical storage HAL provider, drive and safety
 commissioning. This is a software baseline, not a production robot release.
+
+## Stage 3 software final qualification (2026-10-14)
+
+B5 was followed by independently accepted C1, C2 and C3 software gates.
+The operator's final C3 script passed at source revision
+`8c387c9cb09ede9c00ed07896d8d9ddc71844677`: fresh CM7/CM4
+images, nested B/C regressions, 19/19 portable host tests and the
+candidate evidence manifest. See `STAGE3_C3_ACCEPTANCE.md`.
+
+This closes **Stage 3 software qualification only**; the physical
+hardware/safety commissioning H0–H10 remains open and the binaries
+are not authorized to control an energized robot.

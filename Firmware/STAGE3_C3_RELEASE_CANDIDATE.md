@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-14  
 **Branch:** `sara/can-replacement`  
-**Status:** **C3 candidate pending independent dual-core clean-build and C3 acceptance.**  
+**Status:** **PASS — C3 pre-hardware software candidate accepted**, based on the operator's complete WSL acceptance transcript from 2026-10-14. See `STAGE3_C3_ACCEPTANCE.md`; physical hardware and safety qualification remains OPEN.  
 **Release category:** pre-hardware *software-qualified candidate only*. **NOT commissioned / NOT authorized for robot motion.**
 
 ## Accepted historical software baselines
@@ -12,7 +12,7 @@
 | B1–B5 software integration | `26217a6ce44bdd1b941edefcdb1bee98ae54e003` | `STAGE3_BATCH_B5_ACCEPTANCE.md` |
 | C1 memory, IPC, HAL mock and link gates | `ee6783f57fd7c9fa18c32dcba664fa4297d1bd1e` | `STAGE3_C1_ACCEPTANCE.md` |
 | C2 bounded CANopen, timer fault and CAN/RTOS audit | `9c0dd0d3f02240c663f4fa415121be7c75c12edd` | `STAGE3_C2_ACCEPTANCE.md` |
-| C3 final candidate | Frozen at operator preparation | **PENDING** `check_stage3_c3_release.sh` |
+| C3 final candidate | `8c387c9cb09ede9c00ed07896d8d9ddc71844677` | **PASS** `STAGE3_C3_ACCEPTANCE.md` |
 
 The above results were supplied through operator-run WSL acceptance
 transcripts. C3 must revalidate against *one frozen revision* and
@@ -63,7 +63,7 @@ The last successful preparation checkpoint is located automatically.
 The two-argument form also accepts a specific `PREP DIRECTORY` if
 you want to qualify an older release snapshot explicitly.
 
-Only after a final script PASS may the operator record C3 as accepted.
+**Accepted on 2026-10-14:** the operator supplied the complete C3 final PASS, including source freeze, two fresh linked images, 19/19 CTests and candidate-manifest generation. The independent STM32CubeIDE clean command itself was not documented by a build-console attachment; the gate checks output timestamps and software regressions.
 The successful run prints an evidence root and a software-only ZIP
 candidate. No script flashes the MCU or permits actual motor operation.
 
