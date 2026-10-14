@@ -12,6 +12,7 @@
 #include "intercore_startup_validation.h"
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
+#include "validation_storage_wire.h"
 #include "../../../Common/Inc/sram4_memory_map.h"
 
 _Static_assert(sizeof(GpIpcShared) <= GP_SHARED_IPC_BYTES,
@@ -28,5 +29,11 @@ bool intercore_startup_validate(void)
     const GpTrajectoryShared *const trajectory =
         (const GpTrajectoryShared *)(uintptr_t)GP_SHARED_TRAJECTORY_BASE;
 
-    return gp_ipc_valid(ipc) && gp_traj_shared_valid(trajectory);
+    const GpValidationWireHeader *const validation =
+        (const GpValidationWireHeader *)(uintptr_t)GP_SHARED_VALIDATION_BASE;
+    return gp_ipc_valid(ipc) && gp_traj_shared_valid(trajectory) &&
+           __atomic_load_n(&validation->magic, __ATOMIC_ACQUIRE) ==
+               GP_VALIDATION_MAGIC &&
+           validation->version == GP_VALIDATION_VERSION &&
+           __atomic_load_n(&validation->worker_ready, __ATOMIC_ACQUIRE) == 0U;
 }

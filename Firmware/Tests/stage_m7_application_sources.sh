@@ -27,7 +27,8 @@ for dir in \
         [[ "$name" == *.h ]] || continue ;;
       Intercore)
         [[ "$name" == *.h ||
-           "$name" == trajectory_stream_path_port.c ]] || continue ;;
+           "$name" == trajectory_stream_path_port.c ||
+           "$name" == validation_storage_bridge.c ]] || continue ;;
     esac
     cp "$file" "$APP/$dir/$name"
   done < <(find "$ROOT/$dir" -maxdepth 1 -type f \
@@ -40,7 +41,8 @@ for required in \
   CANComm/CANopen/canopen_nmt.c \
   CANComm/CANopen/canopen_sdo.c \
   CANComm/CANopen/canopen_heartbeat.c \
-  Intercore/trajectory_stream_path_port.c; do
+  Intercore/trajectory_stream_path_port.c
+  Intercore/validation_storage_bridge.c; do
   [[ -f "$APP/$required" ]] || {
     echo "FAIL: staged source missing: $required" >&2; exit 1;
   }

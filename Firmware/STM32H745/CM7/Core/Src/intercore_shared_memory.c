@@ -14,6 +14,7 @@
 #define GP_IPC_FREERTOS_BACKEND 1
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
+#include "validation_storage_bridge.h"
 #include "intercore_shared_memory.h"
 #include <string.h>
 #include "../../../Common/Inc/sram4_memory_map.h"
@@ -22,6 +23,8 @@ _Static_assert(sizeof(GpIpcShared) <= GP_SHARED_IPC_BYTES,
                "Shared IPC does not fit its 4 KiB SRAM4 slot");
 _Static_assert(sizeof(GpTrajectoryShared) <= GP_SHARED_TRAJECTORY_BYTES,
                "Shared trajectory does not fit its 16 KiB SRAM4 slot");
+_Static_assert(sizeof(GpValidationShared) <= GP_SHARED_VALIDATION_BYTES,
+               "Validation ABI exceeds 12 KiB SRAM4 reservation");
 
 #if !defined(__GNUC__)
 #error "STM32H745 shared-object placement expects the CubeIDE GCC toolchain"
@@ -34,10 +37,15 @@ GpIpcShared intercore_ipc_shared
 GpTrajectoryShared intercore_trajectory_shared
     __attribute__((used, aligned(32), section(".gp_shared_trajectory")));
 
-/* Reserve validation SRAM4 without advertising an active protocol. M7
- * clears this NOLOAD allocation before waking M4; a stale transaction
- * must never be recognized as valid after a fresh dual-core boot. */
-uint8_t intercore_validation_storage[GP_SHARED_VALIDATION_BYTES]
+/* Preserve B2 ELF size/address while activating the typed protocol at
+ * offset zero. The remaining bytes stay reserved and non-cacheable. */
+typedef union {
+    GpValidationShared shared;
+    uint8_t reserved[GP_SHARED_VALIDATION_BYTES];
+} GpValidationReservation;
+_Static_assert(sizeof(GpValidationReservation) == GP_SHARED_VALIDATION_BYTES,
+               "SRAM4 reservation size drift");
+GpValidationReservation intercore_validation_storage
     __attribute__((used, aligned(32), section(".gp_shared_validation")));
 
 /* ST's FreeRTOS_AMP_Dual_RTOS initializes static message buffers before
@@ -56,6 +64,7 @@ bool intercore_shared_memory_initialize(void)
 
     gp_traj_shared_initialize(&intercore_trajectory_shared);
     if (!gp_traj_shared_valid(&intercore_trajectory_shared)) return false;
-    memset(intercore_validation_storage, 0, sizeof(intercore_validation_storage));
-    return true;
+    memset(&intercore_validation_storage, 0, sizeof(intercore_validation_storage));
+    gp_validation_shared_initialize(&intercore_validation_storage.shared);
+    return gp_validation_shared_valid(&intercore_validation_storage.shared);
 }

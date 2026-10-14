@@ -222,8 +222,36 @@ static void test_cancel_in_flight(void)
     puts("[PASS] cancel does not reset an in-flight flash transaction");
 }
 
+static void test_offline_m4_gate(void)
+{
+    static GpValidationShared offline;
+    GpValidationM7Client client;
+    gp_validation_shared_initialize(&offline);
+    gp_validation_m7_init(&client, &offline);
+    PathValidationStorage proxy_offline = gp_validation_m7_storage(&client, 100U);
+    assert(gp_validation_shared_valid(&offline));
+    assert(!gp_validation_m4_idle(&offline));
+    assert(!proxy_offline.begin(proxy_offline.context));
+    assert(!client.active && offline.head == offline.tail);
+    reset();
+    GpValidationM4Worker duplicate;
+    PathValidationStorage backend = m4.backend;
+    assert(!gp_validation_m4_init(&duplicate, &shared, &backend));
+    assert(proxy.begin(proxy.context));
+    assert(gp_validation_m4_step(&m4));
+    gp_validation_m4_shutdown(&m4);
+    assert(!gp_validation_m4_idle(&shared));
+    const PvExecutionSample s = sample_at(0U);
+    assert(proxy.try_write_sample(0U, &s, proxy.context) ==
+           PV_STORAGE_TRY_FAILED);
+    assert(!gp_validation_m4_step(&m4));
+    cleanup();
+    puts("[PASS] absent or shut-down M4 backend cannot authorize validation");
+}
+
 int main(void)
 {
+    test_offline_m4_gate();
     test_queue_backpressure_commit();
     test_storage_failure();
     test_cancel_in_flight();
