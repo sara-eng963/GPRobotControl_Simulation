@@ -280,3 +280,12 @@ Review of committed ST files established: `CM7/Core/Inc/main.h` includes the pub
 **Correction committed:** `e9bba4b` changes `application_supervisor.h` to include **`stm32h7xx_hal.h`** instead of including the raw timer subheader directly, following the already-generated M7 `main.h` convention and using ST's HAL configuration. No CubeMX or vendor timer source altered.
 
 **Verification pending:** operator pull → rerun `stage_m7_timer_integration.sh` → refresh/clean-build **M7**. This commit has **not** yet passed an M7 build; if any errors remain, capture earliest meaningful compiler errors in Console and avoid diagnosing solely from the count. M4 remains unaffected by this app header change. Do not infer target runtime timing or safety from successful compilation.
+
+
+## M7 timer integration build success reported — 2026-10-14
+
+Following the HAL umbrella-header correction (`e9bba4b`), the operator **reported a successful clean Cortex-M7 build** of the independent CubeIDE verification project after pulling and staging the updated canonical integration files. This supersedes the previous M7 build failure with 184 HAL typedef/include-order errors.
+
+**Validated by user report:** ARM Cortex-M7 build now compiles and links the integrated code, including ST-generated TIM2/TIM3 init/IRQ, the application timer HAL callback hook, counting FreeRTOS task wakeups, and Supervisor optional timing port. **Build console, warnings, ELF sizes and specific symbols were not supplied**, so do not claim zero warnings, measured runtime or deterministic loop execution.
+
+**Next gates:** independent **Cortex-M4 clean build** of the same verifier, exact **ELF symbol verification** and diagnostics, then software timing fault-injection and TIM2 overflow/ISR accounting review. Source-level tests alone do not establish real 500 Hz bus/drive performance. The absent physical board provision function retains fail-closed startup.
