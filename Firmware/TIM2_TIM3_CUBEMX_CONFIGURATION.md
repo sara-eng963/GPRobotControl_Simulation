@@ -252,3 +252,20 @@ The operator ran the following on branch `sara/can-replacement` after pulling th
 - **Meaning:** Source-level TIM2/TIM3 wiring and synchronization of the current GitHub code into the independent CubeIDE verifier passed. This is **NOT** evidence of a compiler/linker pass for the newly integrated sources, a simulated target-timebase execution, a physical 500 Hz measurement, or certified safe motion. The verified pre-timer backup is separate and was not targeted by the stage script.
 
 **Next acceptance gate:** Refresh both projects in the existing STM32CubeIDE 2.2.0 workspace, clean-build **Cortex-M7 and Cortex-M4**, and record errors/warnings plus current ELF sizes. If either fails, examine the exact HAL/FreeRTOS compiler or linker messages and revise the canonical source rather than manually creating replacement HAL behavior. Then run a source-controlled **target ELF symbol/clock contract check** and a separate runtime/timing fault-injection suite (timer start failure, missing notification, count >1, cycle >=2 ms, TIM2 pending overflow, ISR priority and multiple-wrap limitation) before declaring software integration complete.
+
+
+## First Cortex-M7 build of runtime integration failed — HAL TIM type include (2026-10-14)
+
+After staging the TIM2/TIM3 runtime implementation into the independent STM32CubeIDE verifier, the operator ran a Cortex-M7 build. Screenshot reports **Build Failed: 3 errors, 0 warnings**. The visible primary diagnostic is:
+
+```text
+In file included from ../Core/Src/application_supervisor.c:11:
+../Core/Inc/application_supervisor.h:12:5:
+error: unknown type name 'TIM_HandleTypeDef'
+```
+
+The board-layer header declared a public HAL TIM callback parameter without including the ST HAL TIM type definition. This is an ordinary C include-order failure; it does not establish any fault with CubeMX timer PSC/ARR, NVIC, or HAL driver module.
+
+**Canonical fix committed:** `928c22a`, `Firmware/STM32H745/CM7/Core/Inc/application_supervisor.h` now explicitly includes **`stm32h7xx_hal_tim.h`** before declaring `TIM_HandleTypeDef *`. This is an ST-provided header already in the generated STM32CubeH7 HAL library, not a custom timer type or implementation. **Not yet independently target-built**. The user's screenshot displayed only one of three compile errors; other errors must be diagnosed from a subsequent build/console if present.
+
+Next: `git pull --ff-only origin sara/can-replacement`, rerun canonical timing staging script against `GP_Stage3_Repro`, refresh & clean-build M7 in CubeIDE, report complete remaining errors and warning count, then M4. Do not edit ST-generated timer code or invent hardware testing. The previously verified baseline builds remain separate from this new software integration acceptance.
