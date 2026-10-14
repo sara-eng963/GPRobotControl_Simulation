@@ -32,7 +32,68 @@ flags=(
 # The CANopen adapter is genuinely referenced in the production composition,
 # not forcibly retained via a linker KEEP directive.
 "$NM" -u "$OUT/app.o" | grep -Eq '[[:space:]]U gp_fdcan_classic_backend_open$'
-"$NM" --defined-only "$OUT/fdcan.o" | grep -Eq '[[:space:]]T gp_fdcan_classic_backend_open$'
+"$NM" --defined-only "$OUT/fdcan.o" | grep -Eq '[[:space:]]T gp_fdcan_classic_backend_open
+# No board supplier is defined by the firmware. A user must provide a real
+# hardware board implementation. A weak unresolved reference is intentional.
+"$NM" "$OUT/app.o" | grep -Eq '[[:space:]]w gp_board_supply_commissioned_config$'
+if "$NM" --defined-only "$OUT/app.o" | grep -Eq '[[:space:]]T gp_board_supply_commissioned_config$'; then
+    echo "FAIL: default production board supplier unexpectedly provided" >&2
+    exit 1
+fi
+
+python3 - "$FW" <<'PY'
+from pathlib import Path
+import sys
+fw=Path(sys.argv[1])
+a=(fw/'CM7/Core/Src/application_supervisor.c').read_text()
+b=(fw/'CM7/Board/Inc/board_commissioning.h').read_text()
+assert 'gp_board_supply_commissioned_config == NULL' in a
+assert 'hardware_interlocks_verified' in a and 'hardware_interlocks_verified' in b
+assert 'io->read_inputs' in a and 'SUP_IO_ESTOP' in a and 'SUP_IO_PROTECTIVE_STOP' in a
+assert 'gp_fdcan_classic_backend_open' in a and 'canopen_master_init' in a
+assert 'gp_ipc_valid(shared)' in a and 'supervisor_task_start(4U)' in a
+assert 'CANOPEN_NODE_IDS' not in a
+assert not (fw/'CM7/Board/Src/board_config_real.c').exists()
+print('PASS: board-supplied CANopen composition, fail-closed startup invariants')
+PY
+
+echo "PASS: HAL-active M7 CANopen composition ARM-compiled; adapter linked by reference"
+echo "NOTE: Physical board provider absent, Supervisor refuses startup by design."
+
+
+# Check compiled object references rather than raw source text. Raw grep
+# incorrectly rejects harmless comments mentioning CubeMX HAL_FDCAN_Init.
+if "$NM" -u "$OUT/app.o" | grep -Eq '[[:space:]]U HAL_FDCAN_Init
+# No board supplier is defined by the firmware. A user must provide a real
+# hardware board implementation. A weak unresolved reference is intentional.
+"$NM" "$OUT/app.o" | grep -Eq '[[:space:]]w gp_board_supply_commissioned_config$'
+if "$NM" --defined-only "$OUT/app.o" | grep -Eq '[[:space:]]T gp_board_supply_commissioned_config$'; then
+    echo "FAIL: default production board supplier unexpectedly provided" >&2
+    exit 1
+fi
+
+python3 - "$FW" <<'PY'
+from pathlib import Path
+import sys
+fw=Path(sys.argv[1])
+a=(fw/'CM7/Core/Src/application_supervisor.c').read_text()
+b=(fw/'CM7/Board/Inc/board_commissioning.h').read_text()
+assert 'gp_board_supply_commissioned_config == NULL' in a
+assert 'hardware_interlocks_verified' in a and 'hardware_interlocks_verified' in b
+assert 'io->read_inputs' in a and 'SUP_IO_ESTOP' in a and 'SUP_IO_PROTECTIVE_STOP' in a
+assert 'gp_fdcan_classic_backend_open' in a and 'canopen_master_init' in a
+assert 'gp_ipc_valid(shared)' in a and 'supervisor_task_start(4U)' in a
+assert 'HAL_FDCAN_Init' not in a and 'CANOPEN_NODE_IDS' not in a
+assert not (fw/'CM7/Board/Src/board_config_real.c').exists()
+print('PASS: board-supplied CANopen composition, fail-closed startup invariants')
+PY
+
+echo "PASS: HAL-active M7 CANopen composition ARM-compiled; adapter linked by reference"
+echo "NOTE: Physical board provider absent, Supervisor refuses startup by design."
+; then
+    echo "FAIL: application composition must not initialize FDCAN1 (CubeMX owns init)" >&2
+    exit 1
+fi
 
 # No board supplier is defined by the firmware. A user must provide a real
 # hardware board implementation. A weak unresolved reference is intentional.
