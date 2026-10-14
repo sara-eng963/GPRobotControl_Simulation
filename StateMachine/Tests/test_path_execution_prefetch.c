@@ -429,9 +429,35 @@ static void test_following_error_and_permission_loss_hold(void)
     puts("[PASS] Following error / permission loss request one hold, no stale target");
 }
 
+static void test_async_prefill_window(void)
+{
+    Test t;
+    init(&t, 513U, 1U, UINT32_MAX); /* M4 published 256 of required 512 */
+    t.execution.services.prefill_timeout_ms = 10U;
+    assert(step_at(&t, 0U) == STATE_STEP_RUNNING);
+    assert(t.execution.phase == PATH_EXEC_PHASE_CHECK_PREREQUISITES);
+    assert(t.drive.commands == 0U && t.wire_enables == 0U);
+    assert(trajectory_prefetch_worker_step(&t.stream));
+    assert(step_at(&t, 1U) == STATE_STEP_RUNNING);
+    assert(t.execution.phase == PATH_EXEC_PHASE_CONFIGURE_WIRE_FEED);
+    assert(step_at(&t, 2U) == STATE_STEP_RUNNING);
+    assert(t.wire_enables == 1U && t.drive.commands == 0U);
+
+    init(&t, 513U, 1U, UINT32_MAX);
+    t.execution.services.prefill_timeout_ms = 3U;
+    assert(step_at(&t, 0U) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 1U) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 2U) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 3U) == STATE_STEP_FAILED);
+    assert(t.execution.error == PATH_EXEC_ERR_TRAJECTORY_NOT_READY);
+    assert(t.wire_enables == 0U && t.drive.commands == 0U);
+    puts("[PASS] bounded async prefill does not enable drives/wire before 512 samples");
+}
+
 int main(void)
 {
     test_time_paced_feedback_and_skips();
+    test_async_prefill_window();
     test_following_error_and_permission_loss_hold();
     test_delayed_axis_feedback();
     test_missing_axis_fault_and_reentry();
