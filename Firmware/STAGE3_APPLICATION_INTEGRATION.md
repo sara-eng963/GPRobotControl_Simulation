@@ -94,3 +94,33 @@ bash Firmware/Tests/check_intercore_notifications.sh
 ## Change log
 
 - **2026-10-14, Stage 3A initial record:** audited branch baseline and relevant implementation interfaces; classified reuse/adaptation decisions; added ARM compile-only source reconnaissance and firmware README pointer. No runtime behavior changed; no tests executed from GitHub.
+
+## Stage 3B-1 — CM4 application IPC service (2026-10-14)
+
+**Source change committed; ARM/CubeIDE validation pending.** The existing CM4 CubeMX `defaultTask` now runs `application_ipc_service_run()` through its preserved `USER CODE` section. A CM4-local module in `CM4/Core/Src/application_ipc_service.c` uses **native FreeRTOS static queues** to serialize HMI commands before the established `gp_ipc_m4_send()` transport and to cache the most recent M7 `GP_IPC_CONTROLLER_STATUS`. No second reader/writer of the shared Message Buffers is introduced; M7 source is untouched.
+
+- Drain at most 8 M7 messages per 1 ms service iteration, tolerate coalesced EXTI wakeups through periodic polling; filter invalid type, duplicate/older sequence, and malformed boolean fields.
+- Publish a local single-slot status snapshot with `xQueueOverwrite`; check age with the CM4 clock since receipt rather than unsynchronized M7 timestamps.
+- Reject HMI submission when no M7 status arrived or the last status is older than 100 ms; use a zero-wait 16-entry **CM4-local** FreeRTOS queue; keep at most one shared-send retry pending. Drop locally queued commands on lost/stale M7 status. These gates are additional application logic, **not** certified robot safety.
+- Canonical `supervisor_hmi.h` is staged for the CM4 CubeIDE verifier alongside Stage 2 IPC headers. No HMI physical driver is added and no application currently calls `application_ipc_service_submit_hmi()`; no remote traffic can be expected until the M7 Supervisor is actually integrated.
+- The default CM4 thread has a CubeMX-generated 512-byte stack; **measure stack watermark and configure final task stack through CubeMX before hardware release**. Do not interpret compile success as runtime stack adequacy.
+- **Important pending risk:** IPC sequences cannot independently detect an M7-only reset; the current monotonic check deliberately fails closed after a remote sequence restart. Explicit shared generation/epoch and reset recovery are later gates, not assumed in this change.
+- Sources: ST AN5617 section 4.2, ST's `FreeRTOS_AMP_Dual_RTOS` example, FreeRTOS static queue APIs, and the checked-in FreeRTOS 10.6.2 `message_buffer.h`. Application-specific queue/status serialization is necessary; the shared transport remains standard FreeRTOS.
+
+**Changed sources:** `Firmware/STM32H745/CM4/Core/Inc/application_ipc_service.h`, `Firmware/STM32H745/CM4/Core/Src/application_ipc_service.c`, CM4 `main.c` (only `USER CODE`), `Firmware/Tests/stage_intercore_headers.sh`, `Firmware/Tests/check_m4_application_ipc.sh`, this record and `Firmware/README.md`.
+
+**Local gate:**
+
+```bash
+cd ~/freertos-pc-test
+git fetch origin
+git switch sara/can-replacement
+git pull --ff-only origin sara/can-replacement
+bash Firmware/Tests/check_m4_application_ipc.sh
+bash Firmware/Tests/check_intercore_startup_compile.sh
+bash Firmware/Tests/check_intercore_notifications.sh
+```
+
+Then sync the complete tracked firmware tree into the existing standalone STM32CubeIDE verification directory, **stage** canonical headers/sources using the Stage 2 scripts, and clean-build both CM7/CM4 images. Verify `application_ipc_service_initialize`, `application_ipc_service_run` and `gp_ipc_m4_receive` appear in the CM4 ELF before calling 3B-1 statically integrated. No such builds/tests were executed via GitHub.
+
+**Stage 3B-2 dependency:** integrate the M7 Supervisor composition using real task initialization and explicit fail-closed I/O. Application IPC itself does not permit robot motion, and the new CM4 service must not be treated as proof of functional bidirectional messaging without the M7 task and physical hardware.

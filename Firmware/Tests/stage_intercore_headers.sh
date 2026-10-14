@@ -22,6 +22,12 @@ for core in CM7 CM4; do
             echo "FAIL: staged copy diverged: $dir/$name" >&2; exit 1;
         }
     done
+    if [[ "$core" == CM4 ]]; then
+        cp "$ROOT/StateMachine/supervisor_hmi.h" "$dir/supervisor_hmi.h"
+        cmp -s "$ROOT/StateMachine/supervisor_hmi.h" "$dir/supervisor_hmi.h" || {
+            echo "FAIL: staged M4 HMI command ABI diverged" >&2; exit 1;
+        }
+    fi
     echo "PASS: staged canonical Intercore headers for $core"
 done
 echo "NOTE: source-of-truth headers are Intercore/*.h; regenerate these copies."

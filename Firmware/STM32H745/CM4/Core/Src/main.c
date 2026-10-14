@@ -25,6 +25,7 @@
 /* USER CODE BEGIN Includes */
 #include "intercore_startup_validation.h"
 #include "intercore_notifications.h"
+#include "application_ipc_service.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -196,11 +197,15 @@ int main(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-  /* Infinite loop */
-  for(;;)
+  (void)argument;
+  /* The existing CMSIS default task is the sole M4 mailbox endpoint.
+   * No extra task or second reader is introduced. */
+  if (!application_ipc_service_initialize())
   {
-    osDelay(1);
+    Error_Handler();
   }
+  application_ipc_service_run(); /* Never returns. */
+  Error_Handler();
   /* USER CODE END 5 */
 }
 
