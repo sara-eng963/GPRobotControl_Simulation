@@ -151,3 +151,7 @@ See [Stage 3 engineering record](STAGE3_APPLICATION_INTEGRATION.md) for actual r
 ### Stage 3B-1 CM4 IPC service (source committed; validation pending)
 
 The existing generated CM4 default task is assigned to a bounded application IPC service. It polls the Stage 2 FreeRTOS message buffers, caches M7 controller status, and can queue HMI commands only while M7 status is fresh. No M7 Supervisor or physical HMI is running yet. See the Stage 3 record and run `bash Firmware/Tests/check_m4_application_ipc.sh` before a full CubeIDE build. The default CM4 task stack must be measured/sized before hardware use.
+
+### Stage 3B-2 — Guarded CM7 Supervisor integration
+
+The actual StateMachine Supervisor can be started from the M7 default task through `application_supervisor_start`, but the weak board configuration hook intentionally refuses startup until real CANopen/FDCAN and physical I/O exist. Canonical application C sources are staged into the separate verification project with `Firmware/Tests/stage_m7_application_sources.sh <verifier-root>`. See `STAGE3_APPLICATION_INTEGRATION.md` for limitations and build gates.

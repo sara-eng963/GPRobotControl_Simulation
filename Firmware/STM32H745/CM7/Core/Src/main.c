@@ -25,6 +25,7 @@
 /* USER CODE BEGIN Includes */
 #include "intercore_shared_memory.h"
 #include "intercore_notifications.h"
+#include "application_supervisor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -273,10 +274,17 @@ void SystemClock_Config(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-  /* Infinite loop */
-  for(;;)
+  (void)argument;
+  /* No real FDCAN, board safety or drive config yet. The weak provider
+   * returns false, keeping motion disabled and M4 status unavailable. */
+  SupervisorTaskConfig config = {0};
+  if (application_supervisor_board_configure(&config))
   {
-    osDelay(1);
+    if (!application_supervisor_start(&config)) Error_Handler();
+  }
+  for (;;)
+  {
+    osDelay(10);
   }
   /* USER CODE END 5 */
 }
