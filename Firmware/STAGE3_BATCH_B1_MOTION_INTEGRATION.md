@@ -1,6 +1,6 @@
 # Stage 3 Batch B1 — M7 Motion Composition
 
-**Source integration:** `aa8628a` (2026-10-14). **Acceptance:** operator pending.
+**Source integration:** `aa8628a` (2026-10-14). **Software acceptance:** PASS, operator-reported 2026-10-14; see `STAGE3_BATCH_B1_ACCEPTANCE.md`.
 
 ## Ownership and data flow
 
@@ -61,5 +61,4 @@ unrelated CubeIDE settings; the acceptance test validates all four entries
 before reading any ELF. Do not manually duplicate `Intercore` headers into
 `Core/Inc` or alter CubeMX-managed HAL peripheral configuration.
 
-**Acceptance remains open** until a new operator-reported clean CM7/CM4
-target build and B1 consolidated test both pass.
+**Accepted:** operator confirmed successful CM7 and CM4 target builds and supplied the complete successful B1 consolidated test output. See `STAGE3_BATCH_B1_ACCEPTANCE.md`; physical commissioning remains deferred.
