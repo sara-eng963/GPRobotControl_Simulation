@@ -1,0 +1,75 @@
+# STM32H745 — TIM2/TIM3 timing configuration record
+
+**Status:** STM32CubeMX GUI configuration **partially completed**, **no generated code, target timer operation or measured 500 Hz performance claimed**.  
+**Date:** 2026-10-14  
+**Branch:** `sara/can-replacement`  
+**GUI working project:** `D:\University\Graduation Project\STM32\GP_Stage3_Repro\GP_STM32H745.ioc`  
+**Verified independent backup:** `GP_Stage3_Repro_Backup_Pre_TIM2_TIM3` (operator-reported `diff -qr` = identical before edits)
+
+## Purpose and architecture
+
+- **TIM2:** free-running 32-bit 1 MHz counter on Cortex-M7 for **1 µs resolution** timestamp source. Counter wraps every `2^32 µs` ≈ **71.58 minutes**. Firmware must implement an overflow-safe monotonic 64-bit timestamp extension and demonstrate edge-case behavior. An interrupt on overflow is planned; merely configuring the interrupt does not implement the time extension.
+- **TIM3:** 16-bit timer generating nominal **500 Hz / 2 ms** update interrupts to signal a Cortex-M7 FreeRTOS Supervisor. **No robotic control code belongs in the ISR**. The existing task currently uses `vTaskDelayUntil` and RTOS-tick-derived `supervisor_now_us`; timing integration is **not yet committed**.
+- **TIM6 / TIM7:** preserve existing generated HAL timebase arrangements and CM4 assignment. Do not repurpose as the motion timer.
+- Reuse **STM32CubeMX/HAL/FreeRTOS** for peripheral and RTOS infrastructure; no direct-register timer rewrite, no artificial motor enable, and no software-only safety claim.
+
+## CubeMX evidence and values
+
+Operator screenshots (Pinout & Configuration, Clock Configuration, TIM2 and TIM3 Parameter Settings), **2026-10-14**:
+
+| Configuration | TIM2 — timestamp timer | TIM3 — cycle timer |
+| --- | --- | --- |
+| Processor/runtime context | Cortex-M7 checked; M4 unchecked | Cortex-M7 checked; M4 unchecked |
+| Clock source | Internal clock | Internal clock |
+| APB1 timer clock | 64 MHz, prescaler /1 (Clock Configuration screenshot) | Same source |
+| Prescaler (PSC) | `63` | `63` |
+| Counter mode | Up | Up |
+| Auto-reload (ARR) | `4294967295` / 0xFFFFFFFF | `1999` |
+| Internal clock division | No Division | No Division |
+| ARR preload | Disable | Disable |
+| Channels | Disabled | Disabled |
+| Nominal count frequency | 1,000,000 counts/s | 1,000,000 counts/s |
+| Nominal update frequency | 1 update per 2^32 counts | 500 updates/s |
+| Global NVIC interrupt | **Checked** in screenshot | **Unchecked** in screenshot; pending |
+| Screenshot-displayed NVIC priority | **5, greyed out** | **5, greyed out** (when unchecked) |
+| Operator preference for priority 6 | Requested, **not confirmed applied** | May use if GUI allows; **not confirmed** |
+
+The HAL-/NVIC-related FreeRTOS constraint is the configured `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5` on M7. On Cortex-M, numerically larger priority values are lower urgency; `FromISR` operations require interrupt priority numerically **≥ 5**. Priority **5 is already acceptable**; priority **6 is an optional choice, not an official STM32 mandate**. Check effective NVIC priority in generated source and use an actual RTOS ISR API only from an appropriate priority.
+
+### Frequency derivation
+
+For an upcounter timer driven at 64 MHz:
+
+`f_counter = 64,000,000 / (PSC + 1) = 64,000,000 / 64 = 1,000,000 Hz`
+
+For TIM3:
+
+`f_update = 1,000,000 / (ARR + 1) = 1,000,000 / 2000 = 500 Hz`
+
+`T_update = 1 / 500 = 0.002 s = 2 ms`
+
+These are **theoretical configuration values**, not measured wake-up latency, command intervals, jitter, or fieldbus throughput.
+
+## Chronological operator checkpoints
+
+1. A separate full backup of the reproducer already existed. Operator compared `GP_Stage3_Repro` and `GP_Stage3_Repro_Backup_Pre_TIM2_TIM3` with `diff -qr`; **PASS: backup identical** prior to edits.
+2. Opened the **working** `.ioc` in STM32CubeMX 6.18.1. Confirmed STM32H745IITx LQFP176 dual core.
+3. Assigned **TIM2** exclusively to M7; enabled internal clock; confirmed APB1 timer clock **64 MHz** via Clock Configuration. Entered PSC=63, up, ARR=4294967295, clock division no division, preload disable.
+4. Enabled TIM2 global interrupt. CubeMX showed priority **5** but made it read-only on its peripheral NVIC page. Discussed that FreeRTOS **does not mandate priority 6**; 5 is valid. **Do not report 6 as applied unless later evidence confirms it.**
+5. Assigned **TIM3** exclusively to M7; selected internal clock with disabled channels. Entered PSC=63, up, ARR=1999, no division, preload disabled. Screenshot confirms parameter values; **TIM3 NVIC remains to be enabled/verified**.
+6. **No final review, save, source generation, build or hardware measurement has yet been reported for these timer changes.**
+
+## Remaining configuration/acceptance gate
+
+- Enable **TIM3 global interrupt** and inspect actual configured priority; `5` or `6` meets the M7 configured FreeRTOS `FromISR` threshold, absent other priority-grouping/configuration changes.
+- Recheck TIM2 enabled, TIM3 enabled, both M7-only; confirm **TIM6 M7** and **TIM7 M4** stay allocated and their HAL timebases unchanged.
+- Capture and review Clock Configuration and final NVIC tables before generation.
+- Save the **working** `.ioc`; verify `Project Manager → Code Generator → Keep User Code when re-generating`. Generate once in the working copy, not in the verified backup.
+- Audit generated `.ioc`, HAL `tim.c` or `main.c`, `stm32h7xx_it.c`, `msp.c`, HAL configs, startup/MPU/IPC USER CODE, `.cproject` links, linker sections and M4 changes before accepting any generated files into canonical Git.
+- Integrate TIM2 startup, overflow-safe 64-bit monotonic time and TIM3 interrupt-to-task notification with bounded ISR; protect against lost/coalesced notifications and missed 2 ms deadlines. Retain fail-closed safety startup.
+- Run ARM compilation and host fault/timing tests; clean-build **both** cores independently and verify retained symbols/stack memory.
+- **Hardware-deferred:** scope measured timer update intervals, task wake-up/dispatch latency, worst-case execution time, CAN 1 Mbps load, actual target-command intervals, physical safety interlocks, and end-to-end 500 Hz feasibility.
+
+## Interpretation
+
+A verified 500 Hz TIM3 **interrupt source** is not proof of 500 Hz synchronized motion. In particular, a timer ISR may fire every 2 ms while the Supervisor misses deadlines, CAN transmission stalls or motor feedback goes stale. Maintain separate metrics for ISR counts, missed notifications, Supervisor cycle time, CAN RX/TX diagnostics, target-send intervals and path-execution deadline failures.

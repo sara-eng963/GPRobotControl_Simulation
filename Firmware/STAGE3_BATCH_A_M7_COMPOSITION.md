@@ -96,3 +96,17 @@ PASS: Stage 3 Batch A target ELF symbol gate
 **Acceptance: PASSED for software compile, link, and retained symbol inventory.** A missing unresolved weak `gp_board_supply_commissioned_config` entry in `nm` is **not** proof that the no-board condition has been exercised as a functional runtime test; the emitted `application_supervisor_board_configure` symbol remains weak, and no strong supplier was found by the gate. Record physical absent-provider startup behavior, safety diagnostics, and 500 Hz measurements as separate pending tasks.
 
 **Next focus:** STM32CubeMX-generated **TIM2** microsecond monotonic timebase (no changes to existing TIM6 HAL tick), overflow-safe 64-bit extension and separate finite-deadline timing diagnostics. The M7 Supervisor currently derives `now_us` from a 1 kHz FreeRTOS tick; the path executor already uses absolute deadlines and missed-deadline failures. Do not invent timing precision or claim 500 Hz hardware determinism prior to actual cycle measurements.
+
+
+### TIM2/TIM3 CubeMX configuration walkthrough — work in progress (2026-10-14)
+
+The operator confirmed an identical **independent** backup of the separately clean-built project `GP_Stage3_Repro` at `GP_Stage3_Repro_Backup_Pre_TIM2_TIM3` before opening `GP_STM32H745.ioc` in STM32CubeMX 6.18.1. MCU shown: `STM32H745IITx`, LQFP176. APB1 peripheral and **APB1 timer clock = 64 MHz**, APB1 prescaler /1.
+
+**TIM2 screenshot-confirmed:** assigned to **Cortex-M7** only, internal clock, channels off, PSC=63, up-counting, ARR=4294967295 (32-bit), clock division none, auto-reload preload disabled. The TIM2 global NVIC interrupt checkbox **was checked**, and **priority 5** was displayed but greyed out. Operator expressed a preference for priority 6; there is **no screenshot evidence TIM2's priority has changed to 6**. Priority 5 is permitted for the configured `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5` if using FreeRTOS `FromISR` APIs (although TIM2 overflow handling need not call them).
+
+**TIM3 screenshot-confirmed:** assigned to **Cortex-M7** only, internal clock, channels off, PSC=63, up-counting, ARR=1999 (16-bit), clock division none, auto-reload preload disabled. At the verified 64 MHz timer input this produces `64,000,000 / [(63 + 1) × (1999 + 1)] = 500 Hz` → **nominal 2 ms hardware update events**. The earlier TIM3 NVIC screenshot showed the global interrupt **unchecked** with a greyed priority 5; no later interrupt checkbox screenshot has yet been supplied.
+
+**Current milestone = GUI configuration in progress only.** TIM2/TIM3 settings have **not yet been demonstrated saved in the authoritative repository `.ioc`**, no source generation/review has been verified, and TIM2/TIM3 are not started by current code. TIM6 M7 HAL timebase and TIM7 M4 assignments were seen in the timer overview and should remain untouched. Pending: TIM3 NVIC enablement + final NVIC review, CubeMX settings save and one controlled code-generation review, generated-source merge, validated overflow-safe microsecond-time adapter, FreeRTOS notification scheduling, missed-wakeup/deadline accounting and target clean builds; physical 500 Hz timing remains **unmeasured**.
+
+See **[TIM2/TIM3 CubeMX configuration log](TIM2_TIM3_CUBEMX_CONFIGURATION.md)** for screenshot-derived settings, status, calculation and full pending acceptance gates.
+

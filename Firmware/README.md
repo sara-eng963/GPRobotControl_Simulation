@@ -1,5 +1,8 @@
 # STM32H745 dual-core firmware
 
+**Timer configuration in progress (2026-10-14):** STM32CubeMX GUI settings for M7 TIM2 (1 MHz timestamp) and M7 TIM3 (nominal 500 Hz update) are documented in [TIM2/TIM3 configuration log](TIM2_TIM3_CUBEMX_CONFIGURATION.md). No timer code generation, integration build, or 500 Hz hardware verification has yet been reported.
+
+
 **Status (2026-10-14, after commits `c3d07a2`, `d8a2b32`, `809882f`):** Stage 1/2 static foundation and Stage 3B application integration are build-verified. Both CM7 and CM4 CubeIDE Debug images built with **0 errors / 0 warnings** in the operator's existing Windows verification workspace. CubeMX-generated CM7 FDCAN1 (Classic CAN, 1 Mbit/s, PLL2Q 43 MHz) and official ST HAL FDCAN compiled and linked; M7 Supervisor and M4 IPC symbols were found in target ELFs. The separate STM32 HAL↔CANopen adapter **compiled but was discarded as unreferenced**, and the M7 Supervisor's board provider is **still weak/fail-closed**: no runtime CANopen or robot motion. **An independent Git worktree + separate STM32CubeIDE workspace clean-built both cores at commit `a331dea`** (CM7 text 159792/data 112/bss 91536; CM4 text 24644/data 100/bss 21148; both 0 errors / 0 warnings). Target storage/trajectory/HMI integration and physical real-time/safety validation remain pending. See the current-stage scoreboard in [Stage 3 engineering record](STAGE3_APPLICATION_INTEGRATION.md).
 
 See **[Stage 1 engineering report](STAGE1_DUAL_CORE_FOUNDATION.md)** for detailed design rationale, generated configuration audit, reproducibility evidence, limits, and Stage 2 handoff. Firmware builds do **not** establish hardware execution or physical IPC correctness.
