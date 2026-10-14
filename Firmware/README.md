@@ -1,6 +1,6 @@
-# STM32H745 dual-core firmware — Stage 1 foundation
+# STM32H745 dual-core firmware
 
-**Status: Stage 1 generated and independently rebuilt for CM7 and CM4, each with 0 errors and 0 warnings (2026-10-12).**
+**Status (2026-10-14):** Stage 1 complete and Stage 2 statically verified. Stage 3A application architecture audit documented; full robot application is **not yet integrated** into either firmware image. Hardware validation remains pending.
 
 See **[Stage 1 engineering report](STAGE1_DUAL_CORE_FOUNDATION.md)** for detailed design rationale, generated configuration audit, reproducibility evidence, limits, and Stage 2 handoff. Firmware builds do **not** establish hardware execution or physical IPC correctness.
 
@@ -143,3 +143,7 @@ or real MPU/cache-coherency tests. Re-run after any CubeMX regeneration.
 
 See the [Stage 2 engineering record](STAGE2_SHARED_SRAM4_MPU.md)
 for detailed decision rationale, test evidence and remaining risks.
+
+## Stage 3 — Application integration
+
+See [Stage 3 engineering record](STAGE3_APPLICATION_INTEGRATION.md) for actual repository module inventory, M7/M4 ownership, standards decisions, current blockers and staged acceptance gates. First compile-only reconnaissance: `bash Firmware/Tests/check_application_arm_compilation.sh`. This command is **not** a two-image STM32CubeIDE build; no Stage 3 test results have been recorded yet.

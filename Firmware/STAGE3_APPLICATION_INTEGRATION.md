@@ -1,0 +1,96 @@
+---
+title: "Stage 3 — STM32H745 Application Integration"
+stage: 3
+status: "3A architecture audit documented; portability and firmware gates pending"
+date: 2026-10-14
+branch: "sara/can-replacement"
+tags: [stm32h745, freertos, robotics, firmware]
+---
+
+# Stage 3 — STM32H745 Application Integration
+
+**Audit baseline:** `d18bdec71abc62fa835afe588398f9aec074e649` (2026-10-12).  
+**Scope:** repository/source review and an ARM compile-only reconnaissance check. **No Stage 3 application integration or hardware runtime test has passed yet.** Continue using the Stage 1 and Stage 2 records for historical build evidence.
+
+## 3A. Source-backed architecture decisions
+
+1. **Keep the Stage 2 boot, ABI, linker and EXTI infrastructure.** The tracked CM7 and CM4 `main.c` files call Stage 2 initializers before their independent FreeRTOS schedulers. Both still create only the CubeMX `defaultTask`; neither composes the real robot application. The Stage 2 CubeIDE builds were performed in a staged verification workspace; compiling the source in isolation or seeing a symbol in a host binary is not target-image integration.
+2. **M7 owns motion authority, CANopen network state and the trajectory consumer.** Integrate the existing `StateMachine/`, `CANComm/CANopen/`, `ServoDrive/` and `Intercore/trajectory_stream_path_port.c` modules through a target composition root. Do not permit M4 commands, flash completion or HMI messages to authorize motion independently. Dedicated hardware safety inputs and outputs still lack a board adapter.
+3. **M4 owns NOR transactions and the trajectory producer.** Reuse `Intercore/trajectory_stream.c`, `validation_storage_bridge.c`, and the existing validated-storage interfaces. `Simulation/Storage/file_validated_storage.c` is file/POSIX-backed; `Simulation/Renode/Storage/stm32h7_w25q_bus.c` accesses emulated/register-level QSPI, **not a qualified STM32CubeH7 HAL production flash port**. Do not link these simulation backends into the final firmware.
+4. **Single-owner inter-core channels remain nonblocking.** Stage 2 uses native FreeRTOS 10.6.2 static Message Buffers in SRAM4 and ST HAL EXTI software notifications. `StateMachine/supervisor_task.c` already consumes up to eight M4 HMI messages per cycle and publishes best-effort M7 status. It is not yet instantiated in the target. M4 needs one owner task that drains M7 status, handles local service requests and retries without blocking either kernel. EXTI coalescing must be handled by draining plus bounded periodic polling, not by assuming one IRQ per message.
+5. **Do not port the host HMI task to M4 unchanged.** `HMI/hmi_task.c` invokes `supervisor_task_post_hmi()` and `supervisor_task_get_diagnostics()` directly. These are local M7 FreeRTOS APIs. M4 must instead translate transport events into `GP_IPC_HMI_COMMAND` messages and derive display state from `GP_IPC_CONTROLLER_STATUS`. The GUI/SDL, UDP, SIL Kit and MATLAB tooling remain host-only. An actual HMI physical transport is not yet specified.
+6. **Keep firmware/host/simulation boundaries explicit.** `CANComm/can_backend.h` is hardware-independent and suitable for an STM32 FDCAN adapter; `CANComm/SILKit/` is C++ host code. The existing `CanopenMaster`, `CiA402` and AVATAR drive implementations may be ARM-portable but their CANopen compliance and completeness are not thereby established.
+7. **Do not claim a 500 Hz execution clock.** The checked-in `.ioc` still uses ~64 MHz startup clocks and TIM6/TIM7 for HAL ticks; it configures no FDCAN, QSPI or dedicated motion-cycle timer. `supervisor_task.c` uses the 1 ms FreeRTOS tick as a microsecond time source and `vTaskDelayUntil`, which cannot establish microsecond deadline quality. The 2 ms trajectory sample period is a data contract, not measured physical timing.
+8. **Preserve reserved SRAM4 and allocation rules.** Stage 2 maps 4 KiB IPC at `0x38000000`, 16 KiB trajectory at `0x38001000`, and 12 KiB reserved at `0x38005000` inside the M7 non-cacheable 32 KiB region. `GpValidationShared` is **not yet placed, initialized, or linked** into a matching shared linker slot. Check ABI sizes, metadata alignment, both linker scripts and the MPU window before enabling the flash validation bridge; never place kernel task objects or local producer descriptors in shared SRAM.
+
+## Existing module disposition
+
+| Component | Evidence / integration disposition |
+| --- | --- |
+| `StateMachine/state_machine.{c,h}` and `States/` | **Reuse:** core logic in C, no required Linux runtime for the pure state machine; source-level ARM compile and dependency closure remain to be checked. |
+| `StateMachine/supervisor_task.{c,h}` | **Adapt / reuse:** genuine FreeRTOS supervisor with single CANopen ownership, bounded queue polling and IPC hooks; needs target composition, correct timestamp source, task/memory budgets and safe hardware I/O. |
+| `ControlCore/` numerical modules | **Reuse subject to ARM compile, math-library linkage and stack/WCET budgets.** IK/validation runs below motion task priority; no long calculation in the 2 ms action path. |
+| `CANComm/CANopen/`, `ServoDrive/` | **Evaluate before replacement:** CANopen CiA 301/402 behavior exists, including NMT, SDO, heartbeat, PDO and SYNC. Compare against CANopenNode's existing NMT/SDO client/PDO/SYNC/heartbeat modules before choosing a long-term protocol implementation. Use the AVR/AVATAR motor manual and actual EDS/object dictionary for device-specific definitions, not assumptions. |
+| `CANComm/can_backend.h` | **Reuse:** inject target STM32CubeH7 HAL FDCAN implementation (bounded receive and send, FIFO, bus-off, IRQ priority, timeout/error propagation). |
+| `CANComm/SILKit/`, `Simulation/supervisor_silkit_main.c` | **Retain for host tests only:** not firmware sources. |
+| `Intercore/ipc_mailbox_freertos.c`, `trajectory_stream.c` | **Reuse:** shared transport already introduced at Stage 2; no production application endpoints/tasks connected yet. |
+| `Intercore/trajectory_stream_path_port.c` | **Adapt:** consumer callback surface exists; composition must bind the same `PathExecutionServices.context` consistently. Readiness, artifact identity and release/ack remain mandatory. |
+| `Intercore/validation_storage_bridge.c` | **Defer linking until SRAM4 allocation/ABI and storage transactions are integrated**; host tests are not evidence of target coherence or power-fail safety. |
+| `Simulation/Storage/`, `Simulation/Renode/` | **Keep as test/reference implementations**; use CubeMX/HAL QSPI and official Winbond command/timing specifications for production hardware driver, then adapt the existing storage semantics. |
+| `HMI/hmi_task.c`, GUI/app modules | **Adapt command/status semantics only;** direct supervisor linkage is incorrect on M4. Physical HMI transport remains unassigned. |
+
+## Standards/reference decision
+
+- **STM32 platform:** the checked-in `GP_STM32H745.ioc`, HAL/LL, CMSIS, FreeRTOS 10.6.2 and STM32CubeIDE project remain authoritative. [ST STM32CubeH7 FreeRTOS_AMP_Dual_RTOS](https://github.com/STMicroelectronics/STM32CubeH7/tree/master/Projects/STM32H745I-DISCO/Applications/FreeRTOS/FreeRTOS_AMP_Dual_RTOS); [ST RM0399 documentation](https://www.st.com/en/microcontrollers-microprocessors/stm32h745-755/documentation.html).
+- **Cross-core IPC:** reuse the Stage 2 adaptation of ST's FreeRTOS AMP example. Target-specific application dispatching is custom only because robot commands, statuses, fail-closed semantics and epoch identity are application data; no replacement queue framework.
+- **CANopen:** [CANopenNode](https://github.com/CANopenNode/CANopenNode) includes master NMT, SDO client, PDO, SYNC and heartbeat functionality. [CanOpenSTM32](https://github.com/CANopenNode/CanOpenSTM32) provides a HAL (FD)CAN port candidate. **Decision pending:** compare actual integration cost, licensing, supported target HAL version, message ordering, timing and AVATAR object mapping with the existing tested coordinator. Do not install an overlapping second CANopen master before that decision.
+- **Storage:** use the bundled ST HAL QSPI driver and STM32CubeH7 examples as applicable, and the exact purchased Winbond part datasheet. Retain application-specific commit/CRC/cancellation rules; generic HAL does not provide durable robot-trajectory transactions.
+
+## Integration roadmap (dependencies and acceptance gates)
+
+| Step | Minimal deliverable | Evidence required |
+| --- | --- | --- |
+| **3A.1** | Document audit and add a compile-only source compatibility check without changing firmware runtime. | Check source paths and run `bash Firmware/Tests/check_application_arm_compilation.sh`; report errors as audit findings, not silent patches. |
+| **3A.2** | Freeze the M7/M4 resource plan and provisional task/priority/memory table after compile results; choose CANopenNode adoption vs existing-coordinator retention based on an explicit comparison. | No unknown ownership of FDCAN/QSPI, task producer/consumer, or wake source. Record unresolved PCB/pin decisions. |
+| **3B** | Integrate M4 IPC service and M7 supervisor endpoints using existing buffers; use bounded zero-timeout dispatch, overflow reporting, periodic drain and correct initialization. | Real ARM compilation, dual-image CubeIDE builds, linked symbols, host fault-path tests. No motion-enabled fallback. |
+| **3C-1** | Compile/link pure state machine, drive models and supervisor on M7 with a target composition root; keep motion disabled until genuine hardware feedback/safety inputs exist. | Both builds and map/ELF checks; state tests including invalid/late messages. |
+| **3C-2** | Generate FDCAN and motion timer via CubeMX, integrate verified HAL backend, real monotonic timestamps and drive commissioning; establish CANopen protocol strategy. | Real builds, CANopen host regressions, logic/bus measurements where available; final motor dictionary/pinout outstanding. |
+| **3C-3** | Connect M7 trajectory consumer and path execution adapter; bounded one-sample cycle, starvation/deadline/following-error handling. | Host tests, ARM image links, timestamped cycle data; cannot mark 500 Hz hardware-verified without instrumented hardware. |
+| **3D-1** | Reserve/initialize `GpValidationShared` on both linker maps and verify ABI; connect validation client/worker only after the shared-memory budget check. | SRAM4 linker probes, ARM build, full ELF symbol/section audit, transaction-failure tests. |
+| **3D-2** | Generate QSPI via CubeMX, connect official HAL flash driver to existing storage abstraction and M4 stream producer; implement physical HMI transport only when specified. | Independent CM4 build, flash command tests on relevant device, refill/cancel/CRC tests; physical results separately identified. |
+| **3E** | Regression and dual-image integration verification. | Both actual target builds, linked app symbols, host CTest and defined failure paths; hardware-only items explicitly open. |
+
+Order of 3C/3D substeps may change when hardware pinout or storage record dependencies become concrete. Stage 3 **must not** be declared statically verified on an isolated compile test.
+
+## First verification command
+
+```bash
+cd ~/freertos-pc-test
+git fetch origin
+git switch sara/can-replacement
+git pull --ff-only origin sara/can-replacement
+bash Firmware/Tests/check_application_arm_compilation.sh
+```
+
+This compiles a selected source inventory for actual CM7/CM4 ARM ABIs with pinned project headers; it does **not** build a complete firmware image. Existing Stage 2 checks should still pass:
+
+```bash
+bash Firmware/Tests/check_shared_layout.sh
+bash Firmware/Tests/check_sram4_linkers.sh
+bash Firmware/Tests/check_intercore_startup_compile.sh
+bash Firmware/Tests/check_intercore_notifications.sh
+```
+
+**Not performed during this GitHub-only Stage 3A change:** WSL shell execution, ARM compilation, STM32CubeIDE image builds, ELF/map inspection, SIL Kit runtime regression, or hardware tests. Stage 3A's portability gate is pending local results.
+
+## Open architecture blockers
+
+- Final target FDCAN and QSPI peripheral ownership, physical transceiver/pins and external NOR model are unconfigured.
+- Real microsecond monotonic clock, 2 ms scheduler coupling, exception/IRQ budgets and maximum CAN load are unmeasured.
+- The M4 HMI direct-calls-M7 design must be replaced by an IPC adapter; physical HMI transport is unspecified.
+- Validation shared SRAM4 allocation, canonical source linking into both CubeIDE projects and linker/MPU checks are incomplete.
+- Physical safety hardware, motor drive EDS/firmware and independent-core reset recovery are unverified; software fault latches are not safety-certified.
+
+## Change log
+
+- **2026-10-14, Stage 3A initial record:** audited branch baseline and relevant implementation interfaces; classified reuse/adaptation decisions; added ARM compile-only source reconnaissance and firmware README pointer. No runtime behavior changed; no tests executed from GitHub.
