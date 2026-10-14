@@ -155,3 +155,7 @@ The existing generated CM4 default task is assigned to a bounded application IPC
 ### Stage 3B-2 — Guarded CM7 Supervisor integration
 
 The actual StateMachine Supervisor can be started from the M7 default task through `application_supervisor_start`, but the weak board configuration hook intentionally refuses startup until real CANopen/FDCAN and physical I/O exist. Canonical application C sources are staged into the separate verification project with `Firmware/Tests/stage_m7_application_sources.sh <verifier-root>`. See `STAGE3_APPLICATION_INTEGRATION.md` for limitations and build gates.
+
+### Stage 3C-2a — FDCAN backend staged (hardware disabled)
+
+`CM7/Board/Src/fdcan_classic_backend.c` provides a conditional STM32CubeH7 **HAL1** Classic CAN implementation of the existing `CanBackend`. The board needs **CubeMX-generated FDCAN** before this transport can compile in active mode or drive CANopen; no pinout or bit timing has been assumed. The default supervisor board hook continues to refuse motion activation. See `STAGE3_APPLICATION_INTEGRATION.md`.

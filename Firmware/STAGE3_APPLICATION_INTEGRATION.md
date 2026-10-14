@@ -212,3 +212,22 @@ CM4
 **Acceptance:** Stage 3B-1 and 3B-2 **pass at ARM compile, source staging and target ELF link level**. The `W` on the M7 board hook is intended: the default weak provider refuses activation. The CM7 application is **linked but not operational**, and no bidirectional messages are produced by the physical firmware without a real board configuration. Both Debug ELFs exist; this alone does not establish measured task stack margin, dual-core boot, CANopen/FDCAN operation, 500 Hz timing, safety performance, or physical IPC traffic. Do not describe Stage 3B as hardware validated.
 
 The operator also reported an earlier terminal exit code 1 without a failing diagnostic line; a subsequent non-exiting inspection found all the expected symbols. Do not assign a cause to the earlier shell exit without its captured stderr/first failure.
+
+## Stage 3C-2a — ST HAL1 FDCAN Classic CAN backend (2026-10-14)
+
+**Source prepared; target build and hardware checks pending.** The CM7 `Board/Src/fdcan_classic_backend.c` adapts the existing portable `CanBackend` interface to **official STM32CubeH7 HAL1** FDCAN functions, using a generated `FDCAN_HandleTypeDef` supplied by CubeMX, not custom register programming. It supports standard 11-bit Classic CAN (DLC 0..8), nonblocking TX/RX FIFO usage, and fails on bus-off or an invalid frame. It configures the official global filter for standard data frames and rejects extended/remote frames before starting. Startup rejects incorrect frame mode, receive/transmit element sizing, FIFO mode and capacity fewer than 16 TX/16 RX entries.
+
+**No board configuration is guessed.** FDCAN remains **disabled** in the canonical `.ioc`; ST's FDCAN HAL header and driver are absent from the current generated vendor snapshot. The new board translation unit is therefore conditionally inactive under the canonical configuration. The Cortex-M7 CubeIDE project has an additional managed `Board` source folder and include paths in Debug/Release, but does not start a CAN peripheral, configure bit timing, select pins or change the weak fail-closed Supervisor provider. This is deliberately **not** a physical FDCAN driver test and not a CANopen integration result.
+
+**Official ST references:**
+- STM32Cube_FW_H7 V1.13.0 as selected by `GP_STM32H745.ioc` (generate from the installed matching CubeMX package).
+- [STMicroelectronics stm32h7xx-hal-driver HAL1 FDCAN header](https://github.com/STMicroelectronics/stm32h7xx-hal-driver/blob/v1.11.4/Inc/stm32h7xx_hal_fdcan.h) — `HAL_FDCAN_ConfigGlobalFilter`, `HAL_FDCAN_Start/Stop`, `HAL_FDCAN_AddMessageToTxFifoQ`, `HAL_FDCAN_GetRxMessage`, `HAL_FDCAN_GetProtocolStatus`, and FIFO fill/free-level APIs.
+- [ST STM32CubeH7 FDCAN_Loopback example](https://github.com/STMicroelectronics/STM32CubeH7/tree/master/Projects/STM32H7B3I-EVAL/Examples/FDCAN/FDCAN_Loopback).
+
+**Software-only gate:**
+```bash
+bash Firmware/Tests/check_fdcan_board_disabled.sh
+```
+This compiles the **inactive branch only**, because the current project has not generated HAL FDCAN. Once CubeMX enables FDCAN, this check is expected to refuse to act as evidence for the enabled branch; a new ARM/IDE link-and-test gate must compile the **HAL-enabled** branch against the exact generated ST HAL1 package.
+
+**Next required GUI configuration (CubeMX, before actual bus operation):** configure FDCAN1 under CM7 in Classic CAN normal mode, nominal bit timing for the intended 1 Mbps bus from the **actual peripheral kernel clock**, 8-byte TX/RX elements, at least 16 TX FIFO and 16 RX FIFO0 elements, FDCAN filters/message RAM, a physically valid AF pin pair, transceiver/termination and optional IRQ choice. Do not manually change generated driver headers or ISR ownership; regenerate with CubeMX, then review/diff generated output and build both cores in CubeIDE. The final physical node dictionary, transceiver pins and PCB mapping are outstanding. **500 Hz bus throughput and 6-RPDO4-plus-SYNC cyclic atomicity remain unverified** and must be measured before motion activation.
