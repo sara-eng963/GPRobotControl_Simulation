@@ -269,3 +269,14 @@ The board-layer header declared a public HAL TIM callback parameter without incl
 **Canonical fix committed:** `928c22a`, `Firmware/STM32H745/CM7/Core/Inc/application_supervisor.h` now explicitly includes **`stm32h7xx_hal_tim.h`** before declaring `TIM_HandleTypeDef *`. This is an ST-provided header already in the generated STM32CubeH7 HAL library, not a custom timer type or implementation. **Not yet independently target-built**. The user's screenshot displayed only one of three compile errors; other errors must be diagnosed from a subsequent build/console if present.
 
 Next: `git pull --ff-only origin sara/can-replacement`, rerun canonical timing staging script against `GP_Stage3_Repro`, refresh & clean-build M7 in CubeIDE, report complete remaining errors and warning count, then M4. Do not edit ST-generated timer code or invent hardware testing. The previously verified baseline builds remain separate from this new software integration acceptance.
+
+
+## HAL include-order cascade (184 M7 errors) — 2026-10-14
+
+A subsequent Cortex-M7 CubeIDE screenshot showed **184 errors / 0 warnings** in the Problems view following commit `928c22a`. Representative diagnostics from the ST HAL header were `unknown type name HAL_LockTypeDef`, `unknown type name HAL_StatusTypeDef`, and a specifier/qualifier-list error. These are consistent with a **cascading HAL include-order issue** rather than 184 independent firmware defects; the complete build console was not provided, so no other hidden errors can be ruled out yet.
+
+Review of committed ST files established: `CM7/Core/Inc/main.h` includes the public **`stm32h7xx_hal.h`** umbrella; `CM7/Core/Inc/stm32h7xx_hal_conf.h` enables `HAL_TIM_MODULE_ENABLED` and includes `stm32h7xx_hal_tim.h` via its module configuration. The immediate preceding fix had placed `stm32h7xx_hal_tim.h` **directly** in the public `application_supervisor.h` ahead of the normal umbrella/configuration include chain. This can trigger header inclusion in the wrong order and cascade through HAL typedefs.
+
+**Correction committed:** `e9bba4b` changes `application_supervisor.h` to include **`stm32h7xx_hal.h`** instead of including the raw timer subheader directly, following the already-generated M7 `main.h` convention and using ST's HAL configuration. No CubeMX or vendor timer source altered.
+
+**Verification pending:** operator pull → rerun `stage_m7_timer_integration.sh` → refresh/clean-build **M7**. This commit has **not** yet passed an M7 build; if any errors remain, capture earliest meaningful compiler errors in Console and avoid diagnosing solely from the count. M4 remains unaffected by this app header change. Do not infer target runtime timing or safety from successful compilation.
