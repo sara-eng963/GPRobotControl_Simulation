@@ -325,3 +325,19 @@ The dual-core build/ELF checks already passed, but no STM32 board is available. 
 **Status: committed but unrun against the user's live WSL checkout.** Do **not** mark the host fault tests PASS until a user-run reports successful compilation and every test passed. They compile *extracted real C bodies*, not the entire STM32 firmware and not hardware; virtual interrupt timing, priority preemption, sustained multi-wrap periods, 500 Hz bus load and certified safety remain independently unverified.
 
 **Operator's next command:** `cd ~/freertos-pc-test && git pull --ff-only origin sara/can-replacement && python3 Firmware/Tests/run_m7_timer_fault_injection.py`. The harness uses a temporary directory and does not modify the CubeIDE reproduction or independently backed-up firmware. If a mock compiler issue occurs, fix the test harness and rerun; if a real production timing bug occurs, fix source with regression coverage rather than relaxing a safety assertion.
+
+
+## First host timing fault-injection run — harness-only -Werror error (2026-10-14)
+
+The operator ran `python3 Firmware/Tests/run_m7_timer_fault_injection.py` after a successful fast-forward pull to `67b4cc6`. The newly assembled temporary C harness **failed during host compilation, before running any fault assertions**:
+
+```text
+error: unused variable 'last_wake' [-Werror=unused-variable]
+error: 'vTaskDelayUntil' defined but not used [-Werror=unused-function]
+cc1: all warnings being treated as errors
+Test exit code: 1
+```
+
+**Cause:** the Python harness deliberately extracts only the `if (hardware_timed)` portion of the Supervisor's cycle accounting; a legacy RTOS fallback stub and task-delay local added to the mock C template were therefore unused. This does **not establish a firmware build regression**. The independently validated dual-core ELF gate continues to stand, while **host timing fault injection remains NOT YET PASSED**.
+
+**Fix committed:** `19836e8` removes the two unused host-only declarations from `Firmware/Tests/m7_timer_fault_host.c`. The warning/error level `-Wall -Wextra -Werror` is retained; production firmware and CubeMX sources are **not modified**. The fix was verified in GitHub as committed source text but **has not yet been host-compiled/rerun**; next operator action is pull and rerun the same Python script, then investigate any further specific failure without weakening assertions.
