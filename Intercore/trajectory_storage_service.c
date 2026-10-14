@@ -72,7 +72,6 @@ bool gp_playback_m4_init(GpPlaybackM4Worker *w,
         !gp_traj_shared_valid(t) || reader == NULL ||
         reader->read_metadata == NULL || reader->read_samples == NULL ||
         reader->capacity_samples == 0U ||
-        __atomic_load_n(&v->worker_ready, ACQUIRE) != 1U ||
         __atomic_load_n(&v->playback_request_seq, ACQUIRE) != 0U ||
         __atomic_load_n(&v->playback_ack_seq, ACQUIRE) != 0U)
         return false;
@@ -167,6 +166,19 @@ bool gp_playback_m4_step(GpPlaybackM4Worker *w)
     }
 
     if (status == GP_PLAYBACK_STREAMING || status == GP_PLAYBACK_FAILED) {
+        /* M7 publishes cancellation only AFTER the execution state has
+         * stopped using the ring. M4 can now abandon a prepared-but-unused
+         * epoch even when M7 never called gp_traj_m7_begin(). */
+        if (cancel == w->request_seq) {
+            if (w->producer.active) {
+                GpTrajectoryShared *t = w->producer.shared;
+                __atomic_store_n(&t->ready, 0U, RELEASE);
+                w->producer.active = false;
+                __atomic_store_n(&t->release_ack_epoch, w->producer.epoch, RELEASE);
+            }
+            __atomic_store_n(&v->playback_status, GP_PLAYBACK_IDLE, RELEASE);
+            return true;
+        }
         /* Release ack must be processed after any in-flight flash callback.
          * A failed producer also processes release before returning failure. */
         if (w->producer.active) {
