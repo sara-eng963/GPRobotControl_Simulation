@@ -141,3 +141,24 @@ PASS: CM4 application IPC ARM compile-only gate (not a firmware link)
 ```
 
 This confirms that the tested CM4 application service and generated `main.c` compile with the ARM toolchain and that the source assertions passed. The corrected include path is now committed for reproducibility. **No full CubeIDE link, application symbol/stack budget inspection, live IPC test or hardware test is evidenced.** Stage 3B-1 remains **compile-only verified; dual-image linking pending**.
+
+### Stage 3B-1 CubeIDE ELF evidence (operator-provided, 2026-10-14)
+
+After synchronizing/staging the source files and using STM32CubeIDE, the operator reported the following `arm-none-eabi-size` output from the Debug ELFs at `GP_Repo_Verification/CM7/Debug/GP_STM32H745_CM7.elf` and `GP_Repo_Verification/CM4/Debug/GP_STM32H745_CM4.elf`:
+
+| Image | text | data | bss | dec |
+| --- | ---: | ---: | ---: | ---: |
+| CM7 | 23316 | 100 | 35476 | 58892 |
+| CM4 | 24644 | 100 | 21148 | 45892 |
+
+The operator's `arm-none-eabi-nm --defined-only` inspection of the **CM4 ELF** confirms the actual strong, linked functions:
+
+```
+08100868 T application_ipc_service_initialize
+08100914 T application_ipc_service_read_status
+08100a5c T application_ipc_service_run
+```
+
+**Verification assessment:** CM4 service translation unit is present in the linked ELF, not just compilable in isolation; source-level ARM checks were independently reported passing. `application_ipc_service_submit_hmi` was **not** present in this defined-symbol listing: no M4 transport currently invokes it, so link-time garbage collection is a plausible explanation, **not independently verified**. A code path exercising HMI submission must be checked once a real M4 producer is integrated. The reported ELF existence does not itself prove a fresh clean build; exact IDE console success/warning totals and ELF timestamps were not provided in the report. M7 does not yet include the supervisor application.
+
+**Stage 3B-1 status:** CM4 application service **ARM compiled and ELF-linked**; full verified dual-image clean-build gate, runtime task stack budget, software integration/fault tests, and physical dual-core traffic are still pending. Do not claim functional bidirectional application communication or certified safety.
