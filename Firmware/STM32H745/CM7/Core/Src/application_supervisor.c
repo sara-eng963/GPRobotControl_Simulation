@@ -14,6 +14,7 @@
 #include "ipc_mailbox.h"
 #include "sram4_memory_map.h"
 #include "trajectory_stream_path_port.h"
+#include "validation_storage_bridge.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -113,6 +114,17 @@ static CanopenMaster g_canopen_master;
 static bool g_board_prepared;
 /* Stream consumer and wrapper must outlive every Supervisor state transition. */
 static GpTrajectoryExecutionBinding g_motion_binding;
+/* Persistent M7-side async validation client; no flash peripheral access.
+ * A successful real M4 backend publication is a prerequisite for use. */
+static GpValidationM7Client g_validation_client;
+static PathValidationStorage g_validation_proxy;
+static bool gp_validation_enter_ready(void *unused)
+{
+    (void)unused;
+    return gp_validation_m4_idle(
+        (const GpValidationShared *)(uintptr_t)GP_SHARED_VALIDATION_BASE);
+}
+
 
 /* This hook remains weak for compatibility with a future fully physical
  * board provider, but it implements an opt-in safe composition path.
@@ -242,6 +254,35 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
         return false;
     }
     config.path_execution_services = &g_motion_binding.services;
+
+    /* A validation transaction cannot proceed without a real M4 storage
+     * worker. A board declares capacity only; it may NOT inject synchronous
+     * M7 storage callbacks or bypass the inter-core durable-commit protocol. */
+    const GpValidationShared *const validation =
+        (const GpValidationShared *)(uintptr_t)GP_SHARED_VALIDATION_BASE;
+    if (!gp_validation_m4_idle(validation) ||
+        config.validation_storage == NULL ||
+        config.validation_storage->capacity_samples == 0U ||
+        config.validation_storage->begin != NULL ||
+        config.validation_storage->write_sample != NULL ||
+        config.validation_storage->commit != NULL ||
+        config.validation_storage->abort != NULL ||
+        config.validation_storage->try_write_sample != NULL ||
+        config.validation_storage->try_commit != NULL ||
+        config.validation_worker_program == NULL ||
+        config.validation_worker_priority >= 4U)
+    {
+        revoke_unstarted_board(board);
+        return false;
+    }
+    gp_validation_m7_init(&g_validation_client,
+        (GpValidationShared *)(uintptr_t)GP_SHARED_VALIDATION_BASE);
+    g_validation_proxy = gp_validation_m7_storage(
+        &g_validation_client, config.validation_storage->capacity_samples);
+    config.validation_storage = &g_validation_proxy;
+    config.validation_run_in_worker = true;
+    config.validation_enter_ready = gp_validation_enter_ready;
+    config.validation_enter_context = NULL;
     if (!supervisor_task_init(&config) || !supervisor_task_start(4U))
     {
         revoke_unstarted_board(board);
