@@ -69,3 +69,30 @@ CM4: 24644   100   21148   45892
 ### Reusable target ELF verification (2026-10-14)
 
 A repository-owned `Firmware/Tests/check_stage3_batch_a_target_elfs.sh` gate was introduced in commit `f4f1cbf`. It checks the **already built** CM7/CM4 ELFs, captures their `arm-none-eabi-nm` symbol listings to files (avoiding the possible `nm | grep -q` + `pipefail` SIGPIPE early exit), and checks strong M7 FDCAN HAL/adapter/CANopen/Supervisor symbols, weak M7 fallback, no strong real board supplier, and M4 IPC symbols. Prints the actual ARM ELF size data and final PASS sentinel. This new script is source-controlled but **has not yet been executed by the operator**. It is a repeatable static-image gate, not hardware testing.
+
+
+### Batch A target ELF gate PASS — verified final result (2026-10-14)
+
+The operator ran the repository-owned `Firmware/Tests/check_stage3_batch_a_target_elfs.sh` against independently clean-built `GP_Stage3_Repro` firmware at the Batch A source baseline, after synchronizing and building both cores (operator reported both CubeIDE builds with **zero errors**). **The complete script exited through its final `PASS` sentinel**:
+
+```text
+=== M7 HAL + CANopen + fail-closed composition ===
+PASS: T HAL_FDCAN_Init
+PASS: T HAL_FDCAN_MspInit
+PASS: T gp_fdcan_classic_backend_open
+PASS: T canopen_master_init
+PASS: T application_supervisor_start
+PASS: W application_supervisor_board_configure
+NOTE: no unresolved weak board supplier symbol displayed (check linker/map manually)
+=== M4 IPC ===
+PASS: T application_ipc_service_run
+PASS: T gp_ipc_m4_receive
+=== Firmware image sizes ===
+CM7 text=163656 data=112 bss=92200 dec=255968
+CM4 text=24644 data=100 bss=21148 dec=45892
+PASS: Stage 3 Batch A target ELF symbol gate
+```
+
+**Acceptance: PASSED for software compile, link, and retained symbol inventory.** A missing unresolved weak `gp_board_supply_commissioned_config` entry in `nm` is **not** proof that the no-board condition has been exercised as a functional runtime test; the emitted `application_supervisor_board_configure` symbol remains weak, and no strong supplier was found by the gate. Record physical absent-provider startup behavior, safety diagnostics, and 500 Hz measurements as separate pending tasks.
+
+**Next focus:** STM32CubeMX-generated **TIM2** microsecond monotonic timebase (no changes to existing TIM6 HAL tick), overflow-safe 64-bit extension and separate finite-deadline timing diagnostics. The M7 Supervisor currently derives `now_us` from a 1 kHz FreeRTOS tick; the path executor already uses absolute deadlines and missed-deadline failures. Do not invent timing precision or claim 500 Hz hardware determinism prior to actual cycle measurements.
