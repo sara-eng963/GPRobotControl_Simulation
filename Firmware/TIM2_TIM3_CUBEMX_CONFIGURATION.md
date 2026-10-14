@@ -92,3 +92,10 @@ Operator screenshot shows the following GUI settings before any code generation:
 - User Actions: no before/after generation scripts supplied in visible fields.
 
 Screenshot confirms **configuration options only**, not saved/generated output. USER CODE preservation is not a guarantee for application files outside marked blocks, project metadata, or manual linked resources. Existing independent backup remains the rollback baseline. Before clicking **Generate Code**, verify **Project Name, Project Location, Toolchain/IDE** under Project Manager → Project, and inspect the resulting files after generation.
+
+
+## Project destination and firmware package verified — screenshot (2026-10-14)
+
+The operator opened STM32CubeMX **Project Manager → Project**. The GUI screenshot confirms: **Project Name** `GP_STM32H745`; **Project Location** and **Toolchain Folder Location** `D:\University\Graduation Project\STM32\GP_Stage3_Repro`; **Toolchain / IDE** STM32CubeIDE; **Generate Under Root** checked; **Application Structure** Advanced; **Dual Core Boot Mode** Both CPUs booting at once; **MCU Reference** STM32H745IITx; **Firmware Package** STM32Cube FW_H7 V1.13.0. Displayed M7/M4 minimum heap `0x200` and stack `0x400` each; these are *linker baseline settings*, not FreeRTOS task-stack measurements.
+
+The `.ioc` had an unsaved-changes asterisk in the screenshot and generation had **not yet been reported**. The independently verified pre-timer backup path is a different folder and was not selected. Next safe GUI gate: save the working `.ioc`, generate once with user-code preservation enabled, then **compare output against independent backup before building or syncing to canonical Git**. Inspect generated TIM2/TIM3 init, NVIC handlers, HSEM/IPC startup, CubeIDE resource links, FreeRTOS configuration, and CM4 source differences. This screenshot verifies **destination and options only**, not successful generation.
