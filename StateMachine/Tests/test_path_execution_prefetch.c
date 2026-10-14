@@ -398,9 +398,41 @@ static void test_missing_axis_fault_and_reentry(void)
     puts("[PASS] 20-ms stale axis trips controlled hold; reset/re-entry is clean");
 }
 
+static void test_following_error_and_permission_loss_hold(void)
+{
+    for (unsigned mode = 0; mode < 2U; ++mode) {
+        Test t;
+        init(&t, 64U, 2U, UINT32_MAX);
+        assert(step_at(&t, 0U) == STATE_STEP_RUNNING);
+        assert(step_at(&t, 1U) == STATE_STEP_RUNNING);
+        assert(step_at(&t, 2U) == STATE_STEP_RUNNING);
+        assert(t.drive.commands == 1U);
+        PathExecutionInputs inputs = {
+            .motion_permission = mode == 0U,
+            .following_error = mode == 0U,
+            .now_ms = 3U,
+            .now_us = 3000U
+        };
+        PathExecutionOutputs output = {0};
+        const unsigned prior = t.drive.commands;
+        assert(state_path_execution_step(&t.execution, &inputs, &output) ==
+               STATE_STEP_FAILED);
+        assert(t.execution.error ==
+               (mode == 0U ? PATH_EXEC_ERR_FOLLOWING_ERROR :
+                             PATH_EXEC_ERR_MOTION_PERMISSION));
+        assert(t.stop_calls == 1U && !t.wire);
+        assert(t.drive.commands == prior);
+        assert(state_path_execution_step(&t.execution, &inputs, &output) ==
+               STATE_STEP_FAILED);
+        assert(t.stop_calls == 1U && t.drive.commands == prior);
+    }
+    puts("[PASS] Following error / permission loss request one hold, no stale target");
+}
+
 int main(void)
 {
     test_time_paced_feedback_and_skips();
+    test_following_error_and_permission_loss_hold();
     test_delayed_axis_feedback();
     test_missing_axis_fault_and_reentry();
     test_expired_final_target_fails_closed();

@@ -17,6 +17,7 @@ pairs=(
   "Firmware/STM32H745/CM7/Core/Src/application_supervisor.c|CM7/Core/Src/application_supervisor.c"
   "Intercore/trajectory_stream_path_port.c|CM7/Application/Intercore/trajectory_stream_path_port.c"
   "Intercore/trajectory_stream_path_port.h|CM7/Application/Intercore/trajectory_stream_path_port.h"
+  "StateMachine/States/state_path_execution.c|CM7/Application/StateMachine/States/state_path_execution.c"
 )
 for pair in "${pairs[@]}"; do
   IFS='|' read -r left right <<< "$pair"
@@ -44,7 +45,15 @@ cmake --build "$tmp/host" --target \
   avatar_m_canopen_test canopen_master_test
 ctest --test-dir "$tmp/host" --output-on-failure \
   -R '^(intercore_trajectory_stream_test|intercore_trajectory_path_port_test|avatar_m_canopen_test|canopen_master_test)$'
-echo "PASS: B1 host stream/consumer, identity, callback-forwarding, CANopen tests"
+# Run the actual PathExecution state machine with a host six-axis fake;
+# this tests software hold ordering and fault latching, NOT a physical stop.
+gcc -std=c11 -O0 -Wall -Wextra -Werror \
+  "$ROOT/StateMachine/States/state_path_execution.c" \
+  "$ROOT/Simulation/Storage/trajectory_prefetch.c" \
+  "$ROOT/StateMachine/Tests/test_path_execution_prefetch.c" \
+  -o "$tmp/path_execution_prefetch_test"
+"$tmp/path_execution_prefetch_test"
+echo "PASS: B1 host stream/consumer, execution faults and CANopen tests"
 
 M7="$DEST/CM7/Debug/GP_STM32H745_CM7.elf"
 M4="$DEST/CM4/Debug/GP_STM32H745_CM4.elf"

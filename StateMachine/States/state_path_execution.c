@@ -63,14 +63,18 @@ static StateStepResult fail(
 
         state->wire_feed_commanded = false;
 
-        /* Software hold for runtime storage/communication/deadline faults.
-         * Preflight rejection issued no motion: no unsolicited target. 
-         * A successful callback acknowledges issuing the command, NOT
-         * verified deceleration, and is never a certified safety stop. */
+        /* Request one best-effort controlled hold for runtime stream,
+         * feedback, following-error, lost motion permission or transport
+         * failures. Preflight rejection issued no target. An acknowledgment
+         * is NOT measured deceleration or an independent safety stop.
+         * Physical E-stop/protective circuits remain separate. */
         if ((error == PATH_EXEC_ERR_STORAGE_READ ||
              error == PATH_EXEC_ERR_TRAJECTORY_NOT_READY ||
              error == PATH_EXEC_ERR_CYCLIC_FEEDBACK ||
-             error == PATH_EXEC_ERR_MISSED_DEADLINE) &&
+             error == PATH_EXEC_ERR_MISSED_DEADLINE ||
+             error == PATH_EXEC_ERR_FOLLOWING_ERROR ||
+             error == PATH_EXEC_ERR_MOTION_PERMISSION ||
+             error == PATH_EXEC_ERR_COMMUNICATION) &&
             state->phase == PATH_EXEC_PHASE_FOLLOW_TRAJECTORY)
         {
             bool acknowledged = false;

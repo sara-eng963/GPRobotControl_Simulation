@@ -24,6 +24,7 @@ The existing `PathExecution` owns sample deadlines, missed-period skip/expiry, f
 - A board trying to supply a second stream provider, or lacking any physical non-stream callback, is rejected **before motion can be enabled**.
 - Stream preflight uses the immutable validated-artifact program ID, revision, artifact CRC, sample count and 2000-us period. It refuses an unprepared, stale, mismatched or insufficiently buffered epoch.
 - Reads/skips recheck the metadata, refuse expired ownership and do not block to refill from flash. Paused paths retain M7 stream ownership; exiting paths release or discard the M4 producer epoch.
+- The existing runtime failure path now makes one best-effort controlled-hold request on following-error, lost motion permission and communication faults during trajectory following, after commanding wire feed OFF; this is neither verified deceleration nor certified protective stopping. Host fault tests assert exactly one request, no new target commands and a latched failure.
 - No real board supplier exists; Batch B1 **does not** commission drives, fabricate F/T or safety signals or fabricate a durable M4 trajectory.
 
 ## Acceptance: one local command after staging and clean CubeIDE builds
@@ -36,7 +37,7 @@ bash Firmware/Tests/stage_stage3_batch_b1.sh "/mnt/d/University/Graduation Proje
 bash Firmware/Tests/check_stage3_batch_b1_acceptance.sh "/mnt/d/University/Graduation Project/STM32/GP_Stage3_Repro"
 ```
 
-The gate checks canonical staging parity, ARM object compilation, host trajectory and CANopen tests, target image freshness, strong retained M7 binding symbols and Batch A symbols. Source changes are not a substitute for passed test output.
+The gate checks canonical staging parity, ARM object compilation, host trajectory/PathExecution fault and CANopen tests, target image freshness, strong retained M7 binding symbols and Batch A symbols. Source changes are not a substitute for passed test output.
 
 ## Hardware and dependent software gates
 

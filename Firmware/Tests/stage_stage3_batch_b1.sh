@@ -16,11 +16,13 @@ source_files=(
   "Firmware/STM32H745/CM7/Core/Src/application_supervisor.c"
   "Intercore/trajectory_stream_path_port.c"
   "Intercore/trajectory_stream_path_port.h"
+  "StateMachine/States/state_path_execution.c"
 )
 target_files=(
   "CM7/Core/Src/application_supervisor.c"
   "CM7/Application/Intercore/trajectory_stream_path_port.c"
   "CM7/Application/Intercore/trajectory_stream_path_port.h"
+  "CM7/Application/StateMachine/States/state_path_execution.c"
 )
 # Preflight all inputs before changing the verifier.
 for i in "${!source_files[@]}"; do
@@ -40,5 +42,5 @@ for i in "${!source_files[@]}"; do
     echo "STAGED: ${target_files[$i]}"
   fi
 done
-echo "PASS: Batch B1 M7 application and stream port staged."
+echo "PASS: Batch B1 M7 application, stream port and runtime fault path staged."
 echo "Clean-build CM7 and CM4 in CubeIDE; this script does not build the ELFs."
