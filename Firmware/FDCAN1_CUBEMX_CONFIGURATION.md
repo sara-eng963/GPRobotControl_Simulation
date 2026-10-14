@@ -145,6 +145,10 @@ Once the CubeMX configuration is complete and the operator saves/generates code,
 | Rx Buffers Size | **8 bytes data field** | Shown default; irrelevant with zero dedicated RX buffers |
 | Clock Calibration | **Disable** | Displayed default, not yet evaluated for actual oscillator/transceiver |
 
-**Not visible and therefore not verified:** `Rx Fifo0 Elmts Nbr` (the screenshot cuts off above that row). **Next step** is to confirm/set **16** receive FIFO0 elements; the prepared HAL adapter explicitly requires `RxFifo0ElmtsNbr >= 16`. No FIFO timing, occupancy, overflow, or delivery guarantee follows merely from allocation. Message RAM use and interaction with a second FDCAN instance, if selected later, must be checked against the STM32H745 reference manual. Automatic retransmission and physical I/O are still pending.
+**Now confirmed by subsequent operator screenshot (2026-10-14):** `Rx Fifo0 Elmts Nbr = 16`, meeting the prepared HAL adapter's `RxFifo0ElmtsNbr >= 16` requirement. No FIFO timing, occupancy, overflow, or delivery guarantee follows merely from allocation. Message RAM use and interaction with a second FDCAN instance, if selected later, must be checked against the STM32H745 reference manual. Automatic retransmission and physical I/O are still pending.
 
-**Status:** TX-side FIFO configuration has GUI screenshot evidence; RX FIFO0 depth remains pending. No changed CubeMX `.ioc` has been fetched into the repository and no active HAL build has been claimed.
+**Status:** Both 16-element TX FIFO and 16-element Rx FIFO0 configurations have GUI screenshot evidence. They remain uncommitted to the canonical `.ioc` and unverified in active HAL firmware. No changed CubeMX `.ioc` has been fetched into the repository and no active HAL build has been claimed.
+
+### Receive FIFO0 confirmation (2026-10-14)
+
+A second screenshot explicitly shows `Rx Fifo0 Elmts Nbr = 16`, `Rx Fifo0 Elmt Size = 8 bytes data field`, `Rx Fifo1 Elmts Nbr = 0`, `Std Filters Nbr = 0`, `Ext Filters Nbr = 0`, and `Message RAM Offset = 0`. The standard-filter count of zero is an intermediate setting; the current board adapter uses HAL's global acceptance for standard frames and rejection for extended/remote frames. This permissive standard-frame policy must be revisited after actual node IDs/COB-IDs and bus traffic are confirmed; do not present it as a production-optimized acceptance filter. No CubeMX generation or physical bus test has happened yet.
