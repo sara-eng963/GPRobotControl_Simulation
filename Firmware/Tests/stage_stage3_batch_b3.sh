@@ -89,7 +89,8 @@ for dir in ControlCore/Analysis ControlCore/Config ControlCore/Execution \
   done < <(find "$ROOT/$dir" -maxdepth 1 -type f -name '*.h' -print0)
 done
 mkdir -p "$APP/Intercore"
-for name in validation_storage_bridge.c validation_storage_bridge.h validation_storage_wire.h; do
+for name in validation_storage_bridge.c validation_storage_bridge.h validation_storage_wire.h \
+            trajectory_storage_service.c trajectory_storage_service.h; do
   cp "$ROOT/Intercore/$name" "$APP/Intercore/$name"
 done
 echo "PASS: B3 M7/M4 typed validation ABI staged; physical flash provider absent by default"

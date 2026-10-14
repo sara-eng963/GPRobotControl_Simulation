@@ -51,12 +51,14 @@ m7_sources=(
     Intercore/trajectory_stream.c
     Intercore/trajectory_stream_path_port.c
     Intercore/validation_storage_bridge.c
+    Intercore/trajectory_storage_service.c
     Firmware/STM32H745/CM7/Core/Src/intercore_shared_memory.c
     Firmware/STM32H745/CM7/Core/Src/application_supervisor.c
 )
 m4_sources=(
     Intercore/trajectory_stream.c
     Intercore/validation_storage_bridge.c
+    Intercore/trajectory_storage_service.c
     Firmware/STM32H745/CM4/Core/Src/intercore_startup_validation.c
     Firmware/STM32H745/CM4/Core/Src/application_validation_service.c
 )

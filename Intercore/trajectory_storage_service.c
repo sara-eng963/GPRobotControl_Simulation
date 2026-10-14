@@ -123,8 +123,14 @@ bool gp_playback_m4_step(GpPlaybackM4Worker *w)
         }
         w->request_seq = requested;
         w->requested = v->playback_identity;
+        if (cancel == requested) {
+            __atomic_store_n(&v->playback_ack_seq, requested, RELEASE);
+            return true;
+        }
+        /* Block any new validation BEGIN before acknowledging the request:
+         * no window may exist where storage appears idle during NOR read. */
+        __atomic_store_n(&v->playback_status, GP_PLAYBACK_VERIFYING, RELEASE);
         __atomic_store_n(&v->playback_ack_seq, requested, RELEASE);
-        if (cancel == requested) return true; /* handled below on next step */
         if (!identity_valid(&w->requested) ||
             w->requested.sample_count > w->reader.capacity_samples ||
             !w->reader.read_metadata(&w->metadata, w->reader.context) ||
