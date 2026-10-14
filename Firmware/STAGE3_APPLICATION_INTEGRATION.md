@@ -180,3 +180,35 @@ The operator reported **PASS** for `check_m7_application_integration.sh` and `ch
 The script now matches on the exact **directory** rather than a combined path, verifies each required CANopen translation unit with a named error, and excludes only the intended top-level CANComm C files and extra Intercore backend sources. The additional `check_m7_application_staging.sh` exercises the staging operation in a throwaway verifier, compares mirrored files against their canonical source, asserts forbidden duplicate units remain absent, and tests repeatability. No firmware runtime code, shared IPC ABI, or ST-generated source has changed.
 
 **Tests after fix pending operator execution:** `bash Firmware/Tests/check_m7_application_staging.sh`, `bash Firmware/Tests/check_m7_application_integration.sh`, and full STM32CubeIDE clean builds. The earlier ARM test pass is evidence only for the previous source set; the M7 full application build remains unverified.
+
+### Stage 3B-2 build and linked-symbol evidence (operator-provided, 2026-10-14)
+
+After synchronizing the verifier and applying the Bash nested-CANopen staging correction, the operator reported that staging **passed** and both Cortex-M7 and Cortex-M4 STM32CubeIDE firmware builds completed. The full IDE build console/warning totals were not supplied.
+
+The operator's subsequent `arm-none-eabi-size` and `arm-none-eabi-nm --defined-only` inspection of the actual Debug ELFs established:
+
+| Core | text | data | bss | dec |
+| --- | ---: | ---: | ---: | ---: |
+| CM7 | 150728 | 112 | 91376 | 242216 |
+| CM4 | 24644 | 100 | 21148 | 45892 |
+
+```text
+CM7
+080198a2 W application_supervisor_board_configure
+080198b8 T application_supervisor_start
+08019bf2 T gp_ipc_m7_receive
+08019c2a T gp_ipc_m7_send
+080192b8 T supervisor_task_init
+08019464 T supervisor_task_start
+
+CM4
+08100868 T application_ipc_service_initialize
+08100914 T application_ipc_service_read_status
+08100a5c T application_ipc_service_run
+08100dea T gp_ipc_m4_receive
+08100db2 T gp_ipc_m4_send
+```
+
+**Acceptance:** Stage 3B-1 and 3B-2 **pass at ARM compile, source staging and target ELF link level**. The `W` on the M7 board hook is intended: the default weak provider refuses activation. The CM7 application is **linked but not operational**, and no bidirectional messages are produced by the physical firmware without a real board configuration. Both Debug ELFs exist; this alone does not establish measured task stack margin, dual-core boot, CANopen/FDCAN operation, 500 Hz timing, safety performance, or physical IPC traffic. Do not describe Stage 3B as hardware validated.
+
+The operator also reported an earlier terminal exit code 1 without a failing diagnostic line; a subsequent non-exiting inspection found all the expected symbols. Do not assign a cause to the earlier shell exit without its captured stderr/first failure.
