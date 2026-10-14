@@ -1,7 +1,7 @@
 # Stage 3 — Batch B4 NOR Reader and Trajectory Producer
 
 **Date:** 2026-10-14. **Branch:** `sara/can-replacement`.  
-**Status:** implementation committed; independent WSL/CubeIDE acceptance pending.
+**Status:** PASS — B4 software acceptance at source revision `4ac15f3` based on operator-supplied WSL output (2026-10-14). See `STAGE3_BATCH_B4_ACCEPTANCE.md`. Hardware commissioning remains deferred.
 
 ## Execution architecture
 
@@ -63,6 +63,11 @@ bash Firmware/Tests/check_stage3_batch_b4_acceptance.sh \
   "/mnt/d/University/Graduation Project/STM32/GP_Stage3_Repro"
 ```
 
-B4 can only be marked **software accepted** after the operator supplies
-the final PASS and clean target-build evidence. Do not claim working
-hardware until the commissioning gates are separately executed.
+**Software gate accepted (2026-10-14):** operator supplied the complete
+B4 acceptance script output with final PASS, source freshness checks and
+linked M7/M4 target ELF symbols. A separate CubeIDE clean-build console
+or binary hashes were not supplied; do not infer those from this log.
+See `STAGE3_BATCH_B4_ACCEPTANCE.md`.
+
+This result does **not** authorize physical NOR operation, motor motion or
+independent-core restart. Board commissioning remains a separate gate.
