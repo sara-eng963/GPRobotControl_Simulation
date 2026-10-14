@@ -60,7 +60,8 @@ KERNEL="$(printenv FREERTOS_KERNEL_ROOT || true)"
 if [[ -z "$KERNEL" ]]; then
   KERNEL="$ROOT/../FreeRTOS-Kernel"
 fi
-if [[ -f "$KERNEL/include/FreeRTOS.h" ]]; then
+if [[ -f "$KERNEL/include/FreeRTOS.h" &&
+      -f "$KERNEL/portable/ThirdParty/GCC/Posix/portmacro.h" ]]; then
   run_gate "ipc_hsem_hal_mock" env FREERTOS_KERNEL_ROOT="$KERNEL" \
     bash Intercore/Tests/run_ipc_hsem_mock.sh
 else
