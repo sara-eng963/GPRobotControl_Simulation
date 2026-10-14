@@ -1,7 +1,7 @@
 # Stage 3 — C1 Release Baseline & Linked-Memory Audit
 
 **2026-10-14 · branch:** sara/can-replacement  
-**Status:** source committed; operator acceptance and memory reports **PENDING**.
+**Status:** **PASS — C1 software release acceptance**, based on operator-supplied WSL command output for revision `ee6783f57fd7c9fa18c32dcba664fa4297d1bd1e`. Detailed gate results: `STAGE3_C1_ACCEPTANCE.md`. Full report files remain in the operator's local WSL evidence directory, not committed to GitHub.
 
 ## Purpose
 
