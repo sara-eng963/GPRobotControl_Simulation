@@ -59,6 +59,8 @@ m4_sources=(
     Intercore/trajectory_stream.c
     Intercore/validation_storage_bridge.c
     Intercore/trajectory_storage_service.c
+    Intercore/hmi_lifecycle.c
+    Firmware/STM32H745/CM4/Core/Src/application_ipc_service.c
     Firmware/STM32H745/CM4/Core/Src/intercore_startup_validation.c
     Firmware/STM32H745/CM4/Core/Src/application_validation_service.c
 )

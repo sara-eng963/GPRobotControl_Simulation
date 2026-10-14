@@ -56,12 +56,11 @@ bool gp_hmi_should_drop_pending(const GpHmiControllerStatus *old_status,
                                 const GpHmiControllerStatus *new_status)
 {
     if (new_status == NULL) return true;
-    if (new_status->estop_active ||
-        new_status->robot_state == (uint32_t)ROBOT_STATE_FAULT ||
-        new_status->robot_state == (uint32_t)ROBOT_STATE_EMERGENCY_STOP ||
-        new_status->active_fault != 0U)
-        return true;
-    return old_status != NULL &&
-           (old_status->robot_state != new_status->robot_state ||
-            old_status->transition_count != new_status->transition_count);
+    /* A stable FAULT state is allowed to accept a NEW RESET request.
+     * Only a transition into danger drops commands from the OLD state. */
+    if (old_status == NULL) return true;
+    return old_status->robot_state != new_status->robot_state ||
+           old_status->transition_count != new_status->transition_count ||
+           old_status->estop_active != new_status->estop_active ||
+           old_status->active_fault != new_status->active_fault;
 }

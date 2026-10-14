@@ -65,6 +65,9 @@ static void test_freshness_and_policy(void)
     status.estop_active = true;
     assert(!gp_hmi_command_allowed(&status, SUP_HMI_RESET));
     status.estop_active = false;
+    status.robot_state = ROBOT_STATE_FAULT;
+    GpHmiControllerStatus same_fault = status;
+    assert(!gp_hmi_should_drop_pending(&same_fault, &status));
     status.robot_state = ROBOT_STATE_EMERGENCY_STOP;
     assert(!gp_hmi_command_allowed(&status, SUP_HMI_HOME));
     puts("[PASS] CM4 local freshness, fault, estop and state-change flush policy");

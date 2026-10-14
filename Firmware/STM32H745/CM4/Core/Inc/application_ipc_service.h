@@ -4,20 +4,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "supervisor_hmi.h"
+#include "hmi_lifecycle.h"
 
 /* CM4-local view of the M7 supervisor's existing seven status data fields.
  * last_hmi_received_sequence acknowledges IPC receipt, NOT command acceptance.
  * Status from the remote kernel is advisory and never authorizes motion. */
-typedef struct {
-    uint32_t ipc_sequence;
-    uint32_t robot_state;
-    bool motion_permitted;
-    uint32_t active_fault;
-    uint32_t transition_count;
-    bool estop_active;
-    uint32_t last_hmi_received_sequence;
-    uint32_t rejected_event_count;
-} ApplicationControllerStatus;
+typedef GpHmiControllerStatus ApplicationControllerStatus;
 
 /* Call once in the CM4 default task after the scheduler has started.
  * Requires Stage 2 M7-owned shared memory to be valid. */

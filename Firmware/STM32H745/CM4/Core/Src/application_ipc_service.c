@@ -3,7 +3,7 @@
  * static queues only on the M4 kernel and the established zero-timeout
  * shared FreeRTOS Message Buffers. No new transport or cross-core lock.
  *
- * HMI transport and M7 Supervisor startup are not yet integrated.
+ * HMI electrical transport is intentionally board-specific/unselected.
  * This module does not itself permit motion or implement a safety channel.
  */
 #define GP_IPC_FREERTOS_BACKEND 1
@@ -20,6 +20,8 @@
 #define APPLICATION_IPC_MAX_RECEIVES_PER_CYCLE 8U
 #define APPLICATION_IPC_PERIOD_TICKS pdMS_TO_TICKS(1U)
 #define APPLICATION_IPC_STATUS_TIMEOUT_MS 100U
+_Static_assert(sizeof(TickType_t) == sizeof(uint32_t),
+               "HMI freshness assumes 32-bit CM4 tick counter");
 
 typedef struct {
     ApplicationControllerStatus status;
@@ -80,8 +82,9 @@ bool application_ipc_service_read_status(
     StatusSnapshot snapshot;
     if (xQueuePeek(status_queue, &snapshot, 0U) != pdPASS) return false;
     if (max_age_ms != 0U &&
-        (TickType_t)(xTaskGetTickCount() - snapshot.local_receipt_tick)
-            > age_ticks(max_age_ms))
+        !gp_hmi_status_is_fresh((uint32_t)xTaskGetTickCount(),
+                                (uint32_t)snapshot.local_receipt_tick,
+                                (uint32_t)age_ticks(max_age_ms)))
         return false;
     *out = snapshot.status;
     return true;
@@ -95,7 +98,8 @@ bool application_ipc_service_submit_hmi(SupervisorHmiCommand command)
 
     ApplicationControllerStatus status;
     if (!application_ipc_service_read_status(
-            &status, APPLICATION_IPC_STATUS_TIMEOUT_MS))
+            &status, APPLICATION_IPC_STATUS_TIMEOUT_MS) ||
+        !gp_hmi_command_allowed(&status, command))
         return false;
 
     /* Local queue is multi-writer safe. Only the service task ever sends
@@ -103,32 +107,29 @@ bool application_ipc_service_submit_hmi(SupervisorHmiCommand command)
     return xQueueSend(command_queue, &command, 0U) == pdPASS;
 }
 
-static void receive_controller_status(void)
+static bool receive_controller_status(void)
 {
+    bool invalidate_pending = false;
     GpIpcMessage message;
     for (uint32_t i = 0; i < APPLICATION_IPC_MAX_RECEIVES_PER_CYCLE; ++i) {
         if (!gp_ipc_m4_receive(shared_ipc, &message)) break;
-        if (message.type != GP_IPC_CONTROLLER_STATUS ||
-            message.sequence == 0U ||
-            (int32_t)(message.sequence - last_status_sequence) <= 0 ||
-            message.data[1] > 1U || message.data[4] > 1U)
-            continue;
-
-        last_status_sequence = message.sequence;
         StatusSnapshot snapshot = {0};
+        if (!gp_hmi_status_decode(&message, last_status_sequence,
+                                  &snapshot.status))
+            continue;
+        StatusSnapshot prior = {0};
+        const bool had_previous =
+            xQueuePeek(status_queue, &prior, 0U) == pdPASS;
+        if (gp_hmi_should_drop_pending(
+                had_previous ? &prior.status : NULL, &snapshot.status))
+            invalidate_pending = true;
+        last_status_sequence = message.sequence;
         snapshot.local_receipt_tick = xTaskGetTickCount();
-        snapshot.status.ipc_sequence = message.sequence;
-        snapshot.status.robot_state = message.data[0];
-        snapshot.status.motion_permitted = message.data[1] != 0U;
-        snapshot.status.active_fault = message.data[2];
-        snapshot.status.transition_count = message.data[3];
-        snapshot.status.estop_active = message.data[4] != 0U;
-        snapshot.status.last_hmi_received_sequence = message.data[5];
-        snapshot.status.rejected_event_count = message.data[6];
 
         /* Latest status replaces old telemetry, never an HMI command. */
         (void)xQueueOverwrite(status_queue, &snapshot);
     }
+    return invalidate_pending;
 }
 
 void application_ipc_service_run(void)
@@ -143,9 +144,17 @@ void application_ipc_service_run(void)
         /* Polling is mandatory even though the Stage 2 EXTI notification
          * exists: interrupts may coalesce and no remote-kernel task waiter
          * is registered with the native shared Message Buffer. */
-        receive_controller_status();
-
+        /* Remember loss BEFORE draining a reconnected M7 status: no
+         * queued command from the previous controller gap is replayed. */
         ApplicationControllerStatus status;
+        const bool was_fresh = application_ipc_service_read_status(
+            &status, APPLICATION_IPC_STATUS_TIMEOUT_MS);
+        const bool state_changed = receive_controller_status();
+        if (!was_fresh || state_changed) {
+            pending = SUP_HMI_COMMAND_COUNT;
+            (void)xQueueReset(command_queue);
+        }
+
         if (!application_ipc_service_read_status(
                 &status, APPLICATION_IPC_STATUS_TIMEOUT_MS)) {
             /* Never deliver HMI commands buffered across controller loss.
@@ -155,6 +164,10 @@ void application_ipc_service_run(void)
         } else {
             if (pending == SUP_HMI_COMMAND_COUNT)
                 (void)xQueueReceive(command_queue, &pending, 0U);
+
+            if (pending != SUP_HMI_COMMAND_COUNT &&
+                !gp_hmi_command_allowed(&status, pending))
+                pending = SUP_HMI_COMMAND_COUNT;
 
             if (pending != SUP_HMI_COMMAND_COUNT) {
                 const uint32_t sequence = next_command_sequence + 1U;
