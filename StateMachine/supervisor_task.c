@@ -36,23 +36,20 @@ typedef enum {
     VALIDATION_WORKER_DONE
 } ValidationWorkerState;
 
-/* All shared state code receives monotonic microseconds through inputs;
- * replace this RTOS-tick adapter with an MCU timer in hardware builds. */
+/* Real M7 installs a timer port; PC tests keep their RTOS-tick clock. */
+static SupervisorTimingPort g_timing;
+
 static uint64_t supervisor_now_us(void)
 {
+    if (g_timing.monotonic_us != NULL)
+        return g_timing.monotonic_us(g_timing.context);
     return (uint64_t)xTaskGetTickCount() * UINT64_C(1000000) /
            (uint64_t)configTICK_RATE_HZ;
 }
 
 static uint32_t supervisor_now_ms(void)
 {
-    const TickType_t ticks =
-        xTaskGetTickCount();
-
-    return (uint32_t)(
-        ((uint64_t)ticks * 1000ULL) /
-        (uint64_t)configTICK_RATE_HZ
-    );
+    return (uint32_t)(supervisor_now_us() / UINT64_C(1000));
 }
 
 typedef struct
@@ -95,6 +92,10 @@ typedef struct
     uint32_t next_program_id;
     bool initialized;
     bool execution_stream_retained;
+    uint32_t timer_missed_periods;
+    uint32_t timer_timeouts;
+    uint32_t timer_overruns;
+    uint32_t timer_max_cycle_us;
 
     /* Only the validation worker mutates 'validation' or flash storage when
      * async mode is enabled. Supervisor reads exclusively a copied result.
@@ -984,8 +985,40 @@ static void supervisor_task_entry(void *argument)
         }
     }
 
+    const bool hardware_timed = context->config.timing.wait_next != NULL;
+    if (hardware_timed &&
+        !context->config.timing.start(context->config.timing.context)) {
+        /* Refuse any operation when the physical timing source fails. */
+        emit_step_failure(context, 0xE002U);
+        for (;;) { vTaskDelay(1U); }
+    }
+
     for (;;)
     {
+        if (hardware_timed) {
+            /* TIM3 increments a counting task notification every 2 ms.
+             * A queued count >1 or missing count is a failed deadline. */
+            const uint32_t periods = context->config.timing.wait_next(
+                context->config.timing.context, pdMS_TO_TICKS(6U));
+            if (periods != 1U) {
+                if (periods == 0U) {
+                    if (context->timer_timeouts < UINT32_MAX)
+                        ++context->timer_timeouts;
+                } else {
+                    const uint32_t missed = periods - 1U;
+                    const uint32_t available =
+                        UINT32_MAX - context->timer_missed_periods;
+                    context->timer_missed_periods +=
+                        missed > available ? available : missed;
+                }
+                if (context->machine.activeState != ROBOT_STATE_FAULT &&
+                    context->machine.activeState !=
+                        ROBOT_STATE_EMERGENCY_STOP)
+                    emit_step_failure(context, 0xE003U);
+            }
+        }
+        const uint64_t cycle_start_us =
+            hardware_timed ? supervisor_now_us() : UINT64_C(0);
         TRACE_BEGIN(GP_TIMING_SUPERVISOR);
         /* Acquisition only: raw inputs do not authorize motion or create HMI
          * events until a separately tested input adapter is connected. */
@@ -1055,7 +1088,23 @@ static void supervisor_task_entry(void *argument)
                 context->config.io.context, &outputs);
         }
         TRACE_END(GP_TIMING_SUPERVISOR, true);
-        vTaskDelayUntil(&last_wake, context->config.period_ticks);
+        if (hardware_timed) {
+            const uint64_t elapsed = supervisor_now_us() - cycle_start_us;
+            const uint32_t sampled = elapsed > UINT32_MAX
+                ? UINT32_MAX : (uint32_t)elapsed;
+            if (sampled > context->timer_max_cycle_us)
+                context->timer_max_cycle_us = sampled;
+            if (elapsed >= UINT64_C(2000)) {
+                if (context->timer_overruns < UINT32_MAX)
+                    ++context->timer_overruns;
+                if (context->machine.activeState != ROBOT_STATE_FAULT &&
+                    context->machine.activeState !=
+                        ROBOT_STATE_EMERGENCY_STOP)
+                    emit_step_failure(context, 0xE004U);
+            }
+        } else {
+            vTaskDelayUntil(&last_wake, context->config.period_ticks);
+        }
     }
 }
 
@@ -1080,6 +1129,13 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
         (config->emergency_stop_services == NULL) ||
         (config->validation_sample_budget == 0U) ||
         (config->period_ticks == 0U) ||
+        (((config->timing.monotonic_us != NULL) ||
+          (config->timing.start != NULL) ||
+          (config->timing.wait_next != NULL)) &&
+         ((config->timing.monotonic_us == NULL) ||
+          (config->timing.start == NULL) ||
+          (config->timing.wait_next == NULL) ||
+          (config->period_ticks != 2U))) ||
         (config->ipc != NULL && !gp_ipc_valid(config->ipc)))
     {
         return false;
@@ -1087,6 +1143,7 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
 
     memset(&g_supervisor, 0, sizeof(g_supervisor));
     g_supervisor.config = *config;
+    g_timing = config->timing;
     g_supervisor.next_program_id = config->first_program_id;
     g_supervisor.entered_state = ROBOT_STATE_COUNT;
 
@@ -1257,6 +1314,10 @@ bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out)
     out->working_segment = g_supervisor.teaching.working_segment;
     out->captured_points = g_supervisor.teaching.captured_point_count;
     out->segment_count = g_supervisor.teaching.draft.segment_count;
+    out->timer_missed_periods = g_supervisor.timer_missed_periods;
+    out->timer_timeouts = g_supervisor.timer_timeouts;
+    out->timer_overruns = g_supervisor.timer_overruns;
+    out->timer_max_cycle_us = g_supervisor.timer_max_cycle_us;
     taskEXIT_CRITICAL();
     return true;
 }

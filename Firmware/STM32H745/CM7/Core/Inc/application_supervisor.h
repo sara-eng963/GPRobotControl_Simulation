@@ -7,4 +7,7 @@
 bool application_supervisor_board_configure(SupervisorTaskConfig *config);
 /* Target-specific composition of the existing supervisor, not a new RTOS. */
 bool application_supervisor_start(const SupervisorTaskConfig *config);
+/* Called from CubeMX HAL_TIM_PeriodElapsedCallback; ignores TIM6. */
+void application_supervisor_timer_period_elapsed_isr(
+    TIM_HandleTypeDef *timer);
 #endif

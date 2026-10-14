@@ -66,6 +66,17 @@ typedef struct {
     uint32_t timestamp_ms;
 } SupervisorDriveSnapshot;
 
+/* Optional physical-clock port. NULL retains FreeRTOS tick/DelayUntil
+ * behavior in SIL and existing desktop simulation targets.
+ * All callbacks run in the Supervisor task, NOT inside a timer interrupt. */
+typedef struct {
+    uint64_t (*monotonic_us)(void *context);
+    bool (*start)(void *context);
+    /* Counting notification: 0 = timeout; >1 = periods missed. */
+    uint32_t (*wait_next)(void *context, TickType_t timeout_ticks);
+    void *context;
+} SupervisorTimingPort;
+
 typedef struct
 {
     /*
@@ -118,6 +129,7 @@ typedef struct
 
     /* Optional board adapter; NULL callbacks allow incremental integration. */
     SupervisorIoServices io;
+    SupervisorTimingPort timing;
 } SupervisorTaskConfig;
 
 /* Read-only diagnostics; state contexts remain owned by SupervisorTask. */
@@ -134,6 +146,10 @@ typedef struct {
     TaughtSegment working_segment;
     uint8_t captured_points;
     uint16_t segment_count;
+    uint32_t timer_missed_periods;
+    uint32_t timer_timeouts;
+    uint32_t timer_overruns;
+    uint32_t timer_max_cycle_us;
 } SupervisorDiagnostics;
 bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out);
 

@@ -18,6 +18,84 @@
 
 /* CubeMX-generated in CM7/Core/Src/main.c. Never reinitialize it here. */
 extern FDCAN_HandleTypeDef hfdcan1;
+extern TIM_HandleTypeDef htim2;
+extern TIM_HandleTypeDef htim3;
+
+/* TIM2 1 MHz 32-bit overflow extension; only the ISR increments the high
+ * word. Supervisor task reads it under FreeRTOS task critical section. */
+static volatile uint32_t g_tim2_wraps;
+static volatile bool g_timing_running;
+
+static uint64_t gp_time_now_us(void *unused)
+{
+    (void)unused;
+    taskENTER_CRITICAL();  /* Masks the configured TIM2 priority 5. */
+    uint32_t high = g_tim2_wraps;
+    uint32_t low = __HAL_TIM_GET_COUNTER(&htim2);
+    if (__HAL_TIM_GET_FLAG(&htim2, TIM_FLAG_UPDATE) != RESET) {
+        ++high; /* Overflow IRQ pending, but currently masked. */
+        low = __HAL_TIM_GET_COUNTER(&htim2);
+    }
+    taskEXIT_CRITICAL();
+    return ((uint64_t)high << 32U) | (uint64_t)low;
+}
+
+static bool gp_timer_start(void *unused)
+{
+    (void)unused;
+    if (g_timing_running || htim2.Instance != TIM2 ||
+        htim3.Instance != TIM3)
+        return false;
+    RCC_ClkInitTypeDef clock = {0};
+    uint32_t flash_latency = 0U;
+    HAL_RCC_GetClockConfig(&clock, &flash_latency);
+    /* Fail closed if the measured system clock configuration no longer
+     * matches the CubeMX-generated 1 MHz counter / 2 ms cycle settings. */
+    if (HAL_RCC_GetPCLK1Freq() != 64000000U ||
+        clock.APB1CLKDivider != RCC_APB1_DIV1 ||
+        htim2.Init.Prescaler != 63U || htim2.Init.Period != UINT32_MAX ||
+        htim3.Init.Prescaler != 63U || htim3.Init.Period != 1999U)
+        return false;
+
+    g_tim2_wraps = 0U;
+    __HAL_TIM_SET_COUNTER(&htim2, 0U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    /* HAL TIM init emits UG/UIF; clear stale update before Start_IT. */
+    __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE);
+    __HAL_TIM_CLEAR_FLAG(&htim3, TIM_FLAG_UPDATE);
+    if (HAL_TIM_Base_Start_IT(&htim2) != HAL_OK)
+        return false;
+    g_timing_running = true;
+    if (HAL_TIM_Base_Start_IT(&htim3) != HAL_OK) {
+        g_timing_running = false;
+        (void)HAL_TIM_Base_Stop_IT(&htim2);
+        return false;
+    }
+    return true;
+}
+
+static uint32_t gp_timer_wait(void *unused, TickType_t timeout_ticks)
+{
+    (void)unused;
+    return (uint32_t)ulTaskNotifyTake(pdTRUE, timeout_ticks);
+}
+
+/* Delegate only TIM2/TIM3; never invoke motor, CANopen or path logic in ISR. */
+void application_supervisor_timer_period_elapsed_isr(
+    TIM_HandleTypeDef *timer)
+{
+    if (!g_timing_running || timer == NULL) return;
+    if (timer->Instance == TIM2) {
+        ++g_tim2_wraps;
+    } else if (timer->Instance == TIM3) {
+        TaskHandle_t owner = supervisor_task_handle();
+        if (owner != NULL) {
+            BaseType_t woken = pdFALSE;
+            vTaskNotifyGiveFromISR(owner, &woken);
+            portYIELD_FROM_ISR(woken);
+        }
+    }
+}
 
 /* An UNDEFINED weak function reference is NULL when no real board module
  * is linked. The header declaration intentionally remains strong so the
@@ -120,7 +198,7 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
         !board->canopen_master->initialized ||
         !can_backend_valid(board->canopen_master->backend) ||
         board->io.read_inputs == NULL || board->io.write_outputs == NULL ||
-        board->period_ticks == 0U)
+        board->period_ticks != 2U)
     {
         revoke_unstarted_board(board);
         return false;
@@ -140,6 +218,12 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
     static SupervisorTaskConfig config;
     config = *board;
     config.ipc = shared;
+    /* The actual board provider remains mandatory: timing cannot spoof
+     * safety conditions, a CAN transport or physical drive feedback. */
+    config.timing.monotonic_us = gp_time_now_us;
+    config.timing.start = gp_timer_start;
+    config.timing.wait_next = gp_timer_wait;
+    config.timing.context = NULL;
     if (!supervisor_task_init(&config) || !supervisor_task_start(4U))
     {
         revoke_unstarted_board(board);
