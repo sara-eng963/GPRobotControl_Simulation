@@ -124,3 +124,16 @@ Evidence is from the user's WSL console output; hardware timer behavior remains 
 User ran a targeted WSL check against the actual `GP_Stage3_Repro` files after code generation. **Saved .ioc** shows `NVIC1.TIM3_IRQn=true\\:5\\:0\\:false\\:false\\:true\\:true\\:true\\:true\\:true`, `TIM3.IPParameters=Prescaler` and `TIM3.Prescaler=63`; **no persisted TIM3 counter-period key**. Generated `CM7/Core/Src/main.c` has `htim3.Init.Prescaler = 63`, `htim3.Init.CounterMode = TIM_COUNTERMODE_UP`, and `htim3.Init.Period = 65535`. The mismatch is therefore attributable to the period **not being saved as a nondefault CubeMX parameter** rather than to a contradictory saved `1999` field. The precise UI mechanism (e.g. edit not committed) remains unproven.
 
 **Corrective step pending operator result:** CubeMX TIM3 Parameter Settings → set Counter Period to `1999`, **confirm with Enter/Tab and focus change**, save `.ioc`, and *before regeneration* verify `TIM3.IPParameters` includes its period and `TIM3.Period=1999` or the equivalent generated CubeMX key. Only then regenerate once and verify `htim3.Init.Period = 1999`. Keep all FDCAN/IPC/dual-core configuration unchanged. No software/hardware timing acceptance until clean compile, link and measured runtime behavior.
+
+
+## TIM3 .ioc persisted correction — verified (2026-10-14)
+
+Operator explicitly verified the saved working `GP_Stage3_Repro/GP_STM32H745.ioc` with a read-only WSL grep after editing CubeMX:
+
+```ini
+TIM3.IPParameters=Prescaler,Period
+TIM3.Period=1999
+TIM3.Prescaler=63
+```
+
+**PASS: CubeMX project configuration now persists the desired 2 ms / 500 Hz TIM3 period setting** (given previously screenshot-confirmed APB1 timer input 64 MHz). This does **not yet** verify regenerated `CM7/Core/Src/main.c` or a firmware build. Operator's next gate: regenerate code from the saved working `.ioc`, verify `htim2.Init.{Prescaler,Period} = {63,4294967295}` and `htim3.Init.{Prescaler,Period} = {63,1999}` in generated M7 `main.c`, then audit generated changes against the independent pre-timer backup and target builds before software acceptance.
