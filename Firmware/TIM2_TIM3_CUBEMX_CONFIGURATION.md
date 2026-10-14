@@ -236,3 +236,19 @@ The user's `git diff --cached --name-only` returned **no staged files**. Next ga
 3. `StateMachine/supervisor_task.h/.c` adds an **optional** `SupervisorTimingPort` (monotonic microseconds, start, wait for counted periods). The STM32 composition supplies it; PC simulation remains on FreeRTOS's `xTaskGetTickCount/vTaskDelayUntil`. The target runs its main state-machine loop upon TIM3 notifications and records missed counts (>1), notification timeouts (0), and elapsed cycles >=2000us; it emits state-failure events and publishes diagnostic counts and max cycle duration. The port requires a 2-tick config at 1 kHz. The existing application board supplier remains absent by default and fails closed, so **no timer-based motion starts without real physical board commissioning**.
 
 **Verification limitations:** implementation is **committed but not independently clean-built or run on an STM32**. Need run `python3 Firmware/Tests/check_tim2_tim3_integration.py` (read-only static wiring/mathematical gate), then `bash Firmware/Tests/stage_m7_timer_integration.sh "/mnt/d/University/Graduation Project/STM32/GP_Stage3_Repro"`, refresh and clean-build **both** cores using CubeIDE. The gate does **not** measure interrupt latency, task wake-up jitter or bus throughput. Hardware tests, 71.58-minute TIM2 wrap stress, ISR priority, timestamp monotonicity under load, and real 500 Hz CAN target intervals remain pending. A TIM3 configuration of 500 Hz **does not guarantee** 500 Hz motion execution.
+
+
+## TIM2/TIM3 integration static gate + independent project staging PASS — 2026-10-14
+
+The operator ran the following on branch `sara/can-replacement` after pulling through commit `8c0346d`:
+- `python3 Firmware/Tests/check_tim2_tim3_integration.py` returned 21 labeled individual **PASS** checks and a final **PASS: TIM2/TIM3 source wiring and arithmetic reference checks (static only)**.
+- `bash Firmware/Tests/stage_m7_timer_integration.sh "/mnt/d/University/Graduation Project/STM32/GP_Stage3_Repro"` repeated those checks (by design) and reported:
+  - `PASS: staged CM7/Core/Src/main.c`
+  - `PASS: staged CM7/Core/Src/application_supervisor.c`
+  - `PASS: staged CM7/Core/Inc/application_supervisor.h`
+  - `PASS: staged canonical CM7 application C and headers`
+  - `PASS: CM7 HAL timer callbacks and canonical Supervisor sources staged.`
+- There were no displayed failures. The duplication is expected: the staging script deliberately reruns the static gate before copying files.
+- **Meaning:** Source-level TIM2/TIM3 wiring and synchronization of the current GitHub code into the independent CubeIDE verifier passed. This is **NOT** evidence of a compiler/linker pass for the newly integrated sources, a simulated target-timebase execution, a physical 500 Hz measurement, or certified safe motion. The verified pre-timer backup is separate and was not targeted by the stage script.
+
+**Next acceptance gate:** Refresh both projects in the existing STM32CubeIDE 2.2.0 workspace, clean-build **Cortex-M7 and Cortex-M4**, and record errors/warnings plus current ELF sizes. If either fails, examine the exact HAL/FreeRTOS compiler or linker messages and revise the canonical source rather than manually creating replacement HAL behavior. Then run a source-controlled **target ELF symbol/clock contract check** and a separate runtime/timing fault-injection suite (timer start failure, missing notification, count >1, cycle >=2 ms, TIM2 pending overflow, ISR priority and multiple-wrap limitation) before declaring software integration complete.
