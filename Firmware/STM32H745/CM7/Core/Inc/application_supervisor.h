@@ -1,6 +1,7 @@
 #ifndef APPLICATION_SUPERVISOR_H
 #define APPLICATION_SUPERVISOR_H
 #include <stdbool.h>
+#include "stm32h7xx_hal_tim.h" /* TIM_HandleTypeDef: ST HAL timer API */
 #include "supervisor_task.h"
 
 /* Fail-closed default until an actual STM32 board port supplies real I/O. */
