@@ -13,7 +13,7 @@ flags=(
   -DSTM32H745xx -DUSE_HAL_DRIVER -DCORE_CM7=1
   -DGP_IPC_FREERTOS_BACKEND=1
   -I"$ROOT/StateMachine" -I"$ROOT/Intercore"
-  -I"$FW/CM7/Core/Inc" -I"$FW/Common/Inc"
+  -I"$FW/CM7/Core/Inc" -I"$FW/CM7/Board/Inc" -I"$FW/Common/Inc"
   -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
   -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2"
   -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F"

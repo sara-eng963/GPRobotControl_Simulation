@@ -1,0 +1,34 @@
+#ifndef GP_BOARD_COMMISSIONING_H
+#define GP_BOARD_COMMISSIONING_H
+
+#include "supervisor_task.h"
+#include <stdbool.h>
+#include <stdint.h>
+
+/*
+ * Board-specific provision interface, NOT a safety certification API.
+ *
+ * A real, separately reviewed board module must supply this function.
+ * The firmware deliberately provides no default implementation, and
+ * application_supervisor_board_configure() refuses to start without one.
+ * The production implementation must use verified physical inputs, external
+ * E-stop/STO/brakes, installed transceiver/pin mapping, and the selected
+ * drive's vendor EDS/object dictionary. Never substitute simulated "ready".
+ */
+typedef struct {
+    SupervisorTaskConfig supervisor;
+    uint8_t node_ids[JOINT_DRIVE_AXES];
+    uint8_t node_count;
+    uint32_t heartbeat_timeout_ms;
+    uint32_t sdo_timeout_ms;
+    /* Explicit interlock integration must exist in the physical board port. */
+    bool (*hardware_interlocks_verified)(void *context);
+    void *hardware_interlock_context;
+} GpBoardCommissioning;
+
+/* Declared strong here. In the composition implementation, this symbol is
+ * referenced weakly so an absent production board port links and fails closed.
+ * No drive node IDs, safety status, or physical pin mapping are invented. */
+bool gp_board_supply_commissioned_config(GpBoardCommissioning *out);
+
+#endif /* GP_BOARD_COMMISSIONING_H */
