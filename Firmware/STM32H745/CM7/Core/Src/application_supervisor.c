@@ -100,6 +100,20 @@ bool application_supervisor_board_configure(SupervisorTaskConfig *config)
     return true;
 }
 
+/* Roll back transport ownership when initial Supervisor composition fails.
+ * No CANopen runtime task is bound until Supervisor starts. Do not leave the
+ * peripheral operating after an invalid configuration/IPC failure. */
+static void revoke_unstarted_board(const SupervisorTaskConfig *board)
+{
+    if (!g_board_prepared || board == NULL ||
+        board->canopen_master != &g_canopen_master)
+        return;
+
+    canopen_master_close(&g_canopen_master);
+    memset(&g_can_backend, 0, sizeof(g_can_backend));
+    g_board_prepared = false;
+}
+
 bool application_supervisor_start(const SupervisorTaskConfig *board)
 {
     if (board == NULL || board->canopen_master == NULL ||
@@ -107,12 +121,18 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
         !can_backend_valid(board->canopen_master->backend) ||
         board->io.read_inputs == NULL || board->io.write_outputs == NULL ||
         board->period_ticks == 0U)
+    {
+        revoke_unstarted_board(board);
         return false;
+    }
 
     GpIpcShared *const shared = (GpIpcShared *)(uintptr_t)GP_SHARED_IPC_BASE;
     if (!gp_ipc_valid(shared) ||
         (board->ipc != NULL && board->ipc != shared))
+    {
+        revoke_unstarted_board(board);
         return false;
+    }
 
     /* Avoid another large stack-local configuration on CubeMX's
      * provisional 512-byte defaultTask stack. Runtime stack watermark
@@ -120,5 +140,10 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
     static SupervisorTaskConfig config;
     config = *board;
     config.ipc = shared;
-    return supervisor_task_init(&config) && supervisor_task_start(4U);
+    if (!supervisor_task_init(&config) || !supervisor_task_start(4U))
+    {
+        revoke_unstarted_board(board);
+        return false;
+    }
+    return true;
 }
