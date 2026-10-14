@@ -289,3 +289,12 @@ Following the HAL umbrella-header correction (`e9bba4b`), the operator **reporte
 **Validated by user report:** ARM Cortex-M7 build now compiles and links the integrated code, including ST-generated TIM2/TIM3 init/IRQ, the application timer HAL callback hook, counting FreeRTOS task wakeups, and Supervisor optional timing port. **Build console, warnings, ELF sizes and specific symbols were not supplied**, so do not claim zero warnings, measured runtime or deterministic loop execution.
 
 **Next gates:** independent **Cortex-M4 clean build** of the same verifier, exact **ELF symbol verification** and diagnostics, then software timing fault-injection and TIM2 overflow/ISR accounting review. Source-level tests alone do not establish real 500 Hz bus/drive performance. The absent physical board provision function retains fail-closed startup.
+
+
+## Dual-core post-integration build milestone PASSED — 2026-10-14
+
+After the original HAL include-order failure was corrected by switching the public CM7 `application_supervisor.h` to the STM32Cube-configured umbrella header, the operator reported **successful Cortex-M7** and subsequently **successful Cortex-M4** builds in the independent `GP_Stage3_Repro` STM32CubeIDE workspace. The integrated firmware now passes the reported **compiler/linker build gate on both cores**. The previously completed source-wiring checks and canonical-to-verifier staging also passed.
+
+**Evidence boundary:** This is a user-reported successful build, not a captured build transcript or measured firmware runtime. Build warning counts, final ELF image sizes, and exact symbol inventories have not yet been supplied. The code remains fail-closed without a physical board commissioning provider; TIM2/TIM3 hardware runtime scheduling, TIM2 wrap behavior under nested/preempted ISRs, missed-period and timeout fault handling, ISR/task wake-up latency and 500 Hz CAN motion output are **not verified on physical hardware**.
+
+**Next:** inspect **both generated ELF files** at the expected verifier paths via `arm-none-eabi-nm`/`arm-none-eabi-size`, recording strong timer IRQ and HAL callback symbols on M7 and intact IPC symbols on both cores; do not infer hardware timing from symbol existence. Then independently exercise timing fault injection, counter wrap and deadline accounting, and audit the hardware-deferred safety assumptions.
