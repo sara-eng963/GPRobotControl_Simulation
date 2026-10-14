@@ -89,7 +89,7 @@ bool application_ipc_service_read_status(
 
 bool application_ipc_service_submit_hmi(SupervisorHmiCommand command)
 {
-    if (command < SUP_HMI_LINE || command >= SUP_HMI_COMMAND_COUNT ||
+    if ((uint32_t)command >= (uint32_t)SUP_HMI_COMMAND_COUNT ||
         command_queue == NULL)
         return false;
 

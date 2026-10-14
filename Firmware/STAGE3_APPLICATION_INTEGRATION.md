@@ -124,3 +124,9 @@ bash Firmware/Tests/check_intercore_notifications.sh
 Then sync the complete tracked firmware tree into the existing standalone STM32CubeIDE verification directory, **stage** canonical headers/sources using the Stage 2 scripts, and clean-build both CM7/CM4 images. Verify `application_ipc_service_initialize`, `application_ipc_service_run` and `gp_ipc_m4_receive` appear in the CM4 ELF before calling 3B-1 statically integrated. No such builds/tests were executed via GitHub.
 
 **Stage 3B-2 dependency:** integrate the M7 Supervisor composition using real task initialization and explicit fail-closed I/O. Application IPC itself does not permit robot motion, and the new CM4 service must not be treated as proof of functional bidirectional messaging without the M7 task and physical hardware.
+
+### Stage 3B-1 ARM compile warning correction (2026-10-14)
+
+User-executed local verification on commit `870e575` failed `check_m4_application_ipc.sh` with `-Werror=type-limits` at `application_ipc_service.c:92`: comparing nonnegative enum `SupervisorHmiCommand` against the first zero-valued enumerator was provably false under the GCC ARM enum representation. Replaced the two-sided comparison with the **unsigned upper-bound** check `(uint32_t)command >= (uint32_t)SUP_HMI_COMMAND_COUNT`. This also rejects negative out-of-range enum casts. No IPC ABI or task behavior changed for legitimate commands.
+
+The user separately ran `check_intercore_startup_compile.sh` and `check_intercore_notifications.sh`; both **passed at ARM/source-check level**. The new corrected application IPC compilation check and full dual-image STM32CubeIDE builds **have not yet been executed**; leave 3B-1 verification pending.
