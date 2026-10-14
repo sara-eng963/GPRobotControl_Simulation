@@ -1,6 +1,6 @@
 # Stage 3 Batch B5 — HMI lifecycle and consolidated software qualification
 
-**Source status (2026-10-14):** B5 committed; operator CubeIDE and WSL acceptance **pending**. B1–B4 were previously accepted at their declared software gates.
+**Software acceptance (2026-10-14): PASS**, as confirmed by operator-reported successful CM7/CM4 CubeIDE builds and the complete B5 acceptance script transcript. See `STAGE3_BATCH_B5_ACCEPTANCE.md`.
 
 ## Scope
 
@@ -41,8 +41,10 @@ software/host/ARM/ELF qualification only; core restart policy, powered
 STM32 timing, NOR, physical HMI and certified robot safety are Stage C/
 commissioning gates.
 
-**Do not mark B5 accepted until the operator supplies the full script PASS
-and independent target builds.**
+**B5 ACCEPTED at the software gate:** operator confirmed both IDE builds
+and provided final `PASS: Stage 3 Batch B5 consolidated B1-B5 software
+and dual-core ELF gates`. See the dated evidence report. This does not
+qualify powered hardware or a commissioned safety channel.
 
 ## Linker-garbage-collection scope
 
