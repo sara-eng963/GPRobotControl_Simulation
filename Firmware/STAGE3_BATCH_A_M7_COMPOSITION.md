@@ -21,3 +21,25 @@ The initial test command had `set -e` and therefore **stopped before** running s
 ### Local rerun stopped at malformed test script; restored (2026-10-14)
 
 The second user-executed Batch A attempt (`set -euo pipefail`) stopped in `check_m7_board_canopen_composition.sh` at **Bash syntax error near line 54**, before any ARM/test assertions or staging in that attempt. Repository inspection found the preceding automated edit had accidentally copied a substantial suffix of the file twice and broken the `grep -Eq` quoting; this is a **test script corruption**, not an ARM firmware compilation result. The script was reconstructed from its known intact Git revision `f2763f9`, with the intended `nm`-based HAL reference check, absent board-supplier check and failure cleanup assertion reapplied in **`038be21`**. Next run must explicitly start with `bash -n Firmware/Tests/check_m7_board_canopen_composition.sh`; all ARM, host regression, CubeIDE and ELF results for the corrected Batch A revision are still pending operator evidence.
+
+
+### Operator software acceptance: all source gates PASSED (2026-10-14)
+
+Operator pulled commit `fc4dc63` into `~/freertos-pc-test` and executed the consolidated Batch A verification with `set -euo pipefail`. The following **actual reported outputs PASSED**:
+
+```text
+PASS: All five test scripts parse correctly
+PASS: board-supplied CANopen composition, fail-closed startup invariants
+PASS: HAL-active M7 CANopen composition ARM-compiled; adapter linked by reference
+PASS: M7 board gating, IPC ownership, and CubeIDE settings
+PASS: CM7 application ARM compile-only check (NOT target link)
+PASS: HAL1 Classic CAN backend mock frame and failure-path tests
+PASS: staged canonical CM7 application C and headers
+PASS: CM7 application staging manifest and repeatability
+PASS: CM4 task wiring and nonblocking shared transport contract
+PASS: CM4 application IPC ARM compile-only gate (not a firmware link)
+PASS: Batch A software checks and synchronization
+Commit: fc4dc63
+```
+
+The checked-out M7 `application_supervisor.c` and new `board_commissioning.h` were copied into `D:\\University\\Graduation Project\\STM32\\GP_Stage3_Repro` and verified with `cmp`. This is **successful local source-level/ARM-object and host mock verification**, *not* new CubeIDE firmware ELF build results. Required next evidence: clean-build CM7 and CM4 in the independent reproduction workspace, inspect ELF for **strong** `gp_fdcan_classic_backend_open` and `canopen_master_init`, **weak** `application_supervisor_board_configure`, and no strong physical supplier. Physical bus, drive commissioning, microsecond timer and measured 500 Hz constraints remain pending.
