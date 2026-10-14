@@ -43,3 +43,25 @@ Commit: fc4dc63
 ```
 
 The checked-out M7 `application_supervisor.c` and new `board_commissioning.h` were copied into `D:\\University\\Graduation Project\\STM32\\GP_Stage3_Repro` and verified with `cmp`. This is **successful local source-level/ARM-object and host mock verification**, *not* new CubeIDE firmware ELF build results. Required next evidence: clean-build CM7 and CM4 in the independent reproduction workspace, inspect ELF for **strong** `gp_fdcan_classic_backend_open` and `canopen_master_init`, **weak** `application_supervisor_board_configure`, and no strong physical supplier. Physical bus, drive commissioning, microsecond timer and measured 500 Hz constraints remain pending.
+
+
+### First complete target ELF evidence after Batch A integration (2026-10-14)
+
+Operator independently reported **both clean STM32CubeIDE Cortex-M7/M4 builds completed with zero errors** in `GP_Stage3_Repro` after the Batch A source checks and synchronization. Both ELF files existed. Symbol and size output, copied verbatim from the operator's WSL console:
+
+```text
+CM7: 08019e04 W application_supervisor_board_configure
+CM7: 08000b74 T canopen_master_init
+CM7: 080199b0 T gp_fdcan_classic_backend_open
+CM4: 08100a5c T application_ipc_service_run
+
+text    data  bss    dec
+CM7: 163656  112   92200  255968
+CM4: 24644   100   21148   45892
+```
+
+**Verified conclusion:** The previously discarded `gp_fdcan_classic_backend_open` is now strongly retained in the real **CM7 ELF**, alongside `canopen_master_init`; the M7 board-provider fallback remains **weak** and the selected board-supplier symbol was not displayed, so no physical board configuration was linked/authorized. M4 IPC service is strongly retained. The recorded M7 `text` increased by 3864 B and `bss` by 664 B compared with the initial clean baseline; both cores link.
+
+**Remaining issue in the one-off verification command:** It printed `=== Required symbol checks ===` but not the final `PASS` sentinel before returning to the shell prompt. Consequently do **not** claim the full strict shell gate completed. A plausible mechanism is `arm-none-eabi-nm ... | grep -Eq` combined with `set -o pipefail`, which can yield SIGPIPE when `grep -q` stops early; this is not yet proven. The already printed symbol table is independently convincing on the specific named functions; a follow-up robust check should capture `nm` to a file and verify with anchored patterns without producer-side SIGPIPE. Neither this ambiguity nor zero-error builds establish the 2 ms deadline or hardware operation.
+
+**Next batch (timing):** The current `supervisor_now_us` derives time from the 1 kHz FreeRTOS tick, and Supervisor uses `vTaskDelayUntil`. Path execution already uses absolute sample deadlines and skips missed/expired samples, but physical microsecond resolution and loop timing remain unverified. A CubeMX-generated 32-bit hardware timer (e.g. TIM2/TIM5) and careful monotonic-wrap semantics are needed before claiming real 500 Hz timing.
