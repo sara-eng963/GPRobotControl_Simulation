@@ -444,7 +444,12 @@ bool canopen_master_poll(
         return false;
     }
 
-    for (;;)
+    /* STM32 FDCAN receives up to 16 in hardware FIFO0. Drain at most
+     * two FIFO depths per Supervisor cycle to bound RX work at 500 Hz.
+     * Excess frames remain pending for the next poll; transport errors
+     * still fail immediately. See Stage C2 continuous-RX regression. */
+    for (uint32_t received = 0U;
+         received < CANOPEN_MASTER_MAX_RX_PER_POLL; ++received)
     {
         CanFrame frame;
 
