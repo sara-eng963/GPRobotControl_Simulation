@@ -1,6 +1,6 @@
 # Stage C2 — Integrated Fault Injection and Timing Feasibility
 
-**Status:** committed; independent WSL/CubeIDE acceptance PENDING.
+**Status:** PASS — C2 software acceptance based on the operator's WSL output on 2026-10-14, at source revision `9c0dd0d3f02240c663f4fa415121be7c75c12edd`. Refer to `STAGE3_C2_ACCEPTANCE.md` for the gate-by-gate evidence. Physical qualification and C3 remain pending.
 Branch: sara/can-replacement. Evidence scope is software-only.
 
 ## Concrete issue corrected
