@@ -124,6 +124,27 @@ set_tests_properties(intercore_trajectory_path_port_test
     PROPERTIES TIMEOUT 15)
 
 
+# B4: canonical storage worker/request library, host-only fake tests.
+add_library(intercore_trajectory_storage STATIC
+    Intercore/trajectory_storage_service.c)
+target_compile_features(intercore_trajectory_storage PUBLIC c_std_11)
+target_link_libraries(intercore_trajectory_storage PUBLIC
+    intercore_trajectory_stream)
+target_compile_options(intercore_trajectory_storage PRIVATE
+    -Wall -Wextra -Werror)
+add_executable(intercore_trajectory_storage_test
+    Intercore/Tests/test_trajectory_storage_service.c)
+target_link_libraries(intercore_trajectory_storage_test PRIVATE
+    intercore_trajectory_storage intercore_validation_storage)
+target_compile_options(intercore_trajectory_storage_test PRIVATE
+    -Wall -Wextra -Werror)
+add_test(NAME intercore_trajectory_storage_test
+    COMMAND intercore_trajectory_storage_test)
+set_tests_properties(intercore_trajectory_storage_test
+    PROPERTIES TIMEOUT 20)
+target_link_libraries(intercore_trajectory_path_port PUBLIC
+    intercore_trajectory_storage intercore_validation_storage)
+
 # Separate M7 validation math from the M4-owned QSPI/NOR storage.
 add_library(intercore_validation_storage STATIC
     Intercore/validation_storage_bridge.c)
