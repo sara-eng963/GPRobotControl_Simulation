@@ -20,21 +20,37 @@ for dir in \
     \( -name '*.c' -o -name '*.h' \) -delete
   while IFS= read -r -d '' file; do
     name="$(basename "$file")"
-    case "$dir/$name" in
-      CANComm/*.c) continue ;;
-      Intercore/*.c)
-        [[ "$name" == trajectory_stream_path_port.c ]] || continue ;;
+    # Match the DIRECTORY exactly: in a Bash case pattern, '*' also matches
+    # '/', so 'CANComm/*.c' would incorrectly exclude CANComm/CANopen/*.c.
+    case "$dir" in
+      CANComm)
+        [[ "$name" == *.h ]] || continue ;;
+      Intercore)
+        [[ "$name" == *.h ||
+           "$name" == trajectory_stream_path_port.c ]] || continue ;;
     esac
     cp "$file" "$APP/$dir/$name"
   done < <(find "$ROOT/$dir" -maxdepth 1 -type f \
     \( -name '*.c' -o -name '*.h' \) -print0)
 done
-[[ -f "$APP/StateMachine/supervisor_task.c" &&
-   -f "$APP/ControlCore/Kinematics/adls_ik.c" &&
-   -f "$APP/CANComm/CANopen/canopen_master.c" &&
-   ! -f "$APP/Intercore/ipc_mailbox.c" &&
-   ! -f "$APP/Intercore/ipc_mailbox_freertos.c" &&
-   ! -f "$APP/Intercore/trajectory_stream.c" ]] || {
-  echo "FAIL: source staging manifest incomplete/duplicated" >&2; exit 1;
-}
+for required in \
+  StateMachine/supervisor_task.c \
+  ControlCore/Kinematics/adls_ik.c \
+  CANComm/CANopen/canopen_master.c \
+  CANComm/CANopen/canopen_nmt.c \
+  CANComm/CANopen/canopen_sdo.c \
+  CANComm/CANopen/canopen_heartbeat.c \
+  Intercore/trajectory_stream_path_port.c; do
+  [[ -f "$APP/$required" ]] || {
+    echo "FAIL: staged source missing: $required" >&2; exit 1;
+  }
+done
+for forbidden in \
+  Intercore/ipc_mailbox.c \
+  Intercore/ipc_mailbox_freertos.c \
+  Intercore/trajectory_stream.c; do
+  [[ ! -f "$APP/$forbidden" ]] || {
+    echo "FAIL: duplicate firmware source staged: $forbidden" >&2; exit 1;
+  }
+done
 echo "PASS: staged canonical CM7 application C and headers"
