@@ -283,3 +283,19 @@ The operator ran a **read-only Python comparison** of `GP_Repo_Verification` aga
 **HAL data-length interpretation check:** ST's [HAL1 FDCAN header (`stm32h7xx-hal-driver` v1.11.4)](https://github.com/STMicroelectronics/stm32h7xx-hal-driver/blob/v1.11.4/Inc/stm32h7xx_hal_fdcan.h) defines `FDCAN_DLC_BYTES_0=0` through `FDCAN_DLC_BYTES_8=8`. Therefore the portable backend's current `received.dlc=(uint8_t)header.DataLength` agrees with the HAL1 Classic CAN interpretation. The *generated, installed* CubeH7 V1.13.0 header must still be the authoritative build-time version.
 
 **Next pending acceptance gate:** use the **newly generated** project without overwriting it from the older repository snapshot; **Clean → Build** CM7 and CM4 in STM32CubeIDE, capture the first genuine warning/error, and inspect HAL FDCAN and app symbols in the resulting CM7 ELF. This source-level regeneration check is *not* an active HAL compile/link pass, physical CAN pass, or completed robot board composition.
+
+
+### Cortex-M7 HAL FDCAN linker resolution and successful build (2026-10-14)
+
+The first post-generation **CM7 CubeIDE build failed** at link time: `undefined reference to HAL_FDCAN_Init` and consequential ARM/Thumb relocation errors. Diagnosis established that the official `Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c` existed on disk and was listed in the *on-disk* CM7 `.project`, but **was absent from the IDE's Project Explorer / Linked Resources**, had no `Debug` makefile entries, and produced no HAL FDCAN object. The user re-registered the existing ST source file as a **linked file in the CM7 Drivers/STM32H7xx_HAL_Driver folder** through STM32CubeIDE (rather than copying or rewriting the HAL source). This fixed the build.
+
+**User screenshot of the subsequent CM7 Build Console** shows:
+
+```text
+Finished building target: GP_STM32H745_CM7.elf
+text    data    bss     dec     hex
+159792  112     91536   251440  3d630
+14:47:15 Build Finished. 0 errors, 0 warnings.
+```
+
+This constitutes **an actual Cortex-M7 compile-and-link PASS with FDCAN included**, not a board-level execution test. Pending before Stage 3C acceptance: build CM4, capture `arm-none-eabi-nm` proof of HAL FDCAN and app/IPC symbols from both new ELFs, inspect and commit local generated HAL source/header and updated CM7 Eclipse link metadata into the repository without overwriting the verifier. The weak M7 board configuration provider still fails closed, and physical CAN operation is unverified.
