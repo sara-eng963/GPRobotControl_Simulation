@@ -249,3 +249,20 @@ The operator supplied screenshots of **both** STM32CubeMX middleware configurati
 Both configurations show **USE_PREEMPTION enabled**. Therefore the change from `rtos.0.ip=FREERTOS_M4` to `rtos.0.ip=FREERTOS_M7` in the local text diff did **not** remove either middleware instance in the GUI. **This does not prove it is semantically inert for generated files.** After regeneration, compare both core's `FreeRTOSConfig.h`, `freertos.c`, CMSIS RTOS startup, project metadata, USER CODE regions, and task initialization against the backup, and rebuild both. Do not hand-edit `rtos.0.ip` based solely on intuition.
 
 **Next control:** import the **saved** FDCAN-enabled local `.ioc` into the tracked repository (normalizing Windows-mount file permissions and line endings), commit it separately from generated firmware, and then run CubeMX code generation in the backed-up verification workspace. The present GitHub documentation does not imply this import/generation has occurred.
+
+
+### FDCAN1 .ioc committed and generated sources locally inspected (2026-10-14)
+
+The operator committed the actual saved `GP_STM32H745.ioc` to `sara/can-replacement` as **`c3d07a2`** (`config(stm32): configure FDCAN1 for 1Mbps Classic CAN`). Git reported **46 additions / 21 deletions** after restoring its original CRLF line endings; `git -c core.whitespace=cr-at-eol diff --check` passed. The earlier source-controlled `.ioc` is no longer the canonical FDCAN-disabled version.
+
+Next, the operator ran STM32CubeMX code generation **in the separate, backed-up Windows verification project**. They provided a WSL inspection confirming:
+
+- Both official vendor files now exist in `GP_Repo_Verification/Drivers/STM32H7xx_HAL_Driver/`: `Inc/stm32h7xx_hal_fdcan.h` and `Src/stm32h7xx_hal_fdcan.c`.
+- M7 generated `main.c` still contains `intercore_shared_memory_initialize` and `application_supervisor_start`.
+- M4 generated `main.c` still contains `intercore_startup_validate` and `application_ipc_service_run`.
+- M7 `.cproject` still contains source folders named `Application` and `Board`.
+- The checksum-based dry-run comparison against the **20261014_140623 pre-generation snapshot** reported changes to both core `.cproject` metadata, CM7 `.project`, CM7 `Core/Inc/stm32h7xx_hal_conf.h`, CM7 `Core/Src/main.c`, CM7 `Core/Src/stm32h7xx_hal_msp.c`, plus language settings and `.mxproject`.
+- Its `*deleting` lines mean **new items in the generated destination compared with the older backup**, including the expected new FDCAN HAL files and CubeMX `Backup/*.bak` directories; the command used `rsync -rcni --delete` (dry run), so this output does **not** report actual deletion.
+- The inventory did **not** show changes to linker scripts or `freertos.c`, subject to rechecking the actual files and successful target build.
+
+**Current acceptance:** generated FDCAN HAL files present and six application preservation substring checks pass. **Pending:** inspect actual `MX_FDCAN1_Init`, `HAL_FDCAN_MspInit`, active HAL module define, project source registration and both core FreeRTOS output; compile/link **both actual CubeIDE projects**. The `FDCAN` adapter's active branch has **not** yet passed a target build. Do **not** sync the older canonical firmware directory over this newly generated local verifier before inspecting/importing its generated changes. Physical bus operation still NOT RUN.

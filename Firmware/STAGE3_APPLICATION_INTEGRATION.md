@@ -266,3 +266,7 @@ PASS: staged canonical CM7 application C and headers
 ### Stage 3C — GUI configuration tracking (2026-10-14)
 
 The operator enabled **FDCAN1 on CM7**, selected **Classic CAN / Normal mode**, switched FDCAN from PLL1Q 129 MHz to PLL2Q 43 MHz by changing **DIVQ2 /2 → /6**, and entered **Nominal Prescaler 1, SJW 8, Seg1 34, Seg2 8**. CubeMX displayed **1,000,000 bit/s** and no clock errors. Full rationale, unfinalized parameters and exact GUI-vs-repo status are recorded in **[FDCAN1_CUBEMX_CONFIGURATION.md](FDCAN1_CUBEMX_CONFIGURATION.md)**. The repository `.ioc` is **not yet updated**, and no active HAL FDCAN generation/build has been reported. Do not promote this screenshot-level evidence into a hardware-enabled milestone.
+
+### Stage 3C-2: CubeMX FDCAN generation milestone (2026-10-14)
+
+Local saved `.ioc` committed as **`c3d07a2`** and vendor HAL FDCAN files subsequently generated in the separate CubeIDE verifier. User's dry-run checksum inventory reported HAL configuration/MSP/main and project-metadata changes; SRAM4 setup, M7 Supervisor, M4 startup and M4 IPC wiring remained detectable. This is **not** an active HAL firmware build or hardware communication pass. Full per-file generation audit and both core builds remain pending. See [FDCAN1_CUBEMX_CONFIGURATION.md](FDCAN1_CUBEMX_CONFIGURATION.md).
