@@ -21,5 +21,9 @@ GpIpcShared gp_stage2_linker_ipc
 GpTrajectoryShared gp_stage2_linker_trajectory
     GP_LINKER_PROBE __attribute__((section(".gp_shared_trajectory")));
 
+/* Synthetic validation allocation, never linked into production. */
+uint8_t gp_stage3_linker_validation[GP_SHARED_VALIDATION_BYTES]
+    GP_LINKER_PROBE __attribute__((section(".gp_shared_validation")));
+
 /* Real app uses CubeMX startup; this standalone probe uses an inert entry. */
 void Reset_Handler(void) { for (;;) { __asm volatile("nop"); } }

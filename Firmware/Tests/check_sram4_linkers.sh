@@ -32,7 +32,8 @@ for core in CM7 CM4; do
             "-Wl,-T,$FW/$core/STM32H745IITX_$mode.ld" \
             "-Wl,-Map,$OUT/$core-$mode.map" "$OUT/$core.o" -o "$elf"
         for pair in "gp_stage2_linker_ipc 38000000 .gp_shared_ipc 000008a0" \
-                    "gp_stage2_linker_trajectory 38001000 .gp_shared_trajectory 00003040"; do
+                    "gp_stage2_linker_trajectory 38001000 .gp_shared_trajectory 00003040" \
+                    "gp_stage3_linker_validation 38005000 .gp_shared_validation 00003000"; do
             read -r symbol addr section size <<< "$pair"
             actual="$("$NM" --defined-only "$elf" | awk -v n="$symbol" '$3==n {print $1}')"
             [[ "$actual" == "$addr" ]] || { echo "FAIL: $symbol at $actual, expected $addr"; exit 1; }

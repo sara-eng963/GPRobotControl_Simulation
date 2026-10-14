@@ -21,6 +21,9 @@ _Static_assert(sizeof(GpIpcShared) <= GP_SHARED_IPC_BYTES,
                "IPC storage exceeds its 4 KiB reservation");
 _Static_assert(sizeof(GpTrajectoryShared) <= GP_SHARED_TRAJECTORY_BYTES,
                "Trajectory storage exceeds its 16 KiB reservation");
+_Static_assert(GP_SHARED_VALIDATION_BASE == UINT32_C(0x38005000) &&
+               GP_SHARED_VALIDATION_BYTES == 12288U,
+               "Validation slot address/size mismatch");
 _Static_assert((sizeof(GpIpcShared) + sizeof(GpTrajectoryShared)) <= GP_SHARED_BYTES,
                "Objects exceed shared MPU window");
 

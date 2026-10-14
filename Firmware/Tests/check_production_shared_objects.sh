@@ -34,7 +34,8 @@ for mode in FLASH RAM; do
         -nostdlib -Wl,--gc-sections -Wl,-T,"$FW/CM7/STM32H745IITX_$mode.ld" \
         "$OUT/objects.o" "$OUT/reset.o" -o "$elf"
     for item in "intercore_ipc_shared 38000000 000008a0 .gp_shared_ipc" \
-                "intercore_trajectory_shared 38001000 00003040 .gp_shared_trajectory"; do
+                "intercore_trajectory_shared 38001000 00003040 .gp_shared_trajectory" \
+                "intercore_validation_storage 38005000 00003000 .gp_shared_validation"; do
         read -r symbol address size section <<< "$item"
         line="$("$NM" -S --defined-only "$elf" | awk -v n="$symbol" '$4==n{print $1, $2}')"
         [[ "$line" == "$address $size" ]] || {
