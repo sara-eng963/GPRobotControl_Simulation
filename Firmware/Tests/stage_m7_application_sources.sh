@@ -41,7 +41,7 @@ for required in \
   CANComm/CANopen/canopen_nmt.c \
   CANComm/CANopen/canopen_sdo.c \
   CANComm/CANopen/canopen_heartbeat.c \
-  Intercore/trajectory_stream_path_port.c
+  Intercore/trajectory_stream_path_port.c \
   Intercore/validation_storage_bridge.c; do
   [[ -f "$APP/$required" ]] || {
     echo "FAIL: staged source missing: $required" >&2; exit 1;

@@ -11,6 +11,8 @@ DEST="$(realpath -m "$1")"
 }
 
 # Existing canonical Stage B1 M7 app staging (includes M7 validation bridge).
+bash -n "$ROOT/Firmware/Tests/stage_m7_application_sources.sh"
+bash -n "$ROOT/Firmware/Tests/stage_stage3_batch_b3.sh"
 bash "$ROOT/Firmware/Tests/stage_m7_application_sources.sh" "$DEST"
 
 # Apply ONLY the new M4 include/source-root entries, preserving other

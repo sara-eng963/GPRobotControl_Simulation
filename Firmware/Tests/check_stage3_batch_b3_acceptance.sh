@@ -57,6 +57,12 @@ print("PASS: canonical B3 M7/M4 sources and CubeIDE include/source settings")
 PY
 
 cd "$ROOT"
+# Guard against broken continuation or malformed Bash staging logic before
+# interpreting any ELF/runtime output as an integration acceptance.
+bash -n Firmware/Tests/stage_m7_application_sources.sh
+bash -n Firmware/Tests/stage_stage3_batch_b3.sh
+bash -n Firmware/Tests/check_stage3_batch_b3_acceptance.sh
+echo "PASS: B3 staging/acceptance Bash syntax"
 bash Firmware/Tests/check_shared_layout.sh
 bash Firmware/Tests/check_sram4_linkers.sh
 bash Firmware/Tests/check_production_shared_objects.sh
