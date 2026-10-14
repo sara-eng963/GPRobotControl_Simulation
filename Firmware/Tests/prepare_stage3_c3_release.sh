@@ -42,6 +42,14 @@ PREP="$(mktemp -d "$OUT_PARENT/prep-XXXXXXXX")"
   printf '%s\n' "$DEST"
 } > "$PREP/context.txt"
 date -u +%Y-%m-%dT%H:%M:%SZ > "$PREP/start_utc.txt"
+# Freeze the authoritative generated project metadata. A build must not
+# quietly rewrite .ioc/.cproject or linker configuration mid-signoff.
+sha256sum \
+  "$DEST/GP_STM32H745.ioc" \
+  "$DEST/CM7/.cproject" "$DEST/CM4/.cproject" \
+  "$DEST/CM7/STM32H745IITX_FLASH.ld" \
+  "$DEST/CM4/STM32H745IITX_FLASH.ld" \
+  > "$PREP/config_sha256.txt"
 # This mtime MUST predate actual, new linked M7/M4 binaries and their maps.
 touch "$PREP/rebuild_after_this.marker"
 echo "PASS: C3 frozen source revision $(git rev-parse --short HEAD)"
