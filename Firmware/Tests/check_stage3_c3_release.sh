@@ -2,9 +2,20 @@
 # C3: source-frozen, dual-ELF, software-only release qualification.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-[[ $# -eq 2 ]] || { echo "Usage: $0 <CubeIDE-root> <C3-PREP-directory>" >&2; exit 2; }
+[[ $# -ge 1 && $# -le 2 ]] || {
+  echo "Usage: $0 <CubeIDE-root> [C3-PREP-directory]" >&2; exit 2;
+}
 DEST="$(realpath -m "$1")"
-PREP="$(realpath -m "$2")"
+if [[ $# -eq 2 ]]; then
+  PREP="$(realpath -m "$2")"
+else
+  LATEST="$ROOT/.simulation-logs/stage-c3/latest_prep.txt"
+  [[ -s "$LATEST" ]] || {
+    echo "FAIL: no C3 preparation recorded; run prepare_stage3_c3_release.sh" >&2
+    exit 1
+  }
+  PREP="$(realpath -m "$(cat "$LATEST")")"
+fi
 [[ "$DEST" != "$ROOT" && "$DEST" != "$ROOT/"* &&
    -f "$DEST/GP_STM32H745.ioc" && -f "$DEST/CM7/.project" &&
    -f "$DEST/CM4/.project" ]] || {

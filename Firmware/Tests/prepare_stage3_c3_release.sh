@@ -52,6 +52,9 @@ sha256sum \
   > "$PREP/config_sha256.txt"
 # This mtime MUST predate actual, new linked M7/M4 binaries and their maps.
 touch "$PREP/rebuild_after_this.marker"
+# Latest checkpoint is just a pointer; acceptance still verifies the exact
+# SHA, path, frozen configuration, and two ELF build timestamps.
+printf '%s\n' "$PREP" > "$OUT_PARENT/latest_prep.txt"
 echo "PASS: C3 frozen source revision $(git rev-parse --short HEAD)"
 echo "PREP DIRECTORY: $PREP"
 echo "NEXT: STM32CubeIDE Refresh, Project > Clean both CM7/CM4, then Build both Debug targets."

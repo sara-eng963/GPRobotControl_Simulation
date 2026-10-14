@@ -56,9 +56,12 @@ and CM4) and **Build both Debug** projects in STM32CubeIDE.
 
 ```bash
 bash Firmware/Tests/check_stage3_c3_release.sh \
-  "/mnt/d/University/Graduation Project/STM32/GP_Stage3_Repro" \
-  "<PREP DIRECTORY printed above>"
+  "/mnt/d/University/Graduation Project/STM32/GP_Stage3_Repro"
 ```
+
+The last successful preparation checkpoint is located automatically.
+The two-argument form also accepts a specific `PREP DIRECTORY` if
+you want to qualify an older release snapshot explicitly.
 
 Only after a final script PASS may the operator record C3 as accepted.
 The successful run prints an evidence root and a software-only ZIP
