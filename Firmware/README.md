@@ -159,3 +159,7 @@ The actual StateMachine Supervisor can be started from the M7 default task throu
 ### Stage 3C-2a — FDCAN backend staged (hardware disabled)
 
 `CM7/Board/Src/fdcan_classic_backend.c` provides a conditional STM32CubeH7 **HAL1** Classic CAN implementation of the existing `CanBackend`. The board needs **CubeMX-generated FDCAN** before this transport can compile in active mode or drive CANopen; no pinout or bit timing has been assumed. The default supervisor board hook continues to refuse motion activation. See `STAGE3_APPLICATION_INTEGRATION.md`.
+
+### Stage 3C-2 — FDCAN1 CubeMX configuration log (GUI-only, 2026-10-14)
+
+See **[FDCAN1 CubeMX configuration and rationale](FDCAN1_CUBEMX_CONFIGURATION.md)** for the exact observed GUI values, 43 MHz PLL2Q clock calculation, 1 Mbit/s bit timing, screenshots-to-repository gap, and remaining FIFO/GPIO/NVIC decisions. This records an **in-progress local CubeMX configuration**, not a saved/committed `.ioc` or active FDCAN build.
