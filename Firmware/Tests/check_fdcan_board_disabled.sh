@@ -39,7 +39,8 @@ assert '#if defined(HAL_FDCAN_MODULE_ENABLED)' in b
 assert 'HAL_FDCAN_ConfigGlobalFilter' in b
 assert 'HAL_FDCAN_GetProtocolStatus' in b
 assert 'FDCAN_CLASSIC_CAN' in b
-assert '#define HAL_FDCAN_MODULE_ENABLED' not in config
+import re
+assert not re.search(r'^\\s*#\\s*define\\s+HAL_FDCAN_MODULE_ENABLED\\b', config, re.M)
 print("PASS: FDCAN Board source registration and CubeMX-disabled guard")
 PY
 echo "PASS: conditional CM7 board source compiles without unconfigured FDCAN"
