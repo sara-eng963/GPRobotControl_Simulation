@@ -15,7 +15,7 @@ flags=(
     -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
     -DUSE_HAL_DRIVER -DSTM32H745xx -DCORE_CM7=1
     -DGP_IPC_FREERTOS_BACKEND=1
-    -I"$ROOT/StateMachine" -I"$ROOT/Intercore"
+    -I"$ROOT/StateMachine" -I"$ROOT/Intercore" -I"$ROOT/CANComm"
     -I"$FW/CM7/Core/Inc" -I"$FW/CM7/Board/Inc"
     -I"$FW/Common/Inc"
     -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
