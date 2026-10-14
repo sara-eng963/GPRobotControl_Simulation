@@ -114,7 +114,11 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
         (board->ipc != NULL && board->ipc != shared))
         return false;
 
-    SupervisorTaskConfig config = *board;
+    /* Avoid another large stack-local configuration on CubeMX's
+     * provisional 512-byte defaultTask stack. Runtime stack watermark
+     * verification remains mandatory before any board operation. */
+    static SupervisorTaskConfig config;
+    config = *board;
     config.ipc = shared;
     return supervisor_task_init(&config) && supervisor_task_start(4U);
 }
