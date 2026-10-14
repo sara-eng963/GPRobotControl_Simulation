@@ -163,3 +163,8 @@ The actual StateMachine Supervisor can be started from the M7 default task throu
 ### Stage 3C-2 — FDCAN1 CubeMX configuration log (GUI-only, 2026-10-14)
 
 See **[FDCAN1 CubeMX configuration and rationale](FDCAN1_CUBEMX_CONFIGURATION.md)** for the exact observed GUI values, 43 MHz PLL2Q clock calculation, 1 Mbit/s bit timing, screenshots-to-repository gap, and remaining FIFO/GPIO/NVIC decisions. This records an **in-progress local CubeMX configuration**, not a saved/committed `.ioc` or active FDCAN build.
+
+
+### When the PCB, drives and sensors arrive
+
+Follow **[Hardware Arrival & Verification Plan](HARDWARE_ARRIVAL_VERIFICATION_PLAN.md)**. It is a stage-gated checklist covering MCU power/boot, both RTOS cores, SRAM4 IPC, FDCAN electrical/error/FIFO behavior, six-node CANopen/CiA-402, empirical 500 Hz deadlines, physical NOR storage/streaming, the external F/T guiding handle, independent E-stop/STO/brakes, initial motion, environmental testing, evidence collection and firmware changes driven by measured failures. It is **pre-hardware planning only**, not evidence that hardware or safety tests have passed.
