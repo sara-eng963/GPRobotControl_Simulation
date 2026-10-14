@@ -25,10 +25,23 @@ ROOT="$REPO/Firmware/STM32H745"
     exit 1
 }
 
-# Reject mismatched timer settings rather than copying defaulted ARR.
-grep -Eq '^TIM3\.Period=1999$' "$SOURCE/GP_STM32H745.ioc"
-grep -Eq '^TIM3\.Prescaler=63$' "$SOURCE/GP_STM32H745.ioc"
-grep -Eq '^TIM2\.Prescaler=63$' "$SOURCE/GP_STM32H745.ioc"
+# CubeMX writes the .ioc with CRLF on Windows. Match exact key/value pairs
+# after removing only the optional line-final carriage return; accept LF too.
+# Keep failures diagnostic rather than letting 'set -e' exit silently.
+require_ioc_entry() {
+    local expected="$1"
+    if ! awk -v expected="$expected" '{
+        sub(/\r$/, "", $0)
+        if ($0 == expected) found = 1
+    } END { exit found ? 0 : 1 }' "$SOURCE/GP_STM32H745.ioc"; then
+        echo "FAIL: missing saved CubeMX setting: $expected" >&2
+        exit 1
+    fi
+    echo "PASS: saved CubeMX setting: $expected"
+}
+require_ioc_entry 'TIM3.Period=1999'
+require_ioc_entry 'TIM3.Prescaler=63'
+require_ioc_entry 'TIM2.Prescaler=63'
 for token in \
     'htim2.Init.Prescaler = 63;' \
     'htim2.Init.Period = 4294967295;' \
@@ -47,7 +60,10 @@ do
     }
 done
 for token in 'TIM2_IRQHandler(void)' 'TIM3_IRQHandler(void)'; do
-    grep -Fq "$token" "$SOURCE/CM7/Core/Src/stm32h7xx_it.c"
+    grep -Fq "$token" "$SOURCE/CM7/Core/Src/stm32h7xx_it.c" || {
+        echo "FAIL: missing generated interrupt handler: $token" >&2
+        exit 1
+    }
 done
 
 # Preserve custom application files and untouched Cortex-M4.
