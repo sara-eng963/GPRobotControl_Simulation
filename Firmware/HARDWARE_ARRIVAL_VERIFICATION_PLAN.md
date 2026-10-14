@@ -12,6 +12,17 @@ tags: [graduation-project, stm32h745, hardware-bringup, canopen, safety, verific
 >
 > **Critical rule:** **No uncontrolled motor energization or robot motion.** All initial tests use disconnected actuator power or a properly secured bench setup. A software E-stop flag, CAN command, camera/person detector or FreeRTOS task is **not** a substitute for independent safety-related stop hardware. Electrical commissioning, brake handling and powered motion need competent supervision and a documented risk assessment.
 
+> **Progress reconciliation (2026-10-14, post-C2):** Sections below
+> preserve the *original hardware commissioning baseline* and may include
+> pre-B3/C2 source-review warnings. Current B1–B5, C1 and C2 software
+> gates are accepted; the previously unbounded
+> `canopen_master_poll()` loop now has a 32-frame-per-call limit.
+> The M4 validation/readback worker and HMI lifecycle are compiled and
+> software tested, but **real NOR board providers are still absent**.
+> Refer to `STAGE3_C3_HARDWARE_HANDOFF.md` and the latest accepted
+> C2 report for current status; none of the hardware H0–H10 gates has
+> passed merely because of a software change.
+>
 ## 0. Current project baseline — distinguish code from hardware
 
 | Subsystem | Implemented / verified in software so far | NOT YET VERIFIED / still to implement |
