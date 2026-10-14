@@ -145,7 +145,7 @@ for detailed decision rationale, test evidence and remaining risks.
 
 ## Stage 3 — Application integration
 
-See [Stage 3 engineering record](STAGE3_APPLICATION_INTEGRATION.md) for the **current milestone scoreboard**, historical audit decisions, complete remaining work and acceptance criteria. The original `check_application_arm_compilation.sh` is only a compile-only reconnaissance test; **both actual Debug ELFs have since built successfully** in the operator's existing verification workspace. Independent clean-checkout dual-core build reproducibility **passed at the compile/link level**; hardware runtime remains unverified.
+See [Stage 3 engineering record](STAGE3_APPLICATION_INTEGRATION.md) for the **current milestone scoreboard**, historical audit decisions, complete remaining work and acceptance criteria. **Batch A pre-hardware M7 board commissioning glue has now been committed, but is not yet ARM/CubeIDE verified**; see [Batch A composition contract](STAGE3_BATCH_A_M7_COMPOSITION.md). The default missing hardware provider still prevents startup. The original `check_application_arm_compilation.sh` is only a compile-only reconnaissance test; **both actual Debug ELFs have since built successfully** in the operator's existing verification workspace. Independent clean-checkout dual-core build reproducibility **passed at the compile/link level**; hardware runtime remains unverified.
 
 ### Stage 3B-1 — CM4 IPC service (ARM + ELF-link verified)
 

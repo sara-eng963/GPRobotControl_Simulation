@@ -57,6 +57,15 @@ To avoid incremental one-file-at-a-time reviews, group the remaining software wo
 
 **Standards-first constraints:** use STM32CubeMX-generated low-level FDCAN/QSPI/timers; official ST HAL/LL/CMSIS/FreeRTOS interfaces; verify CANopen CiA-301/402 behavior against established stacks and vendor EDS; only use custom glue for robot-specific application protocols. Reject placeholder motion-enabling board hooks, ad-hoc drivers, invented memory/stack budgets or declaring hardware validation from simulation. Track actual test commands/results by commit. 
 
+
+### Batch A — M7 board commissioning composition (code committed; tests pending)
+
+Implemented in **`2577f93`**, with M7 startup stack pressure reduced in **`7123734`**. Rather than fabricating physical I/O or motor node IDs, `CM7/Board/Inc/board_commissioning.h` defines a required **externally supplied** `gp_board_supply_commissioned_config` contract. The existing **weak fail-closed** `application_supervisor_board_configure` now validates physical interlock callback, physical supervisor I/O availability, coherent non-stop input snapshot and explicit six-node CANopen IDs/timeouts before calling `gp_fdcan_classic_backend_open` and `canopen_master_init`. Static storage avoids moving another large commissioning/config object onto the provisional 512-byte CubeMX defaultTask stack. **No commissioned physical supplier is defined; there is no active motion permission.**
+
+The code establishes a real HAL ↔ CANopen composition call path, while retaining source-of-truth ST HAL and existing CANopen coordinator. **Tests/builds for these new commits have not yet been executed by the operator.** Required next local checks: `bash Firmware/Tests/check_m7_board_canopen_composition.sh`, `bash Firmware/Tests/check_m7_application_integration.sh`, `bash Firmware/Tests/check_fdcan_hal_adapter_mock.sh`; stage changed M7 application file and new board header into the **separate** CubeIDE reproduction project; clean-build both targets and inspect `gp_fdcan_classic_backend_open` in M7 ELF. Conditional hardware logic cannot be claimed operational without real board supplier + safety design + timing qualification. Precise 2 ms hardware timing and motor bus saturation analysis are still open.
+
+See **[STAGE3_BATCH_A_M7_COMPOSITION.md](STAGE3_BATCH_A_M7_COMPOSITION.md)** for the board port contract, scope and limitations.
+
 ## 3A. Source-backed architecture decisions
 
 1. **Keep the Stage 2 boot, ABI, linker and EXTI infrastructure.** The tracked CM7 and CM4 `main.c` files call Stage 2 initializers before their independent FreeRTOS schedulers. Both still create only the CubeMX `defaultTask`; neither composes the real robot application. The Stage 2 CubeIDE builds were performed in a staged verification workspace; compiling the source in isolation or seeing a symbol in a host binary is not target-image integration.
