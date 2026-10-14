@@ -314,3 +314,14 @@ After the independently rebuilt M7 and M4 firmware was reported successful, the 
 **Strong, defined symbols in M4 ELF (PASS):** `application_ipc_service_run` (08100a5c), `gp_ipc_m4_receive` (08100dea). The operator's shell command was displayed with partial terminal line-mixing but both size tables and all requested symbols were printed clearly.
 
 **Acceptance scope:** compiled and linked runtime integration on both processors, symbols present at target flash addresses, and documented section sizes. `text/data/bss` output alone is **not a verified per-memory-bank linker utilization budget**; inspect map/linker script to measure DTCM, AXI SRAM and shared SRAM4 as needed. Executable symbols are not evidence that the fail-closed board provider has been configured or that a 500 Hz cycle actually runs. Detailed warning count, hardware timing jitter, PWM/update timing and bus/drive measurements remain unverified. **Next:** test missed TIM3 notification, count >1, cycle >2 ms, timer start failure, TIM2 pending wrap, and atomic timer-time read; run target symbol regression gate and host fault injection without invented physical inputs.
+
+
+## Next verification step — production-C host fault-injection harness (2026-10-14)
+
+The dual-core build/ELF checks already passed, but no STM32 board is available. New source-controlled host tests now exist:
+- `Firmware/Tests/run_m7_timer_fault_injection.py` selects specific **production C function bodies** from `CM7/Core/Src/application_supervisor.c` and timing branches from `StateMachine/supervisor_task.c`, inserts them into a host C harness and compiles with `cc -std=c11 -O0 -Wall -Wextra -Werror`.
+- `Firmware/Tests/m7_timer_fault_host.c` contains minimal HAL/FreeRTOS mocks and fault-injection scenarios for TIM2 pending wrap and ISR handoff, incorrect APB1 timer clock, TIM3 failed startup rollback, counting ISR notifications, missing/coalesced notification fault handling, saturating missed-period counts and 2 ms execution overrun detection.
+
+**Status: committed but unrun against the user's live WSL checkout.** Do **not** mark the host fault tests PASS until a user-run reports successful compilation and every test passed. They compile *extracted real C bodies*, not the entire STM32 firmware and not hardware; virtual interrupt timing, priority preemption, sustained multi-wrap periods, 500 Hz bus load and certified safety remain independently unverified.
+
+**Operator's next command:** `cd ~/freertos-pc-test && git pull --ff-only origin sara/can-replacement && python3 Firmware/Tests/run_m7_timer_fault_injection.py`. The harness uses a temporary directory and does not modify the CubeIDE reproduction or independently backed-up firmware. If a mock compiler issue occurs, fix the test harness and rerun; if a real production timing bug occurs, fix source with regression coverage rather than relaxing a safety assertion.
