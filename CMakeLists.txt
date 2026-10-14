@@ -124,6 +124,19 @@ set_tests_properties(intercore_trajectory_path_port_test
     PROPERTIES TIMEOUT 15)
 
 
+# B5: standalone transport-neutral status/command policy on the host.
+# The firmware uses the same C unit from CM4/Application/Intercore only.
+add_executable(intercore_hmi_lifecycle_test
+    Intercore/hmi_lifecycle.c
+    Intercore/Tests/test_hmi_lifecycle.c)
+target_compile_features(intercore_hmi_lifecycle_test PRIVATE c_std_11)
+target_compile_options(intercore_hmi_lifecycle_test PRIVATE
+    -Wall -Wextra -Werror)
+add_test(NAME intercore_hmi_lifecycle_test
+    COMMAND intercore_hmi_lifecycle_test)
+set_tests_properties(intercore_hmi_lifecycle_test
+    PROPERTIES TIMEOUT 20)
+
 # B4: canonical storage worker/request library, host-only fake tests.
 add_library(intercore_trajectory_storage STATIC
     Intercore/trajectory_storage_service.c)
