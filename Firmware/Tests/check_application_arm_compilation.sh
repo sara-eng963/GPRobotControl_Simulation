@@ -45,10 +45,15 @@ m7_sources=(
     ServoDrive/JointDrive/canopen_drive_commissioning_port.c
     Intercore/trajectory_stream.c
     Intercore/trajectory_stream_path_port.c
+    Intercore/validation_storage_bridge.c
+    Firmware/STM32H745/CM7/Core/Src/intercore_shared_memory.c
+    Firmware/STM32H745/CM7/Core/Src/application_supervisor.c
 )
 m4_sources=(
     Intercore/trajectory_stream.c
     Intercore/validation_storage_bridge.c
+    Firmware/STM32H745/CM4/Core/Src/intercore_startup_validation.c
+    Firmware/STM32H745/CM4/Core/Src/application_validation_service.c
 )
 
 compile_core() {
@@ -61,7 +66,8 @@ compile_core() {
         "$CC" "${common_flags[@]}" \
             -mcpu="$cpu" -mthumb -mfpu="$fpu" -mfloat-abi=hard \
             -D"CORE_$core=1" \
-            -I"$FW/$core/Core/Inc" "${include_common[@]}" \
+            -I"$FW/$core/Core/Inc" -I"$FW/$core/Board/Inc" \
+            -I"$FW/CM7/Board/Inc" "${include_common[@]}" \
             -c "$ROOT/$file" -o "$OUT/$core-$n.o"
         echo "PASS: $core $file"
         n=$((n+1))

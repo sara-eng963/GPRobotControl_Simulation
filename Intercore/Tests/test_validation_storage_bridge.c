@@ -231,6 +231,9 @@ static void test_offline_m4_gate(void)
     PathValidationStorage proxy_offline = gp_validation_m7_storage(&client, 100U);
     assert(gp_validation_shared_valid(&offline));
     assert(!gp_validation_m4_idle(&offline));
+    offline.version = GP_VALIDATION_VERSION + 1U;
+    assert(!gp_validation_shared_valid(&offline));
+    offline.version = GP_VALIDATION_VERSION;
     assert(!proxy_offline.begin(proxy_offline.context));
     assert(!client.active && offline.head == offline.tail);
     reset();

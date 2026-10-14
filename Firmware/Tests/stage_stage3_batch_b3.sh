@@ -65,12 +65,12 @@ for path in "${paths[@]}"; do
   }
 done
 for path in "${paths[@]}"; do
-  install -m 644 "$ROOT/Firmware/STM32H745/$path" "$DEST/$path"
+  cp "$ROOT/Firmware/STM32H745/$path" "$DEST/$path"
   cmp -s "$ROOT/Firmware/STM32H745/$path" "$DEST/$path"
   echo "STAGED: $path"
 done
 for core in CM7 CM4; do
-  install -m 644 "$ROOT/Intercore/validation_storage_wire.h" "$DEST/$core/Core/Inc/validation_storage_wire.h"
+  cp "$ROOT/Intercore/validation_storage_wire.h" "$DEST/$core/Core/Inc/validation_storage_wire.h"
 done
 
 # The M4 builds only the existing canonical bridge C file. All other
@@ -88,7 +88,7 @@ for dir in ControlCore/Analysis ControlCore/Config ControlCore/Execution \
 done
 mkdir -p "$APP/Intercore"
 for name in validation_storage_bridge.c validation_storage_bridge.h validation_storage_wire.h; do
-  install -m 644 "$ROOT/Intercore/$name" "$APP/Intercore/$name"
+  cp "$ROOT/Intercore/$name" "$APP/Intercore/$name"
 done
 echo "PASS: B3 M7/M4 typed validation ABI staged; physical flash provider absent by default"
 echo "Clean-build both CubeIDE targets before final acceptance."
