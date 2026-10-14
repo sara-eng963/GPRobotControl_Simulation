@@ -279,6 +279,10 @@ static void enter_active_state(SupervisorTaskContext *context)
             break;
 
         case ROBOT_STATE_HOMING:
+            if (machine->previousState == ROBOT_STATE_PAUSED)
+            {
+                break;
+            }
             state_homing_enter(&context->homing);
             break;
 
@@ -431,7 +435,63 @@ static void enter_active_state(SupervisorTaskContext *context)
     }
 }
 
-static void handle_policy_event(
+static void clear_runtime_program_context(
+    SupervisorTaskContext *context
+)
+{
+    state_teaching_reset_draft(
+        &context->teaching
+    );
+
+    state_teaching_get_outputs(
+        &context->teaching,
+        &context->teaching_outputs
+    );
+
+    memset(
+        &context->submitted_program,
+        0,
+        sizeof(context->submitted_program)
+    );
+
+    memset(
+        &context->validation,
+        0,
+        sizeof(context->validation)
+    );
+
+    memset(
+        &context->validation_outputs,
+        0,
+        sizeof(context->validation_outputs)
+    );
+
+    memset(
+        &context->approach_outputs,
+        0,
+        sizeof(context->approach_outputs)
+    );
+
+    memset(
+        &context->path_execution_outputs,
+        0,
+        sizeof(context->path_execution_outputs)
+    );
+
+    context->validation_worker_cancel =
+        true;
+
+    if (
+        context->validation_worker_state !=
+        VALIDATION_WORKER_RUNNING
+    )
+    {
+        context->validation_worker_state =
+            VALIDATION_WORKER_IDLE;
+    }
+}
+
+static SupervisorResult handle_policy_event(
     SupervisorTaskContext *context,
     const SupervisorEvent *event
 )
@@ -449,13 +509,13 @@ static void handle_policy_event(
         {
             context->approach_control.reset_requested = reset;
             context->approach_control.home_requested = !reset;
-            return;
+            return SUPERVISOR_RESULT_HANDLED;
         }
         if (context->machine.activeState == ROBOT_STATE_PATH_EXECUTION)
         {
             context->path_execution_inputs.reset_requested = reset;
             context->path_execution_inputs.home_requested = !reset;
-            return;
+            return SUPERVISOR_RESULT_HANDLED;
         }
     }
 
@@ -474,6 +534,8 @@ static void handle_policy_event(
     {
         enter_active_state(context);
     }
+
+    return result;
 }
 
 static void handle_hmi_command(SupervisorTaskContext *context,
@@ -487,9 +549,9 @@ static void handle_hmi_command(SupervisorTaskContext *context,
         case SUP_HMI_ARC: teaching = TEACH_EVENT_SELECT_ARC; break;
         case SUP_HMI_CIRCLE: teaching = TEACH_EVENT_SELECT_CIRCLE; break;
         case SUP_HMI_RECORD: teaching = TEACH_EVENT_RECORD_POINT; break;
-        case SUP_HMI_SPEED_UP: teaching = TEACH_EVENT_SPEED_INCREASE; break;
-        case SUP_HMI_SPEED_DOWN: teaching = TEACH_EVENT_SPEED_DECREASE; break;
-        case SUP_HMI_SPEED_DEFAULT: teaching = TEACH_EVENT_SPEED_DEFAULT; break;
+        case SUP_HMI_SPEED_LOW: teaching = TEACH_EVENT_SPEED_LOW; break;
+        case SUP_HMI_SPEED_MEDIUM: teaching = TEACH_EVENT_SPEED_MEDIUM; break;
+        case SUP_HMI_SPEED_HIGH: teaching = TEACH_EVENT_SPEED_HIGH; break;
         case SUP_HMI_VALIDATE_PREVIEW:
             if (context->machine.activeState == ROBOT_STATE_TEACHING)
                 teaching = TEACH_EVENT_VALIDATE_PATH;
@@ -530,7 +592,16 @@ static void handle_hmi_command(SupervisorTaskContext *context,
     {
         SupervisorEvent event = make_result_event(policy,
             context->machine.activeState, ROBOT_FAULT_SEVERITY_NONE, 0U);
-        handle_policy_event(context, &event);
+        const SupervisorResult result =
+            handle_policy_event(context, &event);
+
+        if (
+            policy == SUPERVISOR_EVENT_RESET &&
+            result != SUPERVISOR_RESULT_REJECTED
+        )
+        {
+            clear_runtime_program_context(context);
+        }
     }
 }
 

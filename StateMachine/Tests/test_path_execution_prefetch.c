@@ -92,7 +92,7 @@ static void enter(Test *t, RobotExecutionMode mode)
         .expected_source_revision = t->metadata.source_revision,
         .expected_artifact_crc = t->metadata.artifact_crc
     };
-    PathExecutionConfig config = {1000, 1};
+    PathExecutionConfig config = {1000, 1, 0};
     PathExecutionServices services = {
         .read_sample = take, .set_wire_feed_enabled = relay,
         .prepare_retraction = retract_prepare, .step_retraction = retract_step,
@@ -398,8 +398,28 @@ static void test_missing_axis_fault_and_reentry(void)
     puts("[PASS] 20-ms stale axis trips controlled hold; reset/re-entry is clean");
 }
 
+static void test_host_feedback_window(void)
+{
+    Test t;
+    init(&t, 128U, 2U, UINT32_MAX);
+    t.execution.config.feedback_max_age_us = 100000U;
+    t.drive.auto_feedback = false;
+    for (uint32_t ms = 0U; ms <= 102U; ++ms) {
+        for (size_t axis = 1U; axis < JOINT_DRIVE_AXES; ++axis) {
+            ++t.drive.sequence[axis];
+            t.drive.axis[axis].timestamp_us = (uint64_t)ms * 1000U;
+        }
+        assert(step_at(&t, ms) == STATE_STEP_RUNNING);
+    }
+    assert(step_at(&t, 103U) == STATE_STEP_FAILED);
+    assert(t.execution.error == PATH_EXEC_ERR_CYCLIC_FEEDBACK);
+    assert(t.stop_calls == 1U && !t.wire);
+    puts("[PASS] Host window tolerates delay and still stops a missing axis");
+}
+
 int main(void)
 {
+    test_host_feedback_window();
     test_time_paced_feedback_and_skips();
     test_delayed_axis_feedback();
     test_missing_axis_fault_and_reentry();

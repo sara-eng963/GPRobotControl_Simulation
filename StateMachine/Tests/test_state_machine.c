@@ -923,6 +923,53 @@ static void test_path_validation_outcomes(void)
         "Successful validation is the fifth transition"
     );
 
+    {
+        const uint32_t transitionsBeforeTeach = machine.transitionCount;
+        const uint32_t rejectionsBeforeTeach = machine.rejectedEventCount;
+
+        event = make_event(
+            SUPERVISOR_EVENT_TEACH,
+            ROBOT_STATE_IDLE
+        );
+
+        result = state_machine_handle_event(
+            &machine,
+            &event
+        );
+
+        check_true(
+            result == SUPERVISOR_RESULT_REJECTED,
+            "Teach selection is rejected while a validated path is protected"
+        );
+
+        check_true(
+            machine.activeState == ROBOT_STATE_IDLE,
+            "Rejected teach selection keeps the supervisor in IDLE"
+        );
+
+        check_true(
+            machine.recordedProgramAvailable &&
+            machine.validatedTrajectoryAvailable &&
+            !machine.previewAccepted,
+            "Rejected teach selection preserves the preview-ready path"
+        );
+
+        check_true(
+            machine.executionMode == ROBOT_EXECUTION_NONE,
+            "Rejected teach selection does not select an execution mode"
+        );
+
+        check_true(
+            machine.transitionCount == transitionsBeforeTeach,
+            "Rejected teach selection does not create a transition"
+        );
+
+        check_true(
+            machine.rejectedEventCount == rejectionsBeforeTeach + 1U,
+            "Rejected teach selection is counted for diagnostics"
+        );
+    }
+
     /*
      * ------------------------------------------------------------
      * Normal validation rejection
@@ -1768,6 +1815,59 @@ static void test_pause_resume_behavior(void)
         machine.activeState == ROBOT_STATE_IDLE,
         "Production returns to IDLE after retraction"
     );
+
+    /*
+     * HOME enters HOMING, where the same button must pause and resume.
+     */
+    event = make_event(
+        SUPERVISOR_EVENT_HOME,
+        ROBOT_STATE_IDLE
+    );
+
+    result = state_machine_handle_event(&machine, &event);
+
+    check_true(
+        result == SUPERVISOR_RESULT_TRANSITIONED &&
+        machine.activeState == ROBOT_STATE_HOMING,
+        "HOME enters HOMING before pause test"
+    );
+
+    event = make_event(
+        SUPERVISOR_EVENT_PAUSE_RESUME,
+        ROBOT_STATE_HOMING
+    );
+
+    result = state_machine_handle_event(&machine, &event);
+
+    check_true(
+        result == SUPERVISOR_RESULT_TRANSITIONED &&
+        machine.activeState == ROBOT_STATE_PAUSED,
+        "PAUSE during HOMING enters PAUSED"
+    );
+
+    check_true(
+        machine.resumeState == ROBOT_STATE_HOMING,
+        "HOMING is retained as the interrupted state"
+    );
+
+    event = make_event(
+        SUPERVISOR_EVENT_PAUSE_RESUME,
+        ROBOT_STATE_PAUSED
+    );
+
+    result = state_machine_handle_event(&machine, &event);
+
+    check_true(
+        result == SUPERVISOR_RESULT_TRANSITIONED &&
+        machine.activeState == ROBOT_STATE_HOMING,
+        "RESUME returns to HOMING"
+    );
+
+    event = make_event(
+        SUPERVISOR_EVENT_STATE_COMPLETE,
+        ROBOT_STATE_HOMING
+    );
+    state_machine_handle_event(&machine, &event);
 
     /*
      * PAUSE/RESUME has no valid meaning in IDLE.
@@ -3556,10 +3656,10 @@ static void test_unified_execution_and_emergency_recovery(void)
     result = state_machine_handle_event(&machine, &event);
     check_true(result == SUPERVISOR_RESULT_TRANSITIONED,
                "Unified execution completion transitions");
-    check_true(machine.activeState == ROBOT_STATE_HOMING,
-               "Unified execution returns through HOMING");
+    check_true(machine.activeState == ROBOT_STATE_IDLE,
+               "Unified execution returns directly to IDLE");
     check_true(machine.previewAccepted,
-               "Preview is accepted after execution and retraction");
+               "Preview is accepted after path execution");
 
     state_machine_init(&machine);
     event = make_event(SUPERVISOR_EVENT_STATE_COMPLETE, ROBOT_STATE_BOOT);

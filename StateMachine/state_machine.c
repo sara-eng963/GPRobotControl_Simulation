@@ -213,6 +213,7 @@ static bool is_operator_pausable_state(RobotStateId state)
 {
     switch (state)
     {
+        case ROBOT_STATE_HOMING:
         case ROBOT_STATE_APPROACH:
         case ROBOT_STATE_PATH_EXECUTION:
         case ROBOT_STATE_ARC_STABILIZING:
@@ -751,17 +752,25 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
              */
             if (event->type == SUPERVISOR_EVENT_TEACH)
             {
+                /*
+                 * A validated trajectory is a protected operator asset.
+                 * RESET is the explicit action that discards it; a stray
+                 * Line/Arc/Circle selection must not silently invalidate
+                 * the path that is ready for Preview or production.
+                 */
+                if (machine->validatedTrajectoryAvailable)
+                {
+                    return reject_event(machine);
+                }
+
                 machine->executionMode =
                     ROBOT_EXECUTION_NONE;
 
                 /*
                  * Entering Teaching means the draft may be modified.
-                 * Any earlier validation or accepted Preview can therefore
-                 * no longer authorize production execution.
+                 * Any earlier accepted Preview can therefore no longer
+                 * authorize production execution.
                  */
-                machine->validatedTrajectoryAvailable =
-                    false;
-
                 machine->previewAccepted =
                     false;
 
@@ -1003,7 +1012,6 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
                  *
                  *   - Approach completed,
                  *   - the complete path executed,
-                 *   - retraction completed,
                  *   - no failure or safety event interrupted the sequence.
                  */
                 if (
@@ -1020,7 +1028,7 @@ if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET)
 
                 return transition_to(
                     machine,
-                    ROBOT_STATE_HOMING
+                    ROBOT_STATE_IDLE
                 );
             }
 

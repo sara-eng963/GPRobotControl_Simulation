@@ -71,7 +71,11 @@ static PathValidationStorage path_validation_storage;
 static ValidatedTrajectory validated_trajectory;
 static ApproachConfig approach_config;
 static ApproachServices approach_services;
-static PathExecutionConfig execution_config = {1000, 5};
+static PathExecutionConfig execution_config = {
+    .controlled_stop_timeout_ms = 1000,
+    .clearance_stable_cycles = 5,
+    .feedback_max_age_us = 100000 /* Host-only scheduling allowance. */
+};
 static PathExecutionServices execution_services;
 static PausedServices paused_services;
 static FaultServices fault_services;
@@ -652,10 +656,14 @@ static void configure_state_dependencies(void)
     teaching_config =
         (TeachingConfig)
         {
-            .default_speed_mps = 0.010F,
+            .default_speed_mps = TEACHING_SPEED_PRESET_MEDIUM_MPS,
             .minimum_speed_mps = 0.001F,
             .maximum_speed_mps = 0.100F,
-            .speed_step_mps = 0.001F,
+            .speed_low_mps = TEACHING_SPEED_PRESET_LOW_MPS,
+            .speed_medium_mps = TEACHING_SPEED_PRESET_MEDIUM_MPS,
+            .speed_high_mps = TEACHING_SPEED_PRESET_HIGH_MPS,
+            .duplicate_position_tolerance_m = 0.002F,
+            .duplicate_orientation_tolerance_rad = 0.010F,
             .minimum_point_separation_m = 0.002F,
             .collinearity_epsilon_m2 = 1.0e-10F
         };
@@ -1024,14 +1032,14 @@ static const char *operator_button_name(
 
             return "VALIDATE/PREVIEW";
 
-        case HMI_EVENT_SPEED_INCREASE:
-            return "SPEED_PLUS";
+        case HMI_EVENT_SPEED_LOW:
+            return "SPEED_LOW";
 
-        case HMI_EVENT_SPEED_DECREASE:
-            return "SPEED_MINUS";
+        case HMI_EVENT_SPEED_MEDIUM:
+            return "SPEED_MEDIUM";
 
-        case HMI_EVENT_SPEED_DEFAULT:
-            return "DEFAULT_MODE";
+        case HMI_EVENT_SPEED_HIGH:
+            return "SPEED_HIGH";
 
         case HMI_EVENT_START:
             return "START";

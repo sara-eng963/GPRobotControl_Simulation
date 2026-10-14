@@ -118,6 +118,52 @@ static const char *path_validation_error_name(
     }
 }
 
+
+static const char *teaching_feedback_text(
+    const HmiStatus *status
+)
+{
+    if (status->teaching_message == 7U)
+    {
+        return "Point already recorded; move to the next point.";
+    }
+
+    if (
+        status->teaching_message == 8U ||
+        status->teaching_error == 21U
+    )
+    {
+        return "Move to a new point; orientation-only change cannot define this segment.";
+    }
+
+    return NULL;
+}
+
+
+static bool pause_resume_enabled(
+    const HmiStatus *status,
+    bool online
+)
+{
+    if (!online || status->estop_active)
+    {
+        return false;
+    }
+
+    if (status->paused)
+    {
+        return true;
+    }
+
+    return
+        status->robot_state == 1U ||
+        status->robot_state == 5U ||
+        status->robot_state == 6U ||
+        status->robot_state == 7U ||
+        status->robot_state == 8U ||
+        status->robot_state == 10U;
+}
+
 static void make_status_message(
     const HmiProtocol *protocol,
     bool online,
@@ -203,6 +249,25 @@ static void make_status_message(
                     status->idle_error
                 );
             }
+            else if (status->preview_complete)
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "Preview complete. Press START to weld, or RESET to teach a new path."
+                );
+            }
+            else if (
+                status->teaching_segment_count > 0U &&
+                status->path_validation_result == 2U
+            )
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "Path VALID. Press PREVIEW, or RESET to teach a new path."
+                );
+            }
             else
             {
                 snprintf(
@@ -220,6 +285,15 @@ static void make_status_message(
                     buffer,
                     capacity,
                     "Teaching: simulated hand-guiding move in progress..."
+                );
+            }
+            else if (teaching_feedback_text(status) != NULL)
+            {
+                snprintf(
+                    buffer,
+                    capacity,
+                    "%s",
+                    teaching_feedback_text(status)
                 );
             }
             else if (status->teaching_error != 0U)
@@ -261,7 +335,10 @@ static void make_status_message(
                     100.0F * status->path_validation_progress
                 );
             }
-            else if (status->path_validation_result == 2U)
+            else if (
+                status->teaching_segment_count > 0U &&
+                status->path_validation_result == 2U
+            )
             {
                 snprintf(
                     buffer,
@@ -655,6 +732,21 @@ int hmi_app_run(void)
         Rectangle circleButton =
             {360.0F, 270.0F, 138.0F, 48.0F};
 
+        const bool path_protected =
+            online &&
+            status->robot_state != 3U &&
+            (
+                (
+                    status->teaching_segment_count > 0U &&
+                    status->path_validation_result == 2U
+                ) ||
+                status->preview_complete
+            );
+
+        const bool program_selection_enabled =
+            online &&
+            !path_protected;
+
         if (
             panel_button(
                 lineButton,
@@ -662,7 +754,7 @@ int hmi_app_run(void)
                 status->selected_program == HMI_PROGRAM_LINE
                     ? HMI_BUTTON_PRIMARY
                     : HMI_BUTTON_NORMAL,
-                online,
+                program_selection_enabled,
                 mouse
             )
         )
@@ -686,7 +778,7 @@ int hmi_app_run(void)
                 status->selected_program == HMI_PROGRAM_ARC
                     ? HMI_BUTTON_PRIMARY
                     : HMI_BUTTON_NORMAL,
-                online,
+                program_selection_enabled,
                 mouse
             )
         )
@@ -710,7 +802,7 @@ int hmi_app_run(void)
                 status->selected_program == HMI_PROGRAM_CIRCLE
                     ? HMI_BUTTON_PRIMARY
                     : HMI_BUTTON_NORMAL,
-                online,
+                program_selection_enabled,
                 mouse
             )
         )
@@ -769,6 +861,7 @@ int hmi_app_run(void)
 
         const bool validation_passed =
             online && status->robot_state == 2U &&
+            status->teaching_segment_count > 0U &&
             status->path_validation_result == 2U && !status->estop_active;
 
         if (panel_button(
@@ -798,8 +891,8 @@ int hmi_app_run(void)
 
         if (
             panel_button(
-                (Rectangle){60.0F, 476.0F, 92.0F, 48.0F},
-                "-",
+                (Rectangle){60.0F, 476.0F, 138.0F, 48.0F},
+                "LOW",
                 HMI_BUTTON_NORMAL,
                 online && status->robot_state == 3U,
                 mouse
@@ -808,14 +901,14 @@ int hmi_app_run(void)
         {
             (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_EVENT_SPEED_DECREASE
+                HMI_EVENT_SPEED_LOW
             );
         }
 
         if (
             panel_button(
-                (Rectangle){162.0F, 476.0F, 92.0F, 48.0F},
-                "+",
+                (Rectangle){210.0F, 476.0F, 138.0F, 48.0F},
+                "MEDIUM",
                 HMI_BUTTON_NORMAL,
                 online && status->robot_state == 3U,
                 mouse
@@ -824,14 +917,14 @@ int hmi_app_run(void)
         {
             (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_EVENT_SPEED_INCREASE
+                HMI_EVENT_SPEED_MEDIUM
             );
         }
 
         if (
             panel_button(
-                (Rectangle){266.0F, 476.0F, 232.0F, 48.0F},
-                "DEFAULT MODE",
+                (Rectangle){360.0F, 476.0F, 138.0F, 48.0F},
+                "HIGH",
                 HMI_BUTTON_NORMAL,
                 online && status->robot_state == 3U,
                 mouse
@@ -840,7 +933,7 @@ int hmi_app_run(void)
         {
             (void)hmi_protocol_send_event(
                 &protocol,
-                HMI_EVENT_SPEED_DEFAULT
+                HMI_EVENT_SPEED_HIGH
             );
         }
 
@@ -942,6 +1035,7 @@ int hmi_app_run(void)
             online &&
             status->robot_state == 2U &&
             status->idle_error == 0U &&
+            status->teaching_segment_count > 0U &&
             status->path_validation_result == 2U &&
             status->preview_complete &&
             !status->estop_active;
@@ -967,7 +1061,7 @@ int hmi_app_run(void)
                 (Rectangle){580.0F, 472.0F, 134.0F, 50.0F},
                 status->paused ? "RESUME" : "PAUSE",
                 HMI_BUTTON_NORMAL,
-                online,
+                pause_resume_enabled(status, online),
                 mouse
             )
         )
