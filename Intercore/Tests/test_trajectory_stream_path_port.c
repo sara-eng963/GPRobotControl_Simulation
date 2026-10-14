@@ -136,6 +136,18 @@ static void test_production_binding(void)
     assert(gp_traj_m4_step(&producer));
     assert(gp_traj_current_epoch(&shared) == 2U);
     assert(gp_traj_m4_release_acknowledged(&shared, gp_traj_current_epoch(&shared)));
+    /* B4: attachment is explicit. An offline M4 never causes the
+     * canonical M7 PathExecution callback to fabricate READY. */
+    GpValidationShared offline;
+    gp_validation_shared_initialize(&offline);
+    GpTrajectoryExecutionBinding gated = {0};
+    assert(gp_traj_execution_bind(&gated, &shared, &artifact, &board));
+    assert(gp_traj_execution_attach_playback(&gated, &offline));
+    assert(!gp_traj_execution_attach_playback(&gated, &offline));
+    assert(!gated.services.stream_ready(0U, artifact.sample_count,
+                                        gated.services.context));
+    assert(!gated.playback_requested);
+    puts("PASS: B4 M7 playback attachment rejects absent M4 worker");
     puts("PASS: composed M7 stream identity, board callback context and release");
 }
 
