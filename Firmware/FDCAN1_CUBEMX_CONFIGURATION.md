@@ -185,3 +185,21 @@ The operator provided a CubeMX **Connectivity → FDCAN1 → GPIO Settings** scr
 **Evidence/status:** These mappings are confirmed **only in the local CubeMX GUI screenshot**. The repository's authoritative `.ioc` has not been updated with the new FDCAN configuration or generated for active HAL code. Physical pinout is **provisional**, not approved for the final PCB.
 
 **Next check:** review **FDCAN1 → NVIC Settings** and record selected interrupt lines/priorities. The present `fdcan_classic_backend.c` polls HAL FIFO0 and checks protocol status from task context rather than requiring RX callbacks, so do **not** enable arbitrary interrupt priorities or define ISR handlers before reviewing the final execution/diagnostics architecture.
+
+### FDCAN1 NVIC settings screenshot (2026-10-14)
+
+The operator's **FDCAN1 → NVIC Settings** screenshot shows all three checkboxes **unchecked** in the **NVIC1 Interrupt Table** (M7):
+
+| Interrupt | NVIC enabled | Displayed preemption priority | Displayed sub-priority |
+| --- | --- | ---: | ---: |
+| FDCAN1 interrupt 0 | **No** | 5 | 0 |
+| FDCAN1 interrupt 1 | **No** | 5 | 0 |
+| FDCAN calibration unit interrupt | **No** | 5 | 0 |
+
+**Decision:** Leave these IRQs disabled for the current **HAL FIFO polling** adapter. The existing `fdcan_classic_backend.c` uses `HAL_FDCAN_GetRxFifoFillLevel` / `HAL_FDCAN_GetRxMessage` from the owning task; it does not configure `HAL_FDCAN_ActivateNotification` or install `HAL_FDCAN_RxFifo0Callback`. Enabling an IRQ without defining its event subscriptions, correct ISR wiring and interrupt safety would not improve this implementation. The priority/sub-priority numbers are **inactive defaults**, not verified real-time priorities.
+
+**Verification still required:** measure worst-case task polling interval, RX FIFO occupancy/loss, the rate of CAN reception, error handling and bus-off recovery. `HAL_FDCAN_GetProtocolStatus` is polled in the current adapter, but this is not a substitute for final fault-monitoring latency analysis; higher-rate or safety-relevant event handling may justify interrupts at a later stage, following FreeRTOS and STM32 NVIC priority rules. The calibration unit interrupt remains disabled since the clock calibration feature is not enabled.
+
+**Evidence status:** screenshot of local CubeMX NVIC settings only. The new FDCAN1 `.ioc` and generated active HAL firmware have **not** been committed or verified. Do not interpret disabled RX interrupts as disabling the FDCAN peripheral itself.
+
+**Next configuration gate:** inspect the complete FDCAN1 parameter summary and the CubeMX **Project Manager → Code Generator** options before the first regeneration, then save and compare the changed `.ioc`. Generation must preserve Stage 2 AMP boot, HSEM, SRAM4 MPU/IPC and USER CODE integration.
