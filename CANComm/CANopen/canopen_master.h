@@ -148,7 +148,10 @@ void canopen_master_set_heartbeat_timeout(
 );
 
 /*
- * Drain all currently available RX frames.
+ * Drain a BOUNDED number of RX frames (CANOPEN_MASTER_MAX_RX_PER_POLL).
+ * Excess frames remain in the CAN backend until the next owner cycle.
+ * Continuous RX cannot monopolize the entire 2 ms controller task.
+ * This is an operation-count bound, not measured WCET.
  *
  * Recognized traffic:
  *   - AVATAR TPDO4 feedback
