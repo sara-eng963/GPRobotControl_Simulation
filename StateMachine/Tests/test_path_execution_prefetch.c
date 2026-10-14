@@ -450,6 +450,13 @@ static void test_async_prefill_window(void)
     assert(step_at(&t, 2U) == STATE_STEP_RUNNING);
     assert(step_at(&t, 3U) == STATE_STEP_FAILED);
     assert(t.execution.error == PATH_EXEC_ERR_TRAJECTORY_NOT_READY);
+    /* Large monotonically increasing uptime must NOT expire immediately. */
+    init(&t, 513U, 1U, UINT32_MAX);
+    t.execution.services.prefill_timeout_ms = 3U;
+    assert(step_at(&t, 123450U) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 123451U) == STATE_STEP_RUNNING);
+    assert(step_at(&t, 123453U) == STATE_STEP_FAILED);
+    assert(t.execution.error == PATH_EXEC_ERR_TRAJECTORY_NOT_READY);
     assert(t.wire_enables == 0U && t.drive.commands == 0U);
     puts("[PASS] bounded async prefill does not enable drives/wire before 512 samples");
 }

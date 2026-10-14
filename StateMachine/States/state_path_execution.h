@@ -176,6 +176,7 @@ typedef struct
     bool command_clock_started;
     uint32_t skipped_samples;
 
+    bool prefill_clock_started;
     bool feedback_watch_started;
     uint64_t feedback_watch_started_us;
     uint32_t initial_tpdo_count[JOINT_DRIVE_AXES];

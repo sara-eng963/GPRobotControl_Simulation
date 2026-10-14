@@ -383,6 +383,12 @@ StateStepResult state_path_execution_step(
             }
 
             if (!stream_ready(state)) {
+                /* State entry has no now_ms parameter: start the timeout
+                 * from the FIRST unready preflight, not system uptime. */
+                if (!state->prefill_clock_started) {
+                    state->prefill_clock_started = true;
+                    state->phase_started_ms = inputs->now_ms;
+                }
                 /* An unready storage worker never enables motion. Poll at
                  * the normal Supervisor rate; no waiting inside the callback.
                  * The timeout is supplied by the commissioned board. */
