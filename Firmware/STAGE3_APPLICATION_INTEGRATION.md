@@ -235,3 +235,30 @@ This compiles the **inactive branch only**, because the current project has not 
 ### Stage 3C-2a HAL1 adapter host test
 
 The optional host-only mock gate `bash Firmware/Tests/check_fdcan_hal_adapter_mock.sh` compiles the **HAL-enabled** adapter branch with a minimal mock of the HAL1 types/functions and tests strict Classic CAN framing, receive FIFO, transmit backpressure, extended/FD rejection, bus-off and close behavior. It does not substitute for compiling against the official HAL1 driver from the regenerated STM32CubeH7 package or measuring CAN on hardware. The separate `check_fdcan_board_disabled.sh` checks the currently compiled inactive branch only.
+
+### Stage 3C-2a local verification (operator-provided, 2026-10-14)
+
+The operator synchronized the latest `sara/can-replacement` changes, reported both native Cortex-M7 and Cortex-M4 STM32CubeIDE firmware **builds completed**, and supplied exact local test output:
+
+```text
+PASS: FDCAN Board source registration and CubeMX-disabled guard
+PASS: conditional CM7 board source compiles without unconfigured FDCAN
+NOTE: HAL-enabled FDCAN branch, bus timing and physical transceiver are NOT verified.
+PASS: HAL1 Classic CAN backend mock frame and failure-path tests
+NOTE: mocked HAL1, not the STM32CubeMX-generated ST driver or real CAN.
+PASS: M7 board gating, IPC ownership, and CubeIDE settings
+PASS: CM7 application ARM compile-only check (NOT target link)
+PASS: CM4 task wiring and nonblocking shared transport contract
+PASS: CM4 application IPC ARM compile-only gate (not a firmware link)
+PASS: staged canonical Intercore headers for CM7
+PASS: staged canonical Intercore headers for CM4
+PASS: staged canonical CM7 source ipc_mailbox_freertos.c
+PASS: staged canonical CM7 source trajectory_stream.c
+PASS: staged canonical CM4 source ipc_mailbox_freertos.c
+PASS: staged canonical CM4 source trajectory_stream.c
+PASS: staged canonical CM7 application C and headers
+```
+
+**Stage 3C-2a outcome:** the disabled-mode ARM compilation, HAL1 mock adapter contract, prior application ARM checks, and source staging **passed** on the operator's system; both CubeIDE builds are operator-reported successful. No updated ELF hash/timestamp, full build log, or symbol inventory was submitted. **Active FDCAN is not compiled into the current image**, because the tracked CubeMX configuration has no FDCAN1 and the vendored firmware tree contains no HAL FDCAN source/header. The weak board provider still refuses M7 supervisor startup.
+
+**Next gate:** configure FDCAN1 from the authoritative STM32CubeMX 6.18.1 / STM32Cube FW_H7 V1.13.0 project, not by hand-writing HAL/peripheral initialization. The tracked clock tree currently reports FDCAN kernel 129 MHz, but verify this remains true after generation before selecting nominal 1 Mbit/s timing. The STM32H745IITx LQFP176 pinout selection is a project placeholder pending physical PCB decisions. Preserve Stage 2 AMP startup/MPU/IPC USER CODE and review regenerated project settings before synchronizing back to GitHub. Both active HAL adapter compilation and actual bus measurements remain pending.
