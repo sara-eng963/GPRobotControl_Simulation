@@ -26,6 +26,7 @@
 #include "intercore_startup_validation.h"
 #include "intercore_notifications.h"
 #include "application_ipc_service.h"
+#include "application_validation_service.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -204,6 +205,8 @@ void StartDefaultTask(void *argument)
   {
     Error_Handler();
   }
+  /* No physical NOR backend: no flash worker, but IPC/HMI remains active. */
+  (void)application_validation_service_start();
   application_ipc_service_run(); /* Never returns. */
   Error_Handler();
   /* USER CODE END 5 */
