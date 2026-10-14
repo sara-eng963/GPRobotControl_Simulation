@@ -104,3 +104,17 @@ The `.ioc` had an unsaved-changes asterisk in the screenshot and generation had 
 ## CubeMX code generation reported complete — awaiting generated-diff audit (2026-10-14)
 
 The operator reported **"generated done"** after confirming project destination, backup, and code-generator options. This establishes that **CubeMX reported completion to the operator**, but **no generated-file listing, source audit, clean-build, runtime test or new Git source commit has yet been supplied**. The next gate is a read-only compare of the separate working folder `GP_Stage3_Repro` against `GP_Stage3_Repro_Backup_Pre_TIM2_TIM3`, excluding only build output folders `Debug` and `Release`. In particular inspect CubeMX TIM2/TIM3 initialization and interrupt handlers plus ensure `application_supervisor.c`, `fdcan_classic_backend.c`, both Eclipse `.project` files, core MPU/IPC startup sections, and the M4 application are preserved. Do **not** infer correct scheduling or 500 Hz performance from successful code generation.
+
+
+## Post-generation read-only audit — TIM3 auto-reload mismatch (2026-10-14)
+
+The operator executed a read-only `diff -qr` of `GP_Stage3_Repro` against its independent `GP_Stage3_Repro_Backup_Pre_TIM2_TIM3`, excluding Debug/Release build directories. **14 differences** were reported: `.mxproject`, CM7/CM4 `.settings/language.settings.xml`, new CubeMX-generated `Backup` subfolders in core source/header directories, updated CM7 `Core/Inc/stm32h7xx_it.h`, `Core/Src/main.c`, `Core/Src/stm32h7xx_hal_msp.c`, `Core/Src/stm32h7xx_it.c`, new CMSIS Device ST `Source` directory and `Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_tim.h`, plus the changed `GP_STM32H745.ioc`. **Unchanged by byte-compare:** M7 `application_supervisor.c`, M7 `fdcan_classic_backend.c`, CM7 `.project` and CM4 `.project`. Further diff review (especially startup, MPU, FreeRTOS, CAN, CM4 settings and vendor-sourced files) remains pending; no builds reported after regeneration.
+
+**Critical mismatch found in regenerated M7 `main.c`:**
+- TIM2 handle, `MX_TIM2_Init`, PSC `63`, ARR `4294967295` generated correctly.
+- TIM3 handle and `MX_TIM3_Init` generated, PSC `63`, **ARR `65535` instead of screenshot-confirmed GUI `1999`**. At APB1 timer 64 MHz the TIM3 counter input is 1 MHz, so generated `ARR=65535` gives an update **every 65.536 ms (about 15.26 Hz)** rather than 2 ms (500 Hz). This discrepancy blocks acceptance.
+- `TIM2_IRQHandler` and `TIM3_IRQHandler` were emitted in M7 `stm32h7xx_it.c` and declared in `stm32h7xx_it.h`.
+
+**Immediate next action:** inspect `TIM3.*` keys in the **working** `.ioc` and compare against generated `MX_TIM3_Init` (do not hand-edit CubeMX-generated `main.c`). If the `.ioc` contains `TIM3.Period=65535`, correct through CubeMX Parameter Settings, verify persisted value on Save and regenerate **once**, then recheck. If the `.ioc` actually contains `TIM3.Period=1999`, investigate generator state/version and source consistency before making any change. Preserve the verified pre-timer backup and avoid committing or testing timer integration until generated values match. Cause of mismatch **not established** merely from the difference listing; do not assume the user entered a wrong value.
+
+Evidence is from the user's WSL console output; hardware timer behavior remains entirely untested.
