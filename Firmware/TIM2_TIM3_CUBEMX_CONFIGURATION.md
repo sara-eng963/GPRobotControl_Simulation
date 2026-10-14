@@ -298,3 +298,19 @@ After the original HAL include-order failure was corrected by switching the publ
 **Evidence boundary:** This is a user-reported successful build, not a captured build transcript or measured firmware runtime. Build warning counts, final ELF image sizes, and exact symbol inventories have not yet been supplied. The code remains fail-closed without a physical board commissioning provider; TIM2/TIM3 hardware runtime scheduling, TIM2 wrap behavior under nested/preempted ISRs, missed-period and timeout fault handling, ISR/task wake-up latency and 500 Hz CAN motion output are **not verified on physical hardware**.
 
 **Next:** inspect **both generated ELF files** at the expected verifier paths via `arm-none-eabi-nm`/`arm-none-eabi-size`, recording strong timer IRQ and HAL callback symbols on M7 and intact IPC symbols on both cores; do not infer hardware timing from symbol existence. Then independently exercise timing fault injection, counter wrap and deadline accounting, and audit the hardware-deferred safety assumptions.
+
+
+## ELF symbol and memory verification PASSED — 2026-10-14
+
+After the independently rebuilt M7 and M4 firmware was reported successful, the operator ran `arm-none-eabi-size` and `arm-none-eabi-nm --defined-only` on the **actual** `GP_Stage3_Repro` Cortex ELFs and pasted results:
+
+| Cortex ELF | text | data | bss | dec | hex |
+| --- | ---: | ---: | ---: | ---: | --- |
+| CM7 `GP_STM32H745_CM7.elf` | 167264 | 112 | 92440 | 259816 | 3f6e8 |
+| CM4 `GP_STM32H745_CM4.elf` | 24644 | 100 | 21148 | 45892 | b344 |
+
+**Strong, defined symbols in M7 ELF (PASS):** `HAL_TIM_Base_Start_IT` (0801f464), `HAL_TIM_PeriodElapsedCallback` (0801ace0), `TIM2_IRQHandler` (0801afe0), `TIM3_IRQHandler` (0801aff4), `application_supervisor_timer_period_elapsed_isr` (0801a178), `supervisor_task_start` (08019838).
+
+**Strong, defined symbols in M4 ELF (PASS):** `application_ipc_service_run` (08100a5c), `gp_ipc_m4_receive` (08100dea). The operator's shell command was displayed with partial terminal line-mixing but both size tables and all requested symbols were printed clearly.
+
+**Acceptance scope:** compiled and linked runtime integration on both processors, symbols present at target flash addresses, and documented section sizes. `text/data/bss` output alone is **not a verified per-memory-bank linker utilization budget**; inspect map/linker script to measure DTCM, AXI SRAM and shared SRAM4 as needed. Executable symbols are not evidence that the fail-closed board provider has been configured or that a 500 Hz cycle actually runs. Detailed warning count, hardware timing jitter, PWM/update timing and bus/drive measurements remain unverified. **Next:** test missed TIM3 notification, count >1, cycle >2 ms, timer start failure, TIM2 pending wrap, and atomic timer-time read; run target symbol regression gate and host fault injection without invented physical inputs.
