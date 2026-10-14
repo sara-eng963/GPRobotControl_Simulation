@@ -341,3 +341,24 @@ Test exit code: 1
 **Cause:** the Python harness deliberately extracts only the `if (hardware_timed)` portion of the Supervisor's cycle accounting; a legacy RTOS fallback stub and task-delay local added to the mock C template were therefore unused. This does **not establish a firmware build regression**. The independently validated dual-core ELF gate continues to stand, while **host timing fault injection remains NOT YET PASSED**.
 
 **Fix committed:** `19836e8` removes the two unused host-only declarations from `Firmware/Tests/m7_timer_fault_host.c`. The warning/error level `-Wall -Wextra -Werror` is retained; production firmware and CubeMX sources are **not modified**. The fix was verified in GitHub as committed source text but **has not yet been host-compiled/rerun**; next operator action is pull and rerun the same Python script, then investigate any further specific failure without weakening assertions.
+
+
+## Operator host fault-injection PASS — 2026-10-14
+
+Operator ran `python3 Firmware/Tests/run_m7_timer_fault_injection.py` after pulling through test-harness correction `b104a40`. **Exit code: 0**, with actual output:
+
+```text
+PASS: TIM2 pending-wrap and serviced-overflow timestamp
+PASS: invalid timer clock and partial HAL startup roll back
+PASS: TIM3 ISR counting notifications and drain
+PASS: missing/coalesced periods fault and counter saturation
+PASS: 2 ms Supervisor cycle overrun triggers fault
+PASS: real C timing blocks compiled and exercised with host mocks
+PASS: production-C timing blocks passed host fault injection
+NOTE: hardware jitter and safety are NOT verified
+Test exit code: 0
+```
+
+**Batch A acceptance:** integrated M7/M4 target compile/link, ELF symbol and section-size checks, and host timing fault-injection suite have all now passed on the operator's machine. Tests compile selected actual production C timing blocks against mocked HAL/FreeRTOS APIs; they do not execute the complete scheduler or actual silicon. An earlier 184-error M7 HAL include-order cascade was corrected with ST's `stm32h7xx_hal.h` umbrella; the subsequent target builds passed. The real physical board provider is still absent and startup is fail-closed.
+
+**Stage 3 remaining before software-only completion:** 3C-3 M7 trajectory execution/stream integration and bounded late/starvation/following-error tests; 3D-1 shared SRAM4 validation ABI/linker/worker; 3D-2 M4 target flash HAL port/trajectory producer/CRC/refill/cancel and HMI-over-IPC adaptation, subject to known physical pinout/storage decisions; 3E full integrated regressions, clean dual-core reproducibility at final commit, linker/RAM/stack budgets, CAN bus feasibility modeling, diagnostic/release evidence pack. Motor EDS, actual physical board interlocks/STO, runtime IPC, real 500 Hz jitter/drive output, and external NOR hardware operation remain **hardware-deferred** and must never be marked PASS from the mock tests. Architecture/master strategy choice and selected storage part/peripheral allocation should be recorded before adding device-specific code. No more timer GUI work required unless a concrete test reveals a peripheral configuration defect.
