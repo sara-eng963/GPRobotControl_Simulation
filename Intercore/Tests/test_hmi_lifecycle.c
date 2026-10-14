@@ -39,7 +39,15 @@ static void test_status_input_validation(void)
     assert(gp_hmi_status_decode(&msg, UINT32_MAX-1U, &status));
     msg = message(1U, ROBOT_STATE_IDLE);
     assert(gp_hmi_status_decode(&msg, UINT32_MAX, &status));
-    assert(!gp_hmi_status_decode(&msg, UINT32_MAX, &status));
+    /* After accepting rollover, the last ACCEPTED sequence is 1, not
+     * UINT32_MAX. Replaying 1 is a duplicate; pre-wrap MAX is stale. */
+    assert(status.ipc_sequence == 1U);
+    assert(!gp_hmi_status_decode(&msg, status.ipc_sequence, &status));
+    msg = message(UINT32_MAX, ROBOT_STATE_IDLE);
+    assert(!gp_hmi_status_decode(&msg, status.ipc_sequence, &status));
+    msg = message(2U, ROBOT_STATE_IDLE);
+    assert(gp_hmi_status_decode(&msg, status.ipc_sequence, &status));
+    assert(status.ipc_sequence == 2U);
     puts("[PASS] M4 status ABI, invalid frames, stale sequences and rollover");
 }
 
