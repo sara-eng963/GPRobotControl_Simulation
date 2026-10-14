@@ -126,3 +126,25 @@ Once the CubeMX configuration is complete and the operator saves/generates code,
 - [CAN in Automation](https://www.can-cia.org/): CANopen / CAN physical-layer standards ecosystem.
 
 **Record policy:** distinguish **GUI-only selections → saved CubeMX project → generated/linked firmware → hardware measurement**. A software-reported bit rate is a *configuration calculation*, not a measured signal.
+
+
+### FIFO settings screenshot (2026-10-14)
+
+**Operator's CubeMX GUI evidence, not yet committed to the actual `.ioc` file:**
+
+| Configuration parameter | Observed value | Reason / status |
+| --- | --- | --- |
+| Tx Fifo Queue Elmts Nbr | **16** | Explicitly selected; meets minimum accepted by `gp_fdcan_classic_backend_open` |
+| Tx Fifo Queue Mode | **FIFO mode** | Preserves command insertion order; expected by board adapter |
+| Tx Elmt Size | **8 bytes data field** | Maximum Classic CAN payload size |
+| Tx Buffers Nbr | **0** | Only TX FIFO is used; no dedicated TX buffers |
+| Tx Events Nbr | **0** | Current adapter does not use the transmit event FIFO |
+| Rx Fifo1 Elmts Nbr | **0** | A single FIFO0 is planned; FIFO1 not required |
+| Rx Fifo0 Elmt Size | **8 bytes data field** | Matches Classic CAN feedback payloads and adapter's size check |
+| Rx Buffers Nbr | **0** | No dedicated receive buffers planned |
+| Rx Buffers Size | **8 bytes data field** | Shown default; irrelevant with zero dedicated RX buffers |
+| Clock Calibration | **Disable** | Displayed default, not yet evaluated for actual oscillator/transceiver |
+
+**Not visible and therefore not verified:** `Rx Fifo0 Elmts Nbr` (the screenshot cuts off above that row). **Next step** is to confirm/set **16** receive FIFO0 elements; the prepared HAL adapter explicitly requires `RxFifo0ElmtsNbr >= 16`. No FIFO timing, occupancy, overflow, or delivery guarantee follows merely from allocation. Message RAM use and interaction with a second FDCAN instance, if selected later, must be checked against the STM32H745 reference manual. Automatic retransmission and physical I/O are still pending.
+
+**Status:** TX-side FIFO configuration has GUI screenshot evidence; RX FIFO0 depth remains pending. No changed CubeMX `.ioc` has been fetched into the repository and no active HAL build has been claimed.
