@@ -79,3 +79,16 @@ A verified 500 Hz TIM3 **interrupt source** is not proof of 500 Hz synchronized 
 After the earlier TIM3 parameter screenshot, the operator provided a **TIM3 NVIC Settings** screenshot showing **TIM3 global interrupt checked (Add enabled), Preemption Priority 5, Sub Priority 0**. The priority field appears read-only in the per-timer NVIC page. Both TIM2 and TIM3 have now been shown with their global interrupts enabled at **displayed priority 5**. The earlier preference for priority 6 was **not applied** in the visible GUI settings; priority 5 meets the currently configured M7 FreeRTOS `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5` threshold for any ISR that calls a FreeRTOS `FromISR` API.
 
 **Remaining before code generation:** confirm settings in the left-side Timers overview, inspect Project Manager/Code Generator preservation options and project output path, verify no unintended TIM6/TIM7, FDCAN, dual-core or SRAM4 settings changes, then save and regenerate once in the working copy. Generated source, runtime timing and hardware tests remain pending.
+
+## CubeMX Project Manager — Code Generator options verified (2026-10-14)
+
+Operator screenshot shows the following GUI settings before any code generation:
+
+- **Copy only the necessary library files** selected.
+- **Generate peripheral initialization as a pair of `.c/.h` files per peripheral** **unchecked**; expected timer init code therefore remains in existing generated module such as `CM7/Core/Src/main.c` rather than `tim.c`.
+- **Backup previously generated files when re-generating** checked.
+- **Keep User Code when re-generating** checked.
+- **Delete previously generated files when not re-generated** unchecked.
+- User Actions: no before/after generation scripts supplied in visible fields.
+
+Screenshot confirms **configuration options only**, not saved/generated output. USER CODE preservation is not a guarantee for application files outside marked blocks, project metadata, or manual linked resources. Existing independent backup remains the rollback baseline. Before clicking **Generate Code**, verify **Project Name, Project Location, Toolchain/IDE** under Project Manager → Project, and inspect the resulting files after generation.
