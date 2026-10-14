@@ -52,6 +52,7 @@ assert 'hardware_interlocks_verified' in a and 'hardware_interlocks_verified' in
 assert 'io->read_inputs' in a and 'SUP_IO_ESTOP' in a and 'SUP_IO_PROTECTIVE_STOP' in a
 assert 'gp_fdcan_classic_backend_open' in a and 'canopen_master_init' in a
 assert 'gp_ipc_valid(shared)' in a and 'supervisor_task_start(4U)' in a
+assert 'revoke_unstarted_board(board)' in a and 'canopen_master_close(&g_canopen_master)' in a
 assert 'CANOPEN_NODE_IDS' not in a
 assert not (fw/'CM7/Board/Src/board_config_real.c').exists()
 print('PASS: board-supplied CANopen composition, fail-closed startup invariants')
