@@ -19,7 +19,7 @@ def extract(text, marker):
     begin = text.find(marker)
     if begin == -1 or text.find(marker, begin + len(marker)) != -1:
         raise ValueError("Expected one source block: " + marker)
-    start = text.find("{", begin + len(marker))
+    start = text.find("{", begin)
     if start == -1:
         raise ValueError("No opening brace: " + marker)
     level = 0
