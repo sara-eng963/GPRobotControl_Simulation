@@ -1,6 +1,6 @@
 # STM32H745 dual-core firmware
 
-**Status (2026-10-14):** Stage 1 complete and Stage 2 statically verified. Stage 3A application architecture audit documented; full robot application is **not yet integrated** into either firmware image. Hardware validation remains pending.
+**Status (2026-10-14):** Stage 1 complete; Stage 2 static integration verified. Stage 3B M4 IPC service and M7 Supervisor are both **compiled and linked into their target firmware ELFs** (operator-provided CubeIDE evidence). The M7 Supervisor's board hook still refuses startup without real hardware interfaces. Stage 3C FDCAN HAL1 backend source is prepared but **inactive until CubeMX generates FDCAN**. No runtime, CAN bus, 500 Hz control or safety validation has been performed.
 
 See **[Stage 1 engineering report](STAGE1_DUAL_CORE_FOUNDATION.md)** for detailed design rationale, generated configuration audit, reproducibility evidence, limits, and Stage 2 handoff. Firmware builds do **not** establish hardware execution or physical IPC correctness.
 
