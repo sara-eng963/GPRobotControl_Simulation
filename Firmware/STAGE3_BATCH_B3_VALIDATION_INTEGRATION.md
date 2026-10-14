@@ -50,3 +50,26 @@ bash Firmware/Tests/check_stage3_batch_b3_acceptance.sh \
 
 The test runner is software/static/host/ARM/ELF qualification only; it
 never accesses real flash, CAN drives, safety IO or a powered STM32.
+
+## B3 operator acceptance diagnostic — 2026-10-14
+
+The independent verifier staging and shared-memory checks passed through
+all four synthetic linker configurations and the M7 SRAM4 production object
+tests. The next check failed during portable ARM compile-only testing:
+
+```text
+Firmware/STM32H745/CM7/Core/Inc/application_supervisor.h:7:10:
+fatal error: supervisor_task.h: No such file or directory
+```
+
+Cause: the portable `check_application_arm_compilation.sh` script began
+compiling `application_supervisor.c` as part of B3, without inheriting the
+existing M7 Board/Supervisor script's `-I StateMachine` include path.
+This failure does not come from a CubeIDE build, physical memory, or a
+missing repository header. The ARM test's include paths now match the
+relevant existing M7 application checks (`StateMachine`, `CANComm`,
+`Intercore`, and CMSIS RTOS2).
+
+**Status:** target-ELF and entire B3 gate remain pending until a complete
+new acceptance run is supplied. Do not label B3 accepted based on partial
+linker/ABI passes.

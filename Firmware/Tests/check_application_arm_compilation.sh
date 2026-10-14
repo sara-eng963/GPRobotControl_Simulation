@@ -13,7 +13,11 @@ OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
 include_common=(
+    # Mirror the existing Stage 3 M7 application compilation include contract.
+    # ROOT alone does not make a bare "supervisor_task.h" resolvable.
     -I"$ROOT"
+    -I"$ROOT/StateMachine"
+    -I"$ROOT/CANComm"
     -I"$ROOT/Intercore"
     -I"$FW/Common/Inc"
     -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
@@ -21,6 +25,7 @@ include_common=(
     -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F"
     -I"$FW/Drivers/CMSIS/Device/ST/STM32H7xx/Include"
     -I"$FW/Drivers/CMSIS/Include"
+    -I"$FW/Drivers/CMSIS/RTOS2/Include"
     -I"$FW/Drivers/STM32H7xx_HAL_Driver/Inc"
     -I"$FW/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy"
 )
