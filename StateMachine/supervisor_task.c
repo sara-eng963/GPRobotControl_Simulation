@@ -575,6 +575,10 @@ static void consume_m4_ipc(SupervisorTaskContext *context)
     if (context->config.ipc == NULL) return;
     GpIpcMessage msg;
     for (uint32_t count = 0U; count < 8U; ++count) {
+        /* The teaching state has ONE pending event slot. Do not consume
+         * another M4 command until the previous teaching event is handled
+         * by run_active_state() in the current/next Supervisor cycle. */
+        if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
         if (!gp_ipc_m7_receive(context->config.ipc, &msg)) break;
         if (msg.type != GP_IPC_HMI_COMMAND || msg.sequence == 0U ||
             (int32_t)(msg.sequence - context->last_m4_ipc_sequence) <= 0 ||
