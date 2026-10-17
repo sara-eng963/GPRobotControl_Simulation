@@ -354,3 +354,62 @@ cmake -S HandGuiding -B /tmp/gp-stage4-e1-strict -DCMAKE_C_FLAGS="-Wall -Wextra 
 cmake --build /tmp/gp-stage4-e1-strict -j2
 ctest --test-dir /tmp/gp-stage4-e1-strict --output-on-failure
 ```
+
+
+## 13. Batch 4E2A — Optional Supervisor-owned dry-run hook
+
+**No physical motor dispatch in this module.** The M7 Supervisor now accepts
+an optional `guidance_dry_run` callback port in `SupervisorTaskConfig`.
+If `tick` and `stop` are not supplied, **there is no F/T path**, and
+normal Supervisor operation is unchanged. A partial port is rejected at
+Supervisor initialization.
+
+Each active TEACHING cycle with `manual_guidance_active`, the Supervisor
+calls the hook **from its existing owner task**, supplying read-only access
+to its `JointDrivePort`, position scales, robot model, safety snapshot
+flags, runtime timing and monotonic clock. It never forwards the hook
+output to `joint_drive_port_send_targets()`.
+
+`supervisor_dry_run_adapter.c` is the testable implementation of that port:
+it requires a caller-supplied nonblocking `read_sample` callback and
+explicit sensor/feedback/safety age thresholds; it reads all six feedback
+axes, checks each timestamp and optional new sequence, converts units
+using the *existing* AVATAR position conversion, and invokes the *existing*
+4E1 `hand_guiding_pipeline_arm/step`. Accepted outputs are stored for
+diagnostics only. It never calls a drive write, ISR or hardware adapter.
+
+- Failed F/T acquisition, old or repeated feedback, missing permissions,
+  stale runtime/safety snapshots or any mathematical failure latch the
+  software pipeline and invalidate all output.
+- Leaving TEACHING or disabling manual guidance calls `stop` and clears
+  any previously valid dry-run reference without clearing a fault latch.
+- A separate *explicit* `hand_guiding_dry_run_reset` API exists for
+  future authorized recovery. It is NOT wired to an operator button in 4E2A.
+- The Supervisor exposes counters of accepted/rejected dry-run callbacks.
+- Legacy raw `SUPERVISOR_MESSAGE_GUIDED_TARGET` is **ignored by default**.
+  The original host SIL Kit teaching demo explicitly opts back in using
+  `GP_ENABLE_LEGACY_SILKIT_GUIDANCE` + `GP_HOST_TIMING` to preserve the
+  pre-existing manual teaching simulation only. That simulator-only path
+  is **not validated admittance control** and must never be enabled for
+  physical firmware. The new 4E2A hook never sends targets.
+- No hardware FT provider, physical safety chain, gravity compensation,
+  finalized robot geometry, calibrated encoder zeros, CAN deadlines or
+  firmware linker inclusion has been commissioned. The built-in
+  `SupervisorTaskConfig.guidance_dry_run` remains null by default. 4E2B
+  must wire a commissioned provider, verified configuration, diagnostics,
+  and actual cycle evidence before any hand-guided target dispatch.
+
+**Host tests**: `test_supervisor_dry_run_adapter` uses FakeDrive with
+synthetic samples and checks real pipeline composition, feedback replay,
+fault latching, stop behavior and **zero send_targets calls**. The existing
+`supervisor_interface_test` now also checks that the optional hook
+never runs during E-stop. Expected isolated hand-guiding suite: **8**.
+Both this suite and root Supervisor interface compilation still require
+verification in the user's WSL checkout; do not mark hardware or 500 Hz
+timing PASS.
+
+```bash
+cmake -S HandGuiding -B /tmp/gp-stage4-e2a-strict -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
+cmake --build /tmp/gp-stage4-e2a-strict -j2
+ctest --test-dir /tmp/gp-stage4-e2a-strict --output-on-failure
+```

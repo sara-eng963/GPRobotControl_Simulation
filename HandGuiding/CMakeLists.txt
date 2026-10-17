@@ -12,6 +12,7 @@ add_library(hand_guiding STATIC
     cartesian_joint_mapper.c
     wrench_frame.c
     hand_guiding_pipeline.c
+    supervisor_dry_run_adapter.c
 )
 target_compile_features(hand_guiding PUBLIC c_std_11)
 target_include_directories(hand_guiding PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -26,15 +27,16 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         ../ControlCore/Math/matrix6.c
         ../ControlCore/Analysis/singularity.c
         ../ControlCore/Config/robot_config.c
+        ../ServoDrive/AvatarM/avatar_m_position.c
     )
     target_compile_features(hand_guiding_control_core PUBLIC c_std_11)
     target_compile_options(hand_guiding_control_core PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(hand_guiding PUBLIC hand_guiding_control_core m)
 else()
-    target_link_libraries(hand_guiding PUBLIC control_core m)
+    target_link_libraries(hand_guiding PUBLIC control_core avatar_drives m)
 endif()
 
-foreach(test_name IN ITEMS test_ft_sensor test_sensor_config test_wrench_processing test_admittance_control test_cartesian_joint_mapper test_wrench_frame test_hand_guiding_pipeline)
+foreach(test_name IN ITEMS test_ft_sensor test_sensor_config test_wrench_processing test_admittance_control test_cartesian_joint_mapper test_wrench_frame test_hand_guiding_pipeline test_supervisor_dry_run_adapter)
     add_executable(${test_name} Tests/${test_name}.c)
     target_link_libraries(${test_name} PRIVATE hand_guiding)
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror -UNDEBUG)
