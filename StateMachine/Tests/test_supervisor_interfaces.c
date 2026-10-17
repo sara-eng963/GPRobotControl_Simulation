@@ -10,6 +10,18 @@
 
 static unsigned passed, failed;
 static unsigned reads, writes, safe_calls;
+static unsigned dry_run_ticked, dry_run_stopped;
+static bool dry_run_tick(void *ctx, const SupervisorGuidanceDryRunCycle *cycle)
+{
+    (void)cycle;
+    if (ctx != &dry_run_ticked) return false;
+    ++dry_run_ticked;
+    return true;
+}
+static void dry_run_stop(void *ctx)
+{
+    if (ctx == &dry_run_ticked) ++dry_run_stopped;
+}
 static bool acquisition_ok = true;
 static bool context_ok = true;
 static SupervisorInputSnapshot board_inputs;
@@ -101,6 +113,8 @@ static void test_task(void *argument)
     check(reads > 0 && writes > 0, "Supervisor invokes both board callbacks");
     check(context_ok, "GPIO callback receives configured context");
     check(safe_calls > 0, "Emergency step dispatch invokes safe-output service");
+    check(dry_run_ticked == 0U && dry_run_stopped > 0U,
+          "Dry-run port is stopped without executing in emergency state");
     check(supervisor_task_get_inputs(&inputs), "Input snapshot is readable");
     check(inputs.valid && inputs.timestamp_ms == 1234 && inputs.asserted[SUP_IO_HOME_J3],
           "Input snapshot preserves validity, timestamp and channel value");
@@ -203,6 +217,9 @@ int main(void)
     config.fault_services = &fault;
     emergency.force_safe_outputs = safe_outputs;
     config.emergency_stop_services = &emergency;
+    config.guidance_dry_run.context = &dry_run_ticked;
+    config.guidance_dry_run.tick = dry_run_tick;
+    config.guidance_dry_run.stop = dry_run_stop;
     config.validation_sample_budget = 1;
     check(!supervisor_task_init(&config), "Zero task period is rejected");
     config.period_ticks = pdMS_TO_TICKS(1);

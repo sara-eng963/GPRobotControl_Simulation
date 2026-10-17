@@ -6,6 +6,7 @@
 #include "../CANComm/CANopen/canopen_master.h"
 #include "supervisor_io.h"
 #include "supervisor_hmi.h"
+#include "supervisor_guidance_dry_run_port.h"
 #include "States/state_approach.h"
 #include "States/state_boot.h"
 #include "States/state_homing.h"
@@ -127,6 +128,10 @@ typedef struct
      * FreeRTOS objects. NULL keeps the existing PC runtime unchanged. */
     GpIpcShared *ipc;
 
+    /* Optional 4E2A dry-run monitor. Both callbacks must be configured
+     * together. No FT adapter is supplied by default; never sends targets. */
+    SupervisorGuidanceDryRunPort guidance_dry_run;
+
     /* Optional board adapter; NULL callbacks allow incremental integration. */
     SupervisorIoServices io;
     SupervisorTimingPort timing;
@@ -150,6 +155,8 @@ typedef struct {
     uint32_t timer_timeouts;
     uint32_t timer_overruns;
     uint32_t timer_max_cycle_us;
+    uint32_t guidance_dry_run_ok_cycles;
+    uint32_t guidance_dry_run_rejected_cycles;
 } SupervisorDiagnostics;
 bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out);
 

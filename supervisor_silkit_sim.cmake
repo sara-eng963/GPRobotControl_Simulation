@@ -54,6 +54,7 @@ if(ENABLE_SILKIT)
         -Wall
         -Wextra
         -DGP_HOST_TIMING=1
+        -DGP_ENABLE_LEGACY_SILKIT_GUIDANCE=1
         -Werror=implicit-function-declaration
         -Werror=incompatible-pointer-types
     )
