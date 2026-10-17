@@ -96,7 +96,7 @@ The parameters currently have **no approved physical tuning values**. Keemink et
 | 4B2 | Base/TCP wrench conversion implemented and locally checked with a synthetic FK fixture; full checkout and hardware validation pending |
 | 4C | Completed standalone lifecycle, per-axis acceleration limits, analytical step/release/rotation tests |
 | 4D | Standalone Jacobian/DLS mapping to bounded joint references and targeted host tests; physical integration still pending |
-| 4E | Supervisor-owned guidance activation/deactivation, feedback and safety/fault coverage |
+| 4E1 | Composed sensor → admittance → joint mapper, standalone software-only. Tests pending final checkout |\n| 4E2 | Supervisor-owned guidance authorization, feedback and command lifecycle |\n| 4E3 | Integrated fault and timing tests |
 | 4F | Reproducible SIL Kit end-to-end checks, regressions, firmware cross-compilation and hardware gate ledger |
 
 ## 8. Changelog
@@ -278,3 +278,79 @@ admittance, joint reference generation and M7 Supervisor authorization,
 including per-cycle live feedback, queue/command freshness, fault latching,
 safe stop and encoder conversion. No real hardware enabling before
 Stage 3 commissioning gates.
+
+
+## 12. Batch 4E1 — Software-only hand-guiding composition (2026-10-17)
+
+**Added:** `hand_guiding_pipeline.c/.h`, `Tests/test_hand_guiding_pipeline.c`, CMake test registration.
+
+This single module **orchestrates** rather than reimplements the existing
+mathematics. In every valid step:
+
+```text
+Live FtSensorSample + verified T_F_S + tare + RobotConfig + joint feedback
+  -> wrench_frame_sensor_to_base_tcp()        # 4B1 + 4B2
+  -> admittance_step()                        # 4C
+  -> cartesian_joint_mapper_step()            # 4D, uses ControlCore Jacobian
+  -> [valid, wrench_B_TCP, twist_B_TCP, six joint references in radians]
+```
+
+**Crucial:** This module has zero CANopen, FreeRTOS, Supervisor, encoder
+conversion or actuator API calls. It neither starts nor stops hardware.
+The returned joint references are *data*, not authorized commands.
+
+**Lifecycle:** `reset()` explicitly clears the fault latch and all state
+(must only be invoked by an externally authorized recovery procedure).
+`arm()` checks external TEACHING/motion/homing/drive/feedback gates,
+geometry/robot-model verification flags, tare, a live F/T sample, and
+measured joint positions. It freezes the configuration and seeds joint
+references from measured angles, **without producing any output target**.
+`step()` checks the gates again, optionally requires a strictly newer
+sensor timestamp, and computes all three stages. `stop()` disengages
+without clearing an existing fault latch.
+
+**Fault policy:** Any failed active step—including sensor staleness,
+missing feedback, revoked motion permission, missed cycle, singularity
+rejection or tracking-error failure—zeros output, disables *both*
+controllers, and latches a fault. An invalid/zero output must **never**
+be interpreted as a hold-position instruction or transmitted to motors.
+No automatic re-arming is possible without explicitly calling `reset()`.
+This software latch is not a hardware protective stop, STO or E-stop.
+
+**External-gate semantics:** `teaching_active`, `motion_permitted`,
+`robot_homed`, `drives_ready`, and `feedback_fresh` are *inputs
+declared by the caller*. Tests setting them to true are synthetic and do not
+prove the actual Supervisor, CANopen feedback, electrical safety chain or
+robot commissioning satisfy them. 4E2 must source and validate these
+signals from their true owners, in the M7 Supervisor cycle.
+
+**Fresh-sample mode:** `require_new_sample=true` rejects repeated and
+non-monotonic 32-bit acquisition timestamps between accepted calls
+(modulo wrap-around for short intervals). This is a configurable
+test/concurrency policy, not a claim that the selected physical F/T device
+can deliver a distinct valid sample at 500 Hz. If the real hardware cannot
+do so, a rigorously derived sample-hold and age policy will be needed.
+`max_sensor_age_us` remains caller-configured; no vendor-specific RS-485
+protocol or timing is assumed.
+
+**Other unresolved conditions:** Gravity/handle mass compensation,
+validated hardware geometry, actual motor scales and acceleration limits,
+physical sensor/feedback timing and interactive closed-loop stability have
+NOT been established. The repository's RobotConfig is still a UR5
+*reference* model. Strict host tests cannot certify physical hand-guiding.
+
+**Acceptance and evidence:** One isolated strict C11 test passed locally
+with the actual sensor/wrench/admittance components and stubbed FK/mapper,
+checking the composition lifecycle, freshness and latch. The **committed**
+test exercises the actual ControlCore implementation when run in WSL:
+`test_hand_guiding_pipeline` compares a composed cycle against direct
+calls to all three real modules and injects faults. Strict WSL
+CMake/CTest is **PENDING**, expected suite size **7 tests**. GitHub Actions
+is configured but no CI result is claimed.
+
+```bash
+git pull --ff-only origin sara/can-replacement
+cmake -S HandGuiding -B /tmp/gp-stage4-e1-strict -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
+cmake --build /tmp/gp-stage4-e1-strict -j2
+ctest --test-dir /tmp/gp-stage4-e1-strict --output-on-failure
+```

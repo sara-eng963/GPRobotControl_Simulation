@@ -11,6 +11,7 @@ add_library(hand_guiding STATIC
     admittance_control.c
     cartesian_joint_mapper.c
     wrench_frame.c
+    hand_guiding_pipeline.c
 )
 target_compile_features(hand_guiding PUBLIC c_std_11)
 target_include_directories(hand_guiding PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -33,7 +34,7 @@ else()
     target_link_libraries(hand_guiding PUBLIC control_core m)
 endif()
 
-foreach(test_name IN ITEMS test_ft_sensor test_sensor_config test_wrench_processing test_admittance_control test_cartesian_joint_mapper test_wrench_frame)
+foreach(test_name IN ITEMS test_ft_sensor test_sensor_config test_wrench_processing test_admittance_control test_cartesian_joint_mapper test_wrench_frame test_hand_guiding_pipeline)
     add_executable(${test_name} Tests/${test_name}.c)
     target_link_libraries(${test_name} PRIVATE hand_guiding)
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror -UNDEBUG)
