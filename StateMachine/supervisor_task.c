@@ -1035,7 +1035,9 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
     cycle.global_fault_active = safety->globalFaultActive ||
         context->teaching_runtime.global_fault_active;
 
+    TRACE_BEGIN(GP_TIMING_GUIDANCE_OBSERVER);
     const bool observer_ok = port->tick(port->context, &cycle);
+    TRACE_END(GP_TIMING_GUIDANCE_OBSERVER, observer_ok);
     if (observer_ok) {
         if (context->guidance_dry_run_ok_cycles < UINT32_MAX)
             ++context->guidance_dry_run_ok_cycles;
@@ -1056,6 +1058,7 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
          * intentionally produces no candidate. Every subsequent commanded
          * cycle must produce a fresh candidate; never replay old targets. */
         if (candidate_present) {
+            TRACE_BEGIN(GP_TIMING_GUIDANCE_DISPATCH);
             int32_t target_units[ROBOT_DOF] = {0};
             if (!hand_guiding_command_gate_validate(
                     &context->sim_guidance_gate,
@@ -1065,10 +1068,13 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
                                         cycle.now_ms) ||
                 !joint_drive_port_send_targets(&context->joint_drive,
                                                target_units)) {
+                TRACE_END(GP_TIMING_GUIDANCE_DISPATCH, false);
                 context->sim_guidance_gate.fault_latched = true;
                 emit_step_failure(context, 0xE062U);
-            } else if (context->sim_guidance_dispatched_cycles < UINT32_MAX) {
-                ++context->sim_guidance_dispatched_cycles;
+            } else {
+                TRACE_END(GP_TIMING_GUIDANCE_DISPATCH, true);
+                if (context->sim_guidance_dispatched_cycles < UINT32_MAX)
+                    ++context->sim_guidance_dispatched_cycles;
             }
         } else if (!observer_ok ||
                    context->sim_guidance_gate.have_previous) {
@@ -1136,7 +1142,14 @@ static void supervisor_task_entry(void *argument)
         }
         const uint64_t cycle_start_us =
             hardware_timed ? supervisor_now_us() : UINT64_C(0);
+#if defined(GP_HOST_TIMING)
+        const GpTimingSource supervisor_timing_source =
+            context->config.period_ticks == pdMS_TO_TICKS(2U)
+                ? GP_TIMING_SUPERVISOR_2MS : GP_TIMING_SUPERVISOR;
+        TRACE_BEGIN(supervisor_timing_source);
+#else
         TRACE_BEGIN(GP_TIMING_SUPERVISOR);
+#endif
         /* Acquisition only: raw inputs do not authorize motion or create HMI
          * events until a separately tested input adapter is connected. */
         SupervisorInputSnapshot sampled = {0};
@@ -1205,7 +1218,11 @@ static void supervisor_task_entry(void *argument)
             (void)context->config.io.write_outputs(
                 context->config.io.context, &outputs);
         }
+#if defined(GP_HOST_TIMING)
+        TRACE_END(supervisor_timing_source, true);
+#else
         TRACE_END(GP_TIMING_SUPERVISOR, true);
+#endif
         if (hardware_timed) {
             const uint64_t elapsed = supervisor_now_us() - cycle_start_us;
             const uint32_t sampled = elapsed > UINT32_MAX

@@ -62,6 +62,9 @@ static const GpTimingDefinition defs[GP_TIMING_SOURCE_COUNT] = {
     {"path_feedback_age_axis_4", "gauge", 0U},
     {"path_feedback_age_axis_5", "gauge", 0U},
     {"path_feedback_age_axis_6", "gauge", 0U},
+    {"supervisor_2ms", "periodic", 2000U},
+    {"guidance_observer", "activity", 0U},
+    {"guidance_dispatch", "event", 0U},
 };
 static GpTimingRing rings[GP_TIMING_SOURCE_COUNT];
 static FILE *output;

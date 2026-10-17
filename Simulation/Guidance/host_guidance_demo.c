@@ -67,6 +67,22 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
     r.accepted = accepted;
     r.valid = d->adapter.last_output.valid;
     r.fault = d->adapter.pipeline.fault_latched;
+    r.feedback_measurement_valid = true;
+    for (size_t i = 0U; i < ROBOT_DOF; ++i) {
+        const JointDriveAxisFeedback *feedback = &cycle->feedback[i];
+        uint64_t age_us = 0;
+        if (feedback->timestamp_us <= cycle->now_us)
+            age_us = cycle->now_us - feedback->timestamp_us;
+        else
+            r.feedback_measurement_valid = false;
+        if (age_us > r.feedback_max_age_us)
+            r.feedback_max_age_us = age_us;
+        if (!feedback->feedback_valid ||
+            !avatar_m_position_units_to_joint_rad(
+                &cycle->scales[i], feedback->actual_position_units,
+                &r.q_actual[i]))
+            r.feedback_measurement_valid = false;
+    }
     for (size_t i = 0U; i < ROBOT_DOF; ++i) {
         r.wrench[i] = d->adapter.last_output.wrench_base_tcp[i];
         r.twist[i] = d->adapter.last_output.twist_base_tcp[i];
@@ -164,7 +180,10 @@ void gp_host_guidance_flush(GpHostGuidanceDemo *d, const char *name)
         }
         fputs("time_us,cycle,accepted,valid,fault,"
               "fx,fy,fz,tx,ty,tz,vx,vy,vz,wx,wy,wz,"
-              "q1,q2,q3,q4,q5,q6\n", d->csv);
+              "q1,q2,q3,q4,q5,q6,"
+              "feedback_measurement_valid,feedback_max_age_us,"
+              "actual_q1,actual_q2,actual_q3,actual_q4,actual_q5,actual_q6\n",
+              d->csv);
     }
     if (d->csv == NULL) return;
     unsigned dropped;
@@ -199,6 +218,11 @@ void gp_host_guidance_flush(GpHostGuidanceDemo *d, const char *name)
             fprintf(d->csv, ",%.9g", row.twist[i]);
         for (size_t i = 0U; i < ROBOT_DOF; ++i)
             fprintf(d->csv, ",%.12g", row.qref[i]);
+        fprintf(d->csv, ",%u,%llu",
+                (unsigned)row.feedback_measurement_valid,
+                (unsigned long long)row.feedback_max_age_us);
+        for (size_t i = 0U; i < ROBOT_DOF; ++i)
+            fprintf(d->csv, ",%.12g", row.q_actual[i]);
         fputc('\n', d->csv);
     }
     if (any) (void)fflush(d->csv);

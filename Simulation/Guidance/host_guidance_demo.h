@@ -17,6 +17,10 @@ typedef struct {
     unsigned cycle;
     bool accepted, valid, fault;
     double wrench[6], twist[6], qref[6];
+    /* Pre-dispatch joint feedback, not post-command achieved state. */
+    double q_actual[6];
+    uint64_t feedback_max_age_us;
+    bool feedback_measurement_valid;
 } GpGuidanceTraceRow;
 typedef struct {
     HandGuidingDryRunState adapter;

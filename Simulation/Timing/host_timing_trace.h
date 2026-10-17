@@ -31,6 +31,12 @@ typedef enum {
     GP_TIMING_PATH_FEEDBACK_AGE_AXIS_4,
     GP_TIMING_PATH_FEEDBACK_AGE_AXIS_5,
     GP_TIMING_PATH_FEEDBACK_AGE_AXIS_6,
+    /* F1: explicit 2 ms HOST Supervisor, not a physical deadline. */
+    GP_TIMING_SUPERVISOR_2MS,
+    /* Source/adapter work. No nominal 2-ms release guarantee. */
+    GP_TIMING_GUIDANCE_OBSERVER,
+    /* Gate + six RPDO/SYNC dispatch (M7 host owner only). */
+    GP_TIMING_GUIDANCE_DISPATCH,
     GP_TIMING_SOURCE_COUNT
 } GpTimingSource;
 
