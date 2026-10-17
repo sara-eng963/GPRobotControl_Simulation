@@ -251,6 +251,26 @@ if(ENABLE_SILKIT)
                 PROPERTIES TIMEOUT 70 RUN_SERIAL TRUE)
         endforeach()
 
+        # F1: real virtual motor motion observed for several seconds.
+        # Run with GP_4F1_OUTPUT_DIR to preserve measurements and plots.
+        add_test(
+            NAME supervisor_silkit_guidance_4f1_sustained
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_supervisor_guidance_4f1_sustained.py
+                ${SILKIT_ROOT}/bin/sil-kit-registry
+                $<TARGET_FILE:avatar_m_silkit_motor_bank>
+                $<TARGET_FILE:supervisor_silkit_sim>
+        )
+        set_tests_properties(
+            supervisor_silkit_guidance_4f1_sustained
+            PROPERTIES TIMEOUT 80 RUN_SERIAL TRUE)
+        add_test(
+            NAME guidance_4f1_analyzer_fixture
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_guidance_4f1_analyzer.py
+        )
+        set_tests_properties(guidance_4f1_analyzer_fixture PROPERTIES TIMEOUT 10)
+
         # Host-only erase-delay/cancellation and transport-failure tests.
         foreach(case_name IN ITEMS cancel program_fail)
             add_test(
