@@ -34,11 +34,23 @@ typedef struct {
     bool global_fault_active;
 } SupervisorGuidanceDryRunCycle;
 
+/* A fresh, valid, already-computed joint reference. This is NOT a
+ * motor command and does not itself grant permission to dispatch. */
+typedef struct {
+    bool valid;
+    uint64_t produced_us;
+    double position_rad[JOINT_DRIVE_AXES];
+    double velocity_rad_s[JOINT_DRIVE_AXES];
+} SupervisorGuidanceCandidate;
+
 typedef struct {
     void *context;
     /* Called once per TEACHING cycle when manual guidance is requested.
      * False indicates rejected/faulted dry-run; NO motor command occurs. */
     bool (*tick)(void *context, const SupervisorGuidanceDryRunCycle *cycle);
+    /* Optional: consume at most one fresh candidate produced by tick().
+     * A null callback preserves 4E2A observation-only behavior. */
+    bool (*take_candidate)(void *context, SupervisorGuidanceCandidate *out);
     /* Called on disengagement and in states other than TEACHING. */
     void (*stop)(void *context);
 } SupervisorGuidanceDryRunPort;
