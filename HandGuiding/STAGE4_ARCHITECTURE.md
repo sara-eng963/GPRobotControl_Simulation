@@ -95,7 +95,7 @@ The parameters currently have **no approved physical tuning values**. Keemink et
 |---|---|
 | 4B2 | Base/TCP wrench conversion contract, gravity/load handling policy, protocol-independent acquisition status interface and commissioning gates |
 | 4C | Completed standalone lifecycle, per-axis acceleration limits, analytical step/release/rotation tests |
-| 4D | Bounded Jacobian mapping to joint references, singularity and joint-limit tests |
+| 4D | Standalone Jacobian/DLS mapping to bounded joint references and targeted host tests; physical integration still pending |
 | 4E | Supervisor-owned guidance activation/deactivation, feedback and safety/fault coverage |
 | 4F | Reproducible SIL Kit end-to-end checks, regressions, firmware cross-compilation and hardware gate ledger |
 
@@ -134,3 +134,63 @@ This is backward Euler **before** bounds; acceleration and speed clipping change
 | Real servo + F/T sensor | Human–robot interaction and coupled stability | BLOCKED pending hardware and safety qualification |
 
 **Validation distinction:** the local isolated source-copy test was performed before publishing this batch. Running the commands above in WSL after pulling the new commit is still necessary to verify the final GitHub checkout.
+
+## 10. Batch 4D — Cartesian-to-joint reference generation (software-only)
+
+**Files:** `cartesian_joint_mapper.h/.c`, `Tests/test_cartesian_joint_mapper.c`, `CMakeLists.txt`.
+**Inputs:** fresh measured six joint angles in radians; externally authorized
+TCP twist `[vx,vy,vz,wx,wy,wz]` expressed in the **base** frame. The
+sensor-to-base/TCP wrench conversion is NOT completed by this batch.
+
+Existing `control_jacobian(robot, measured_q, J)` gives the TCP Jacobian.
+The module calculates `sigma_min(J)` via the reusable ControlCore analysis.
+It rejects if `sigma_min < minimum_sigma`. Otherwise it uses the existing
+`matrix6_solve()` on:
+
+```text
+(JᵀJ + λ²I) qdot_desired = Jᵀ twist_B_TCP
+qdot_cmd_i = acceleration_limit(qdot_desired_i, qdot_previous_i)
+qref_next_i = qref_previous_i + dt * qdot_cmd_i
+```
+
+Velocity clamping to `robot.limits.qdMax` precedes acceleration limiting.
+The output's `limited` flag records any clamp. Because limiting is per-joint,
+the resulting TCP direction can differ from the request; do not claim exact
+Cartesian tracking or passivity. Positive DLS damping also introduces residual
+tracking error. Mixed linear/angular Jacobian units make `sigma_min` and
+`λ` geometry and scaling dependent; **no numeric production values** are set.
+
+- **Initialization:** `enable()` copies *measured* joint angles into the
+  six position references and clears velocity history. It checks finite
+  robot DH parameters, joint limits, TCP homogeneous-transform bottom row and
+  explicit `model_verified=true` gate; synthetic fixture approval is test-only.
+- **Configuration:** positive `damping_lambda`, `minimum_sigma`,
+  `maximum_step_s`, per-joint acceleration and feedback-tracking limits are
+  required. The UR5 reference model has no `qddMax`; Batch 4D does **not**
+  invent motor acceleration limits. If `qddMaxDefined`, the supplied
+  accelerations must not exceed the model's entries.
+- **Stateful step:** feedback position is used to compute the Jacobian;
+  a separate reference position is integrated. Check feedback/reference
+  tracking error before and after the step to prevent drift.
+- **Hard faults:** singularity margin violation, nonfinite values,
+  missed cycle threshold, feedback divergence or a target outside hard
+  position bounds **rejects and disables the entire mapper**.
+  A zeroed/invalid output is NOT a safe-stop/hold motion command.
+- **Ownership:** zero FreeRTOS/CAN calls, heap allocation or 1000-iteration IK.
+  Supervisor is still the only authorized drive owner. No actual custom-arm
+  geometry, tool calibration, hardware limits, encoder scales or ST MCU runtime
+  qualification is asserted.
+- **Tests:** zero twist, fresh measured initialization, DLS reference,
+  joint speed/acceleration limits and reversal, hard joint stop, synthetic
+  singularity margin, tracking/timing/NaN/invalid-model faults.
+
+Run after pulling:
+```bash
+cmake -S HandGuiding -B /tmp/gp-stage4-build
+cmake --build /tmp/gp-stage4-build -j2
+ctest --test-dir /tmp/gp-stage4-build --output-on-failure
+```
+
+Expected test inventory is 5; **verification is pending** until the committed
+sources run in the user's checkout and/or CI. Do not label full robot
+simulation, target-firmware execution, hardware motion or 500 Hz timing PASS.
