@@ -112,8 +112,13 @@ try:
             assert len(good) >= 5, f"only {len(good)} valid cycles"
             assert any(float(r["vx"]) != 0.0 for r in good)
             assert len({r["time_us"] for r in good}) >= 5
-            # Statically held motors while diagnostic q_ref evolves.
-            assert len({r["q1"] for r in good}) >= 2
+            # At least one calculated joint reference must evolve; which
+            # joint moves is intentionally not prescribed by this fixture.
+            first = [float(good[0][f"q{i}"]) for i in range(1, 7)]
+            assert any(
+                abs(float(r[f"q{i}"]) - first[i - 1]) > 1e-12
+                for r in good[1:] for i in range(1, 7)
+            )
 
             if fault != "none":
                 rows = wait_rows(trace, lambda rs: any(

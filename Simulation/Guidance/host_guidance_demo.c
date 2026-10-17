@@ -137,6 +137,15 @@ void gp_host_guidance_flush(GpHostGuidanceDemo *d, const char *name)
               "q1,q2,q3,q4,q5,q6\n", d->csv);
     }
     if (d->csv == NULL) return;
+    unsigned dropped;
+    taskENTER_CRITICAL();
+    dropped = d->dropped;
+    taskEXIT_CRITICAL();
+    if (dropped != d->drops_reported) {
+        fprintf(stderr, "[4E2B] WARNING: %u total CSV trace rows lost; "
+                        "host scheduler/HMI consumer lagged\\n", dropped);
+        d->drops_reported = dropped;
+    }
     bool any = false;
     for (;;) {
         GpGuidanceTraceRow row;

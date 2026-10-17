@@ -27,6 +27,7 @@ typedef struct {
     bool inject_ft_active;
     GpGuidanceTraceRow rows[GP_GUIDANCE_RING_SIZE];
     unsigned head, tail, dropped;
+    unsigned drops_reported;
     FILE *csv;
     bool open_attempted;
 } GpHostGuidanceDemo;
