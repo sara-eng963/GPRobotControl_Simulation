@@ -35,7 +35,7 @@ f_F   = R_F_S * (f_S - b_f)
 tau_F = R_F_S * (tau_S - b_tau) + p_F_S x f_F
 ```
 
-For example, if the handle creates a moment through its own lever arm, the sensor already measures that moment. The extra cross product above transports the wrench **from sensor origin to flange origin**, not from grip to sensor. Wrench transformation to a **base-frame TCP reference** for `control_jacobian()` is **not yet implemented**. The Jacobian expects `[v_B, omega_B]` at TCP in base frame, so both frame and moment reference point must match the motion-control convention.
+For example, if the handle creates a moment through its own lever arm, the sensor already measures that moment. The extra cross product above transports the wrench **from sensor origin to flange origin**, not from grip to sensor. Wrench transformation to the **base-frame TCP reference** required for `control_jacobian()` is now implemented as a separate, still-unintegrated Batch 4B2 module. The Jacobian expects `[v_B, omega_B]` at TCP in base frame, so both frame and moment reference point must match the motion-control convention.
 
 `g_sensor_config.geometry_verified=false`, with deliberately invalid zero quaternions, blocks physical use. Test fixtures with `geometry_verified=true` are synthetic and do not authorize robot movement.
 
@@ -93,7 +93,7 @@ The parameters currently have **no approved physical tuning values**. Keemink et
 
 | Batch | Acceptance deliverable |
 |---|---|
-| 4B2 | Base/TCP wrench conversion contract, gravity/load handling policy, protocol-independent acquisition status interface and commissioning gates |
+| 4B2 | Base/TCP wrench conversion implemented and locally checked with a synthetic FK fixture; full checkout and hardware validation pending |
 | 4C | Completed standalone lifecycle, per-axis acceleration limits, analytical step/release/rotation tests |
 | 4D | Standalone Jacobian/DLS mapping to bounded joint references and targeted host tests; physical integration still pending |
 | 4E | Supervisor-owned guidance activation/deactivation, feedback and safety/fault coverage |
@@ -194,3 +194,87 @@ ctest --test-dir /tmp/gp-stage4-build --output-on-failure
 Expected test inventory is 5; **verification is pending** until the committed
 sources run in the user's checkout and/or CI. Do not label full robot
 simulation, target-firmware execution, hardware motion or 500 Hz timing PASS.
+
+
+## 11. Batch 4B2 — Sensor wrench at the TCP, in robot-base coordinates
+
+**Implemented:** `wrench_frame_sensor_to_base_tcp()` in
+`wrench_frame.c/.h` with `test_wrench_frame.c`. This stage only transforms
+measured wrench data; it does **not** authorize motion or call CANopen.
+
+### Frame meaning and sign convention
+
+- `B` = robot base frame, `F` = flange origin, `S` = F/T sensor origin,
+  `TCP` = configured tool control point.
+- Reuse Stage 4B1 for bias, `S → F` rotation and moment shift.
+- Reuse **existing** `control_fk(robot, measured_q, T_B_TCP)` from ControlCore.
+- The tool definition is `T_F_TCP`. Recover the flange rotation:
+  `R_B_F = R_B_TCP * R_F_TCP^T`.
+- Move torque reference **from flange origin to TCP origin** before expressing
+  the wrench in base coordinates:
+
+```text
+ f_B_TCP   = R_B_F * f_F
+ tau_F_TCP = tau_F - p_F_TCP x f_F
+ tau_B_TCP = R_B_F * tau_F_TCP
+```
+
+The subtraction is intentional: the origin moves from F to TCP. This is a
+rigid-body wrench reference-point transform, preserving wrench/twist power
+when both refer to the same point and coordinate basis. The mounted handle's
+grip-to-sensor force lever arm is *already in the sensor torque channel*;
+never add `p_S_G x f` again.
+
+### Mandatory input contract
+
+The caller supplies one **fresh, complete** six-axis acquisition sample with
+a monotonic timestamp and valid flag, a valid static tare, sensor geometry
+(`geometry_verified=true`), measured joint angles from the same physical
+robot state, calibrated `T_F_TCP`, robot DH parameters and a separately
+verified robot-model gate. Failures zero output and return false; consuming
+code must **inhibit guidance** and use the independent safety-chain policy,
+not interpret zeros as an intentional release of the handle.
+
+The numerical model checks finite joint angles and geometry, joint ranges,
+a homogeneous tool transform with orthonormal right-handed rotation, and
+finite forward-kinematics output. The synthetic test config sets the
+verification gates only to exercise the mathematics, not to approve hardware.
+
+**Acquisition interface:** the existing `FtSensorSample` is protocol-neutral;
+RS-485/Modbus frame parsing, CRC, per-frame integrity and sensor overload
+must be checked by a future *vendor-specific input adapter* **before**
+setting `sample.valid=true`. Complete-sample timestamps must come from one
+monotonic MCU clock. Reject stale, missing, repeated-as-fresh, malformed,
+CRC-bad or overloaded measurements at the acquisition/control boundary.
+
+**Gravity and tool-load limitation:** `ft_sensor_capture_bias()` captures a
+static offset under an explicitly unloaded pose. It does **not** perform
+gravity compensation for mass downstream of the sensor, inertial compensation,
+thermal calibration or drift correction. With a moving handle, gravity of
+any post-sensor structure rotates into sensor coordinates and a one-pose
+tare cannot remove it. Do not enable physical admittance until CAD load
+paths, mass/CoM measurements, hand-force convention and compensation
+acceptance tests are confirmed. There is no direct sensor-specification
+claim or assumed F/T sample rate in this batch.
+
+### Test coverage / evidence
+
+The new `test_wrench_frame.c` exercises a synthetic all-zero-DH chain,
+a 90-degree rotated **tool frame**, a rotated **sensor frame**, nonzero
+sensor and TCP lever arms, calibrated tare, changes of measured joint
+angle and sign checks for torque shifting. It rejects unverified geometry,
+unverified model, stale F/T measurement, nonfinite/out-of-range joint angles,
+reflection `det(R)=-1`, wrong DOF and invalid sensor measurements.
+
+An isolated local **synthetic FK-stub** compile using
+`gcc -std=c11 -Wall -Wextra -Werror -Wpedantic` passed this single
+new unit-test fixture. **This is not a compile using the repository's
+actual FK implementation.** The committed source **must** be verified
+via strict standalone WSL CMake/CTest (expected six tests); CI/full
+repository and real STM32 firmware verification are separate.
+
+Batch 4E remains unstarted: it must integrate acquisition, F/T mapping,
+admittance, joint reference generation and M7 Supervisor authorization,
+including per-cycle live feedback, queue/command freshness, fault latching,
+safe stop and encoder conversion. No real hardware enabling before
+Stage 3 commissioning gates.

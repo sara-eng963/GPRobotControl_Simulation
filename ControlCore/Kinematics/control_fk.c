@@ -195,9 +195,10 @@ void control_fk(
          *
          *      T = T * A
          */
+        /* C11 requires an explicit pointer-to-array const qualification. */
         matrix4_multiply(
-            T,
-            A,
+            (const double (*)[4])T,
+            (const double (*)[4])A,
             T
         );
     }
@@ -221,7 +222,7 @@ void control_fk(
      */
 
     matrix4_multiply(
-        T,
+        (const double (*)[4])T,
         robot->tool.T_F_TCP,
         T_B_TCP
     );
