@@ -994,7 +994,9 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
     if (context->machine.activeState != ROBOT_STATE_TEACHING ||
         !context->teaching_runtime.manual_guidance_active) {
         port->stop(port->context);
+#if defined(GP_HOST_TIMING) && defined(GP_HOST_GUIDANCE_MOTION_TEST)
         hand_guiding_command_gate_reset(&context->sim_guidance_gate);
+#endif
         return;
     }
     const RobotSafetySnapshot *safety = &context->machine.safety;

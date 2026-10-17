@@ -1796,6 +1796,14 @@ static bool start_system(void)
     /* Strict host opt-in only. Never wired into production STM32 firmware. */
     const char *guidance_opt = getenv("GP_GUIDANCE_DRY_RUN");
     host_guidance_enabled = guidance_opt && strcmp(guidance_opt, "1") == 0;
+    const char *dispatch_opt = getenv("GP_GUIDANCE_SIM_MOTION");
+    const bool sim_guidance_dispatch =
+        dispatch_opt && strcmp(dispatch_opt, "1") == 0;
+    if (sim_guidance_dispatch && !host_guidance_enabled) {
+        fprintf(stderr, "[4E3] GP_GUIDANCE_SIM_MOTION requires "
+                        "GP_GUIDANCE_DRY_RUN=1\\n");
+        return false;
+    }
     host_guidance_trace_path = getenv("GP_GUIDANCE_TRACE_FILE");
     if (host_guidance_enabled && (!host_guidance_trace_path ||
                                   !*host_guidance_trace_path))
@@ -1871,6 +1879,19 @@ static bool start_system(void)
     c.period_ticks=pdMS_TO_TICKS(host_guidance_enabled ? 2 : 1);
     if (host_guidance_enabled)
         c.guidance_dry_run = gp_host_guidance_port(&host_guidance_demo);
+    if (sim_guidance_dispatch) {
+        /* Host-only synthetic validation limits; NOT motion approval for
+         * the actual custom robot. Used solely with SIL Kit virtual motors. */
+        c.sim_guidance_dispatch_enabled = true;
+        c.sim_guidance_command_limits.maximum_candidate_age_us = 1000U;
+        for (size_t j = 0U; j < SIM_NUM_AXES; ++j) {
+            c.sim_guidance_command_limits.max_step_rad[j] = 0.008;
+            c.sim_guidance_command_limits.max_target_feedback_error_rad[j] = 0.1;
+            c.sim_guidance_command_limits.max_quantization_error_rad[j] = 0.00001;
+        }
+        fprintf(stderr, "[4E3] SIMULATED MOTOR DISPATCH ENABLED, "
+                        "host-only synthetic parameters; never hardware\\n");
+    }
     c.validation_enter_ready=prefetch_ready_for_validation;
     /* Flash erase/program/CRC reads run only in low-priority task.
      * No persistent artifact is published until the worker commits it. */
