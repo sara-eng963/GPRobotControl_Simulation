@@ -413,3 +413,8 @@ cmake -S HandGuiding -B /tmp/gp-stage4-e2a-strict -DCMAKE_C_FLAGS="-Wall -Wextra
 cmake --build /tmp/gp-stage4-e2a-strict -j2
 ctest --test-dir /tmp/gp-stage4-e2a-strict --output-on-failure
 ```
+
+**Read-only interface hardening:** the Supervisor copies six `JointDriveAxisFeedback`
+records into the observer message. The observer cannot access the
+`JointDrivePort` vtable or `send_targets` callback. The existing
+`JointDrivePort` is used only inside the Supervisor's M7-owned task.

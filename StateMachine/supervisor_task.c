@@ -995,7 +995,15 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
     }
     const RobotSafetySnapshot *safety = &context->machine.safety;
     SupervisorGuidanceDryRunCycle cycle = {0};
-    cycle.drive = &context->joint_drive;
+    /* Copy read-only drive measurements into the callback envelope.
+     * Never give a dry-run observer access to send_targets or CANopen. */
+    cycle.feedback_healthy =
+        joint_drive_port_healthy(&context->joint_drive, cycle.now_ms);
+    for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis) {
+        if (!joint_drive_port_read_axis(&context->joint_drive, axis,
+                                        &cycle.feedback[axis]))
+            cycle.feedback_healthy = false;
+    }
     cycle.scales = context->config.avatar_position_scales;
     cycle.robot = context->config.robot;
     cycle.now_us = supervisor_now_us();

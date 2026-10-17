@@ -67,8 +67,10 @@ int main(void)
     SupervisorGuidanceDryRunPort port = hand_guiding_dry_run_port(&state);
     assert(port.tick != NULL && port.stop != NULL);
     SupervisorGuidanceDryRunCycle cycle = {0};
-    cycle.drive = &drive;
+    cycle.feedback_healthy = true;
     cycle.scales = scales;
+    for (size_t axis = 0U; axis < ROBOT_DOF; ++axis)
+        assert(joint_drive_port_read_axis(&drive, axis, &cycle.feedback[axis]));
     cycle.robot = &robot;
     cycle.now_us = 1100U;
     cycle.now_ms = 1U;
@@ -95,6 +97,8 @@ int main(void)
     for (size_t axis = 0U; axis < ROBOT_DOF; ++axis) {
         fake.axis[axis].timestamp_us = 3000U;
         ++fake.sequence[axis];
+        cycle.feedback[axis] = fake.axis[axis];
+        cycle.feedback[axis].sequence = fake.sequence[axis];
     }
     assert(port.tick(port.context, &cycle));
     assert(state.last_output.valid && state.pipeline.active);
@@ -107,7 +111,7 @@ int main(void)
     cycle.runtime_timestamp_ms = 5U;
     cycle.safety_timestamp_ms = 5U;
     for (size_t axis = 0U; axis < ROBOT_DOF; ++axis)
-        fake.axis[axis].timestamp_us = 5000U;
+        cycle.feedback[axis].timestamp_us = 5000U;
     assert(!port.tick(port.context, &cycle));
     assert(state.pipeline.fault_latched && !state.last_output.valid);
     assert(fake.commands == 0U);
@@ -116,7 +120,7 @@ int main(void)
     assert(!port.tick(port.context, &cycle));
     hand_guiding_dry_run_reset(&state);
     for (size_t axis = 0U; axis < ROBOT_DOF; ++axis)
-        ++fake.sequence[axis];
+        ++cycle.feedback[axis].sequence;
     assert(port.tick(port.context, &cycle));
     port.stop(port.context);
     assert(!state.pipeline.active && !state.last_output.valid);

@@ -12,7 +12,9 @@
  * A null port means Stage 4E2A is disabled; no hardware provider is wired.
  */
 typedef struct {
-    const JointDrivePort *drive;
+    /* Joint feedback copied by the M7 owner; NO send_targets vtable. */
+    JointDriveAxisFeedback feedback[JOINT_DRIVE_AXES];
+    bool feedback_healthy;
     const AvatarMPositionScale *scales;
     const RobotConfig *robot;
     uint64_t now_us;

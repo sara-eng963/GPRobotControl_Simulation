@@ -63,7 +63,7 @@ bool hand_guiding_dry_run_tick(
     memset(&state->last_output, 0, sizeof(state->last_output));
 
     if (cycle == NULL || state->pipeline.fault_latched ||
-        cycle->drive == NULL || cycle->scales == NULL ||
+        !cycle->feedback_healthy || cycle->scales == NULL ||
         cycle->robot == NULL || !cycle->teaching_active ||
         !cycle->manual_guidance_requested || !cycle->motion_permitted ||
         !cycle->robot_homed || !cycle->drives_ready ||
@@ -77,28 +77,22 @@ bool hand_guiding_dry_run_tick(
             state->config.max_safety_age_ms)
         return fail(state);
 
-    /* Do not repoll CANopen here: Supervisor alone owns the coordinator.
-     * Feedback timestamps must use the same monotonic clock as now_us. */
-    if (!joint_drive_port_valid(cycle->drive) ||
-        !joint_drive_port_healthy(cycle->drive, cycle->now_ms) ||
-        !joint_drive_port_all_feedback_valid(cycle->drive))
-        return fail(state);
-
+    /* All six samples are copied by the M7 Supervisor. The adapter
+     * cannot obtain a send-target callback or perform CANopen operations. */
     double measured_q[ROBOT_DOF];
     uint32_t sequences[ROBOT_DOF];
     for (size_t axis = 0U; axis < ROBOT_DOF; ++axis) {
-        JointDriveAxisFeedback fb = {0};
-        if (!joint_drive_port_read_axis(cycle->drive, axis, &fb) ||
-            !fb.feedback_valid || !fb.operation_enabled ||
-            fb.timestamp_us > cycle->now_us ||
-            cycle->now_us - fb.timestamp_us >
+        const JointDriveAxisFeedback *fb = &cycle->feedback[axis];
+        if (!fb->feedback_valid || !fb->operation_enabled ||
+            fb->timestamp_us > cycle->now_us ||
+            cycle->now_us - fb->timestamp_us >
                 state->config.max_feedback_age_us ||
             !avatar_m_position_scale_valid(&cycle->scales[axis]) ||
             !avatar_m_position_units_to_joint_rad(
-                &cycle->scales[axis], fb.actual_position_units,
+                &cycle->scales[axis], fb->actual_position_units,
                 &measured_q[axis]))
             return fail(state);
-        sequences[axis] = fb.sequence;
+        sequences[axis] = fb->sequence;
         if (state->config.require_new_feedback &&
             state->feedback_sequence_initialized &&
             (int32_t)(sequences[axis] -
