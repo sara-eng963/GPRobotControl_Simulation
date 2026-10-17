@@ -51,7 +51,7 @@ No sensor protocol, filter, online tare trigger, motion output or motor transpor
 
 **Safety limitation:** On failure the function returns `false` and clears its output. The future controller must latch/inhibit guidance and perform the defined safe stop; it must **not** simply interpret a fault as an intentional zero-force release. Software fault responses are not independent hardware E-stop/STO.
 
-## 4. Admittance numerical core (already present; Batch 4C pending)
+## 4. Admittance numerical core (Batch 4C accepted in isolated host testing)
 
 For each of six independent axes:
 
@@ -62,7 +62,7 @@ V_next = (M_i * V_previous + dt * W_i) / (M_i + dt * D_i)
 
 Axes 0–2: mass kg, damping N*s/m, force N, velocity m/s.
 Axes 3–5: rotational inertia kg*m^2, damping N*m*s/rad, torque N*m, angular velocity rad/s.
-The existing module checks positive parameters, finite input and positive time step, clamps per-axis speed and resets on failure. It **does not** limit Cartesian acceleration or implement explicit enable/disable lifecycle. `K=0`: a released handle produces exponentially decaying commanded velocity, not a spring return-to-pose.
+The module validates positive masses, damping, velocity and acceleration limits and a caller-defined maximum step duration. It checks finite inputs and bounds per-axis velocity and acceleration. Explicit enable starts from zero virtual velocity; disable/reset and any invalid step clear and disable the controller. This is not a robot stop command. `K=0`: a released handle produces exponentially decaying commanded velocity, not a spring return-to-pose.
 
 The parameters currently have **no approved physical tuning values**. Keemink et al. analyze largely single-DOF systems with velocity inner loops. Their coupled stability/passivity conditions cannot simply be asserted for this six-axis, position-commanded arm. Filtering is deferred pending sensor latency and noise measurements.
 
@@ -94,11 +94,43 @@ The parameters currently have **no approved physical tuning values**. Keemink et
 | Batch | Acceptance deliverable |
 |---|---|
 | 4B2 | Base/TCP wrench conversion contract, gravity/load handling policy, protocol-independent acquisition status interface and commissioning gates |
-| 4C | Explicit lifecycle, Cartesian acceleration limits, analytical step/release/rotation tests |
+| 4C | Completed standalone lifecycle, per-axis acceleration limits, analytical step/release/rotation tests |
 | 4D | Bounded Jacobian mapping to joint references, singularity and joint-limit tests |
 | 4E | Supervisor-owned guidance activation/deactivation, feedback and safety/fault coverage |
 | 4F | Reproducible SIL Kit end-to-end checks, regressions, firmware cross-compilation and hardware gate ledger |
 
 ## 8. Changelog
 
-- **2026-10-17 — 4B1:** Audited initial eight-file hand-guiding code; added standalone build/test registration and sensor-to-flange wrench conversion, static tare, failure checks and focused unit test. Robot motion remains disabled.
+- **2026-10-17 — 4C:** Added explicit enable/disable lifecycle, six-axis acceleration bounding and caller-configured maximum step; verified analytical force/release/rotation and invalid-input tests in isolated host build. No Supervisor integration or physical motion.\n- **2026-10-17 — 4B1:** Audited initial eight-file hand-guiding code; added standalone build/test registration and sensor-to-flange wrench conversion, static tare, failure checks and focused unit test. Robot motion remains disabled.
+
+## 9. Batch 4C — Numerical contract and acceptance record
+
+The diagonal virtual mass-damper integration for each Cartesian axis is:
+
+```text
+v_model[k+1] = (M_i*v[k] + dt*W_i[k]) / (M_i + dt*D_i)
+dv           = clamp(v_model[k+1] - v[k], -a_limit_i*dt, +a_limit_i*dt)
+v[k+1]       = clamp(v[k] + dv, -speed_limit_i, +speed_limit_i)
+```
+
+This is backward Euler **before** bounds; acceleration and speed clipping change the ideal virtual dynamics. It does not establish physical robot acceleration or interaction stability: Jacobian conversion, servo tracking, encoder feedback and physical loop dynamics are not yet included.
+
+- `admittance_enable(state, params)` validates all configured fields, clears prior virtual velocity and enables the controller. Invalid configuration leaves it disabled.
+- `admittance_disable` and `admittance_reset` clear virtual velocity and disable.
+- `admittance_step` requires an enabled controller, independently validated six-axis wrench in the same fixed frame/control point, and `0 < dt <= maximum_step_s`. It rejects nonfinite data, invalid parameters or unbounded state. On error it clears the output, resets and disables; later callers must treat this as a *fault* rather than interpreting it as handle release.
+- `maximum_step_s` is a **required** timing-fault setting. The unit test's 0.004 s is only a synthetic fixture, not an approved MCU deadline or system requirement.
+- All mass, damping, speed and acceleration limits must be explicitly tuned/approved from actual hardware behavior. No physical values are asserted. The controlled wrench reference must be finalized in 4B2/4D.
+- No per-step heap allocation or unbounded search. Runtime verification on the MCU is pending. The returned twist does not itself authorize any motor commands.
+- The API requires `twist_out` to have no storage overlap with either wrench input or state.
+
+| Evidence | Test/command | Result |
+|---|---|---|
+| Standalone host configure | `cmake -S HandGuiding -B /tmp/gp-stage4-build -DCMAKE_BUILD_TYPE=Debug` | PASS in isolated local source copy |
+| Standalone host compile | `cmake --build /tmp/gp-stage4-build -j2` | PASS in isolated local source copy |
+| Unit tests | `ctest --test-dir /tmp/gp-stage4-build --output-on-failure` | **4/4 PASS** in isolated local source copy |
+| Numerics | Six-axis independent reference values, analytical backward-Euler release, rotational response, signed acceleration and speed saturation | PASS |
+| Fault and lifecycle | Disabled controller, reset, invalid configuration/input/state, nonfinite or late time step, no partial state commit | PASS |
+| Full root CMake / SIL Kit / ARM firmware | Existing repository integrations | NOT RUN for 4C |
+| Real servo + F/T sensor | Human–robot interaction and coupled stability | BLOCKED pending hardware and safety qualification |
+
+**Validation distinction:** the local isolated source-copy test was performed before publishing this batch. Running the commands above in WSL after pulling the new commit is still necessary to verify the final GitHub checkout.

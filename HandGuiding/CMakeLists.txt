@@ -15,7 +15,7 @@ target_include_directories(hand_guiding PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(hand_guiding PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(hand_guiding PUBLIC m)
 
-foreach(test_name IN ITEMS test_ft_sensor test_sensor_config test_wrench_processing)
+foreach(test_name IN ITEMS test_ft_sensor test_sensor_config test_wrench_processing test_admittance_control)
     add_executable(${test_name} Tests/${test_name}.c)
     target_link_libraries(${test_name} PRIVATE hand_guiding)
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror -UNDEBUG)
