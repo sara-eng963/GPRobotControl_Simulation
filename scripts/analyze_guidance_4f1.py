@@ -162,8 +162,17 @@ def run(guidance: Path, timing: Path, output: Path,
     output.mkdir(parents=True, exist_ok=True)
     result = {"scope": "Host SIL Kit / POSIX only; no STM32 timing or physical safety claim",
               "guidance": observed, "timing": host}
-    (output / "summary.json").write_text(json.dumps(result, indent=2) + "\n",
-                                          encoding="utf-8")
+    def json_safe(value):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if isinstance(value, dict):
+            return {k: json_safe(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [json_safe(v) for v in value]
+        return value
+    (output / "summary.json").write_text(
+        json.dumps(json_safe(result), indent=2, allow_nan=False) + "\n",
+        encoding="utf-8")
     ax = observed["axes"]
     lines = [
         "# Stage 4F1 — Hand-guiding host timing & tracking",

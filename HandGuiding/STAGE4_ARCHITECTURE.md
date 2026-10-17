@@ -545,3 +545,16 @@ cmake -S . -B /tmp/gp-stage4-e3-silkit -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT
 cmake --build /tmp/gp-stage4-e3-silkit --target supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
 ctest --test-dir /tmp/gp-stage4-e3-silkit -R 'supervisor_silkit_guidance_' --output-on-failure
 ```
+
+
+## 16. Batch 4F1 — Host measurements and tracking
+
+F1 adds *no new actuator control law*. The existing host-only SIL Kit
+virtual motor path is instrumented with a distinct 2-ms Supervisor timing
+source, guidance observer timing and command-validation/dispatch timing.
+It also includes pre-dispatch actual joint feedback in the existing
+guidance CSV. Timing file writes remain in the pre-existing background
+writer; guidance CSV writes remain in the HMI task.
+
+Details, limitations, persistent WSL test commands, and interpretation are
+in [Simulation/Guidance/README_4F1.md](../Simulation/Guidance/README_4F1.md).
