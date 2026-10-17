@@ -25,6 +25,9 @@ endif()
 set(CMAKE_C_STANDARD 11)
 enable_testing()
 
+# Stage 4 hand-guiding remains host-testable and physically disabled.
+add_subdirectory(HandGuiding)
+
 # Portable, nonblocking M7/M4 mailbox; hardware MPU mapping is separate.
 add_library(intercore_ipc STATIC Intercore/ipc_mailbox.c)
 target_compile_features(intercore_ipc PUBLIC c_std_11)
