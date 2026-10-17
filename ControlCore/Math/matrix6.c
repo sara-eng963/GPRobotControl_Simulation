@@ -219,8 +219,10 @@ int solve6(
 )
 {
     return
+        /* Read-only matrix argument, explicitly converted for ISO C11.
+         * No change to the elimination algorithm or output semantics. */
         matrix6_solve(
-            A,
+            (const real_t (*)[ROBOT_DOF])A,
             b,
             x
         )

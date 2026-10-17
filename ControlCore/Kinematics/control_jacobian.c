@@ -278,9 +278,11 @@ void control_jacobian(
          *      T = T * A;
          */
 
+        /* C11: pointer-to-array qualifiers do not implicitly convert to
+         * const before C2X. The inputs are read-only inside this helper. */
         matrix4_multiply(
-            T,
-            A,
+            (const double (*)[4])T,
+            (const double (*)[4])A,
             T
         );
     }
@@ -300,7 +302,7 @@ void control_jacobian(
 
 
     matrix4_multiply(
-        T,
+        (const double (*)[4])T,
         robot->tool.T_F_TCP,
         T_B_TCP
     );
