@@ -216,6 +216,23 @@ if(ENABLE_SILKIT)
         )
         set_tests_properties(supervisor_silkit_flash_sequence PROPERTIES
             TIMEOUT 150 RUN_SERIAL TRUE)
+        # Opt-in Stage 4E2B full SIL Kit observer integration, no
+        # admittance-driven motor dispatch. Each run owns registry port 8500.
+        foreach(fault IN ITEMS none stale_ft bad_feedback)
+            add_test(
+                NAME supervisor_silkit_guidance_dry_run_${fault}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_supervisor_silkit_guidance_dryrun.py
+                    ${SILKIT_ROOT}/bin/sil-kit-registry
+                    $<TARGET_FILE:avatar_m_silkit_motor_bank>
+                    $<TARGET_FILE:supervisor_silkit_sim>
+                    ${fault}
+            )
+            set_tests_properties(
+                supervisor_silkit_guidance_dry_run_${fault}
+                PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+        endforeach()
+
         # Host-only erase-delay/cancellation and transport-failure tests.
         foreach(case_name IN ITEMS cancel program_fail)
             add_test(
