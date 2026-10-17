@@ -234,6 +234,23 @@ if(ENABLE_SILKIT)
                 PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
         endforeach()
 
+        # Stage 4E3: host-only simulated motor dispatch. The physical
+        # STM32 target never compiles GP_HOST_GUIDANCE_MOTION_TEST.
+        foreach(fault IN ITEMS none stale_ft bad_feedback)
+            add_test(
+                NAME supervisor_silkit_guidance_sim_motor_${fault}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_supervisor_silkit_guidance_motion.py
+                    ${SILKIT_ROOT}/bin/sil-kit-registry
+                    $<TARGET_FILE:avatar_m_silkit_motor_bank>
+                    $<TARGET_FILE:supervisor_silkit_sim>
+                    ${fault}
+            )
+            set_tests_properties(
+                supervisor_silkit_guidance_sim_motor_${fault}
+                PROPERTIES TIMEOUT 70 RUN_SERIAL TRUE)
+        endforeach()
+
         # Host-only erase-delay/cancellation and transport-failure tests.
         foreach(case_name IN ITEMS cancel program_fail)
             add_test(

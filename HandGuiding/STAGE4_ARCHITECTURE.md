@@ -484,3 +484,64 @@ configured SIL Kit host SDK, run the opt-in host sequence and analyze
 CSV for successive valid samples plus injected-fault rejection; preserve
 all existing HMI/SIL Kit regression tests. No physical motor
 commissioning or certified safety claims are made.
+
+
+## 15. Stage 4E3 — Simulator-only command gating and dispatch
+
+**This phase is NOT real robot commissioning.** The command path runs only
+inside the explicitly flagged SIL Kit executable with **both**
+`GP_GUIDANCE_DRY_RUN=1` and `GP_GUIDANCE_SIM_MOTION=1`. The build gate
+requires `GP_HOST_TIMING` AND `GP_HOST_GUIDANCE_MOTION_TEST`, defined
+together **only** for `supervisor_silkit_sim`. The normal STM32 firmware
+cannot build or invoke this target-send branch. Raw GUI guided-target
+messages are rejected while the observer is installed.
+
+The new modular `HandGuiding/guidance_command_gate.[ch]` has no RTOS,
+CANopen or motor-send dependency. It accepts one
+`SupervisorGuidanceCandidate` created by the prior 4E1 pipeline step
+**in the same Supervisor cycle**. It checks candidate freshness,
+single-use/monotonic sequence, state/safety gates, joint validity,
+finite joint reference and velocity, robot soft limits, bounds relative
+to measured feedback and previous command, and quantized encoder limits.
+`avatar_m_joint_rad_to_position_units` from the existing AVATAR
+library performs the six conversions. A rejection zeroes the output
+packet and latches the software gate. Thresholds are **explicit synthetic
+fixture values**, never industrial limits.
+
+Only the M7 Supervisor may call
+`joint_drive_port_send_targets`, which reuses the existing six RPDO4
+plus SYNC CANopen transaction. A failed send, invalid candidate, lost
+observer or missed candidate after dispatch causes a Supervisor
+STATE_FAILED transition rather than silently replaying a stale command.
+No zeroed buffer is dispatched on validation failure. This software
+transition must NOT be confused with independent STO/E-stop or verified
+controlled deceleration.
+
+Host `Simulation/Guidance/host_guidance_demo.c` exposes a
+single-consumption `take_candidate` callback. No second control task
+or queue is introduced. The normal dry-run observer remains available,
+and unflagged operation retains the legacy SIL Kit path.
+
+The deliberate +0.15 rad synthetic wrist-DH perturbation is retained in
+the **observer-only model** to avoid a test singularity. This is not a
+valid robot kinematic model for physical control and cannot be deployed
+to hardware. The virtual position motion is a software transport test,
+not a stability or safety proof.
+
+Tests added: one pure-C candidate gate test
+(`test_guidance_command_gate`), and three independent SIL Kit motor
+scenarios (normal virtual motion, stale F/T fault, invalid feedback fault)
+which confirm virtual feedback changes for the normal scenario and
+Supervisor FAULT entry for injected faults. **Run results pending WSL**.
+
+Expected host verification:
+
+```bash
+cmake -S HandGuiding -B /tmp/gp-stage4-e3-host -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
+cmake --build /tmp/gp-stage4-e3-host -j2
+ctest --test-dir /tmp/gp-stage4-e3-host --output-on-failure
+
+cmake -S . -B /tmp/gp-stage4-e3-silkit -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
+cmake --build /tmp/gp-stage4-e3-silkit --target supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
+ctest --test-dir /tmp/gp-stage4-e3-silkit -R 'supervisor_silkit_guidance_' --output-on-failure
+```
