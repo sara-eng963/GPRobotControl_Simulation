@@ -995,6 +995,8 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
     }
     const RobotSafetySnapshot *safety = &context->machine.safety;
     SupervisorGuidanceDryRunCycle cycle = {0};
+    cycle.now_us = supervisor_now_us();
+    cycle.now_ms = (uint32_t)(cycle.now_us / UINT64_C(1000));
     /* Copy read-only drive measurements into the callback envelope.
      * Never give a dry-run observer access to send_targets or CANopen. */
     cycle.feedback_healthy =
@@ -1006,8 +1008,6 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
     }
     cycle.scales = context->config.avatar_position_scales;
     cycle.robot = context->config.robot;
-    cycle.now_us = supervisor_now_us();
-    cycle.now_ms = (uint32_t)(cycle.now_us / UINT64_C(1000));
     cycle.period_s = (double)context->config.period_ticks /
                      (double)configTICK_RATE_HZ;
     cycle.runtime_timestamp_ms = context->teaching_runtime.timestamp_ms;
