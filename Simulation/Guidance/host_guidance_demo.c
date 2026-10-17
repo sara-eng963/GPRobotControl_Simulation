@@ -47,7 +47,20 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
     if (inject && d->inject == GP_GUIDANCE_INJECT_BAD_FEEDBACK)
         observation.feedback_healthy = false;
 
+    d->candidate_pending = false;
+    memset(&d->candidate, 0, sizeof(d->candidate));
     const bool accepted = hand_guiding_dry_run_tick(&d->adapter, &observation);
+    if (accepted && d->adapter.last_output.valid) {
+        d->candidate.valid = true;
+        d->candidate.produced_us = cycle->now_us;
+        for (size_t i = 0U; i < ROBOT_DOF; ++i) {
+            d->candidate.position_rad[i] =
+                d->adapter.last_output.joint_position_ref[i];
+            d->candidate.velocity_rad_s[i] =
+                d->adapter.last_output.joint_velocity_ref[i];
+        }
+        d->candidate_pending = true;
+    }
     GpGuidanceTraceRow r = {0};
     r.time_us = cycle->now_us;
     r.cycle = d->cycles;
@@ -65,7 +78,23 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
 static void stop(void *context)
 {
     GpHostGuidanceDemo *d = (GpHostGuidanceDemo *)context;
-    if (d != NULL) hand_guiding_dry_run_stop(&d->adapter);
+    if (d != NULL) {
+        d->candidate_pending = false;
+        memset(&d->candidate, 0, sizeof(d->candidate));
+        hand_guiding_dry_run_stop(&d->adapter);
+    }
+}
+
+static bool take_candidate(void *context, SupervisorGuidanceCandidate *out)
+{
+    GpHostGuidanceDemo *d = (GpHostGuidanceDemo *)context;
+    if (out == NULL) return false;
+    memset(out, 0, sizeof(*out));
+    if (d == NULL || !d->candidate_pending) return false;
+    *out = d->candidate;
+    d->candidate_pending = false;
+    memset(&d->candidate, 0, sizeof(d->candidate));
+    return true;
 }
 
 bool gp_host_guidance_init(GpHostGuidanceDemo *d,
@@ -117,6 +146,7 @@ SupervisorGuidanceDryRunPort gp_host_guidance_port(GpHostGuidanceDemo *d)
     if (d != NULL && d->adapter.configured) {
         port.context = d;
         port.tick = tick;
+        port.take_candidate = take_candidate;
         port.stop = stop;
     }
     return port;

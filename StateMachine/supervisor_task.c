@@ -99,6 +99,8 @@ typedef struct
     uint32_t timer_max_cycle_us;
     uint32_t guidance_dry_run_ok_cycles;
     uint32_t guidance_dry_run_rejected_cycles;
+    uint32_t sim_guidance_dispatched_cycles;
+    HandGuidingCommandGateState sim_guidance_gate;
 
     /* Only the validation worker mutates 'validation' or flash storage when
      * async mode is enabled. Supervisor reads exclusively a copied result.
@@ -992,6 +994,7 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
     if (context->machine.activeState != ROBOT_STATE_TEACHING ||
         !context->teaching_runtime.manual_guidance_active) {
         port->stop(port->context);
+        hand_guiding_command_gate_reset(&context->sim_guidance_gate);
         return;
     }
     const RobotSafetySnapshot *safety = &context->machine.safety;
@@ -1030,13 +1033,53 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
     cycle.global_fault_active = safety->globalFaultActive ||
         context->teaching_runtime.global_fault_active;
 
-    if (port->tick(port->context, &cycle)) {
+    const bool observer_ok = port->tick(port->context, &cycle);
+    if (observer_ok) {
         if (context->guidance_dry_run_ok_cycles < UINT32_MAX)
             ++context->guidance_dry_run_ok_cycles;
     } else {
         if (context->guidance_dry_run_rejected_cycles < UINT32_MAX)
             ++context->guidance_dry_run_rejected_cycles;
     }
+
+#if defined(GP_HOST_TIMING) && defined(GP_HOST_GUIDANCE_MOTION_TEST)
+    /* The ONLY authorized simulation dispatch point: M7 owner task.
+     * This block cannot compile into normal STM32 firmware. */
+    if (context->config.sim_guidance_dispatch_enabled) {
+        SupervisorGuidanceCandidate candidate = {0};
+        const bool candidate_present = observer_ok &&
+            port->take_candidate != NULL &&
+            port->take_candidate(port->context, &candidate);
+        /* First successful tick arms from fresh joint measurements and
+         * intentionally produces no candidate. Every subsequent commanded
+         * cycle must produce a fresh candidate; never replay old targets. */
+        if (candidate_present) {
+            int32_t target_units[ROBOT_DOF] = {0};
+            if (!hand_guiding_command_gate_validate(
+                    &context->sim_guidance_gate,
+                    &context->config.sim_guidance_command_limits,
+                    &cycle, &candidate, target_units) ||
+                !joint_drive_port_ready(&context->joint_drive,
+                                        cycle.now_ms) ||
+                !joint_drive_port_send_targets(&context->joint_drive,
+                                               target_units)) {
+                context->sim_guidance_gate.fault_latched = true;
+                emit_step_failure(context, 0xE062U);
+            } else if (context->sim_guidance_dispatched_cycles < UINT32_MAX) {
+                ++context->sim_guidance_dispatched_cycles;
+            }
+        } else if (!observer_ok ||
+                   context->sim_guidance_gate.have_previous) {
+            /* Missing a commanded cycle, including FT/drive faults,
+             * cannot continue issuing targets. State-machine fault flow
+             * owns the software stop; NOT physical STO/E-stop. */
+            context->sim_guidance_gate.fault_latched = true;
+            emit_step_failure(context, 0xE061U);
+        }
+    }
+#else
+    (void)cycle; /* Normal firmware and host interface tests never dispatch. */
+#endif
 }
 
 static void supervisor_task_entry(void *argument)
@@ -1202,6 +1245,12 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
         (config->emergency_stop_services == NULL) ||
         ((config->guidance_dry_run.tick == NULL) !=
          (config->guidance_dry_run.stop == NULL)) ||
+        (config->sim_guidance_dispatch_enabled &&
+         (config->guidance_dry_run.tick == NULL ||
+          config->guidance_dry_run.take_candidate == NULL)) ||
+#if !defined(GP_HOST_TIMING) || !defined(GP_HOST_GUIDANCE_MOTION_TEST)
+        config->sim_guidance_dispatch_enabled ||
+#endif
         (config->validation_sample_budget == 0U) ||
         (config->period_ticks == 0U) ||
         (((config->timing.monotonic_us != NULL) ||
@@ -1396,6 +1445,8 @@ bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out)
     out->guidance_dry_run_ok_cycles = g_supervisor.guidance_dry_run_ok_cycles;
     out->guidance_dry_run_rejected_cycles =
         g_supervisor.guidance_dry_run_rejected_cycles;
+    out->sim_guidance_dispatched_cycles =
+        g_supervisor.sim_guidance_dispatched_cycles;
     taskEXIT_CRITICAL();
     return true;
 }

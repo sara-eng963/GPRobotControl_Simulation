@@ -7,6 +7,7 @@
 #include "supervisor_io.h"
 #include "supervisor_hmi.h"
 #include "supervisor_guidance_dry_run_port.h"
+#include "../HandGuiding/guidance_command_gate.h"
 #include "States/state_approach.h"
 #include "States/state_boot.h"
 #include "States/state_homing.h"
@@ -131,6 +132,10 @@ typedef struct
     /* Optional 4E2A dry-run monitor. Both callbacks must be configured
      * together. No FT adapter is supplied by default; never sends targets. */
     SupervisorGuidanceDryRunPort guidance_dry_run;
+    /* Simulation-only request. Real firmware compilation ignores it.
+     * Default false; must never be set by a physical board configuration. */
+    bool sim_guidance_dispatch_enabled;
+    HandGuidingCommandGateConfig sim_guidance_command_limits;
 
     /* Optional board adapter; NULL callbacks allow incremental integration. */
     SupervisorIoServices io;
@@ -157,6 +162,7 @@ typedef struct {
     uint32_t timer_max_cycle_us;
     uint32_t guidance_dry_run_ok_cycles;
     uint32_t guidance_dry_run_rejected_cycles;
+    uint32_t sim_guidance_dispatched_cycles;
 } SupervisorDiagnostics;
 bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out);
 

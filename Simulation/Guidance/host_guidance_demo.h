@@ -25,6 +25,9 @@ typedef struct {
     unsigned inject_after;
     unsigned cycles;
     bool inject_ft_active;
+    bool motion_requested;
+    bool candidate_pending;
+    SupervisorGuidanceCandidate candidate;
     GpGuidanceTraceRow rows[GP_GUIDANCE_RING_SIZE];
     unsigned head, tail, dropped;
     unsigned drops_reported;
