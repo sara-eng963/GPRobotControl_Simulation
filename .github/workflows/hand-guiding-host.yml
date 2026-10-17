@@ -1,0 +1,32 @@
+name: Stage 4 Hand-Guiding Host Tests
+
+on:
+  push:
+    branches: [sara/can-replacement]
+    paths:
+      - 'HandGuiding/**'
+      - 'ControlCore/Kinematics/**'
+      - 'ControlCore/Math/matrix6.*'
+      - 'ControlCore/Config/robot_config.*'
+      - 'ControlCore/Analysis/singularity.*'
+      - '.github/workflows/hand-guiding-host.yml'
+  pull_request:
+    paths:
+      - 'HandGuiding/**'
+      - 'ControlCore/Kinematics/**'
+      - 'ControlCore/Math/matrix6.*'
+      - 'ControlCore/Config/robot_config.*'
+      - 'ControlCore/Analysis/singularity.*'
+      - '.github/workflows/hand-guiding-host.yml'
+
+jobs:
+  standalone-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure strict C11 build
+        run: cmake -S HandGuiding -B /tmp/gp-stage4-build -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
+      - name: Compile standalone hand-guiding targets
+        run: cmake --build /tmp/gp-stage4-build -j2
+      - name: Run all focused tests
+        run: ctest --test-dir /tmp/gp-stage4-build --output-on-failure
