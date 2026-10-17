@@ -7,6 +7,7 @@
 #include "../ServoDrive/CiA402/cia402.h"
 #include "../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../ControlCore/Kinematics/control_fk.h"
+#include "Guidance/host_guidance_demo.h"
 #include "Storage/trajectory_prefetch.h"
 #include "Timing/host_timing_trace.h"
 #include "../Intercore/validation_storage_bridge.h"
@@ -41,6 +42,9 @@ static CanopenMaster can_boot_master;
 /* Non-owning drive service for the standalone retraction callback. */
 static JointDrivePort retraction_drive;
 static AvatarMPositionScale avatar_position_scales[SIM_NUM_AXES];
+static GpHostGuidanceDemo host_guidance_demo;
+static bool host_guidance_enabled;
+static const char *host_guidance_trace_path;
 
 static HomingConfig homing_config;
 static TeachingConfig teaching_config;
@@ -1483,6 +1487,8 @@ static bool udp_event(void *ctx,HmiEvent *event)
 static void trace_state(const SupervisorDiagnostics *s)
 {
     operator_log_outcomes(s);
+    if (host_guidance_enabled)
+        gp_host_guidance_flush(&host_guidance_demo, host_guidance_trace_path);
 
     static bool started, file_failed;
     static FILE *csv;
@@ -1787,6 +1793,30 @@ static bool start_system(void)
     host_flash_mode=selected != NULL && strcmp(selected,"flash")==0;
     if (host_flash_mode && !host_flash_initialize()) return false;
     configure_robot();configure_state_dependencies();
+    /* Strict host opt-in only. Never wired into production STM32 firmware. */
+    const char *guidance_opt = getenv("GP_GUIDANCE_DRY_RUN");
+    host_guidance_enabled = guidance_opt && strcmp(guidance_opt, "1") == 0;
+    host_guidance_trace_path = getenv("GP_GUIDANCE_TRACE_FILE");
+    if (host_guidance_enabled && (!host_guidance_trace_path ||
+                                  !*host_guidance_trace_path))
+        host_guidance_trace_path = "guidance_dry_run.csv";
+    if (host_guidance_enabled) {
+        const char *fault = getenv("GP_GUIDANCE_INJECT");
+        GpGuidanceFaultKind kind = GP_GUIDANCE_INJECT_NONE;
+        if (fault && strcmp(fault, "stale_ft") == 0)
+            kind = GP_GUIDANCE_INJECT_STALE_FT;
+        else if (fault && strcmp(fault, "bad_feedback") == 0)
+            kind = GP_GUIDANCE_INJECT_BAD_FEEDBACK;
+        else if (fault && *fault && strcmp(fault, "none") != 0) {
+            fprintf(stderr, "[4E2B] Invalid GP_GUIDANCE_INJECT value\n");
+            return false;
+        }
+        if (!gp_host_guidance_init(&host_guidance_demo, &robot, kind, 20U))
+            return false;
+        fprintf(stderr, "[4E2B] OBSERVATION ONLY enabled, synthetic fixture; "
+                        "fault=%s, trace=%s\n",
+                fault ? fault : "none", host_guidance_trace_path);
+    }
     if (host_flash_mode) {
         /* M4-private flash callbacks. The M7 validator sees ONLY the
          * nonblocking queue proxy; it cannot erase/write/QSPI directly. */
@@ -1837,7 +1867,10 @@ static bool start_system(void)
     c.approach_config=&approach_config;c.approach_services=&approach_services;
     c.path_execution_config=&execution_config;c.path_execution_services=&execution_services;
     c.paused_services=&paused_services;c.fault_services=&fault_services;c.emergency_stop_services=&emergency_services;
-    c.validation_sample_budget=4;c.first_program_id=1;c.period_ticks=pdMS_TO_TICKS(1);
+    c.validation_sample_budget=4;c.first_program_id=1;
+    c.period_ticks=pdMS_TO_TICKS(host_guidance_enabled ? 2 : 1);
+    if (host_guidance_enabled)
+        c.guidance_dry_run = gp_host_guidance_port(&host_guidance_demo);
     c.validation_enter_ready=prefetch_ready_for_validation;
     /* Flash erase/program/CRC reads run only in low-priority task.
      * No persistent artifact is published until the worker commits it. */

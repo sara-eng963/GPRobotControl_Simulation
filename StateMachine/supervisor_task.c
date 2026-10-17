@@ -631,7 +631,8 @@ static void handle_message(
              * normal firmware path: raw queued targets bypass 4E1 checks.
              * Stage 4E2A does NOT send motor position references. */
 #if defined(GP_ENABLE_LEGACY_SILKIT_GUIDANCE) && defined(GP_HOST_TIMING)
-            if (context->machine.activeState == ROBOT_STATE_TEACHING &&
+            if (context->config.guidance_dry_run.tick == NULL &&
+                context->machine.activeState == ROBOT_STATE_TEACHING &&
                 context->machine.safety.statusValid &&
                 context->machine.safety.motionPermitted &&
                 canopen_master_ready_for_motion(context->config.canopen_master,

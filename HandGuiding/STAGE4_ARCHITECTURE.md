@@ -418,3 +418,69 @@ ctest --test-dir /tmp/gp-stage4-e2a-strict --output-on-failure
 records into the observer message. The observer cannot access the
 `JointDrivePort` vtable or `send_targets` callback. The existing
 `JointDrivePort` is used only inside the Supervisor's M7-owned task.
+
+
+## 14. Batch 4E2B — SIL Kit host demonstration, opt-in only
+
+The existing `supervisor_silkit_sim` now supports
+`GP_GUIDANCE_DRY_RUN=1`. The original HMI/robot/SIL Kit boot, homing,
+CANopen and virtual-motor infrastructure is not replaced.
+
+When enabled, it installs a host-only `GpHostGuidanceDemo` adapter
+into the **existing** M7 Supervisor task's observation callback.
+One synthetic 0.5 N sensor-X force is generated using the same host
+FreeRTOS tick clock as the Supervisor. All six actual virtual-motor
+position-feedback samples are read by the Supervisor, converted by the
+existing AVATAR position scale and passed to 4E1. The result is stored
+as **diagnostics only**. No admittance-driven motor command exists.
+
+**Important simulation-only geometry:** the simulated UR5 home pose is
+wrist singular (q5=0). The **observation-only** RobotConfig is copied
+and synthetically offsets joint 5's DH theta by +0.15 rad to exercise
+non-singular DLS; the real SIL Kit robot's FK/HOMING and motor position
+configuration are UNCHANGED. Thus this is NOT a physically faithful
+interactive robot demo or a valid calibrated model. All 4E2B gains,
+limits, offsets and timeouts are synthetic test fixtures.
+
+For 4E2B only, the host Supervisor uses a nominal `pdMS_TO_TICKS(2)`
+cycle (nominal 500 Hz). This is a POSIX/WSL soft-timing request, **not
+2-ms deterministic MCU evidence**. Fresh-FT and fresh-feedback-per-cycle
+flags are relaxed for this host test and measured-age guards remain.
+A future physical controller must derive its own acquisition cadence,
+configuration and fault policy from actual hardware.
+
+A bounded 256-row ring accumulates each active Supervisor dry-run tick
+in its task, with short FreeRTOS critical-section snapshots. The
+lower-priority HMI task drains it into a separate `GP_GUIDANCE_TRACE_FILE`
+CSV (default `guidance_dry_run.csv`). The CSV records timestamp, cycle,
+accepted/valid/latched flags and 6D wrench, twist and joint references.
+Never write a file or flush it from the Supervisor callback. The ring
+counts dropped rows when consumers lag; diagnostic completeness is not
+guaranteed without checking this counter.
+
+Optional failure injection `GP_GUIDANCE_INJECT=stale_ft` or
+`bad_feedback` begins at tick 20 after TEACHING becomes active,
+respectively delivering a synthetically stale sensor timestamp or a
+synthetically invalid feedback-health flag. These are **software fixture
+faults**, not tests of lost CAN frames or physical sensor CRC faults.
+The adapter latches fault and invalidates its diagnostic targets.
+Recovery is NOT automated.
+
+When host dry-run is installed, the old raw SIL Kit guided-target message
+is rejected even though the legacy simulation executable normally opts
+in to that message type. Without `GP_GUIDANCE_DRY_RUN=1`, the old
+simulation demo retains its original command behavior. On physical
+firmware the legacy raw guided-target route stays blocked.
+
+Example (run alongside SIL Kit registry and motor bank):
+```sh
+GP_GUIDANCE_DRY_RUN=1 GP_GUIDANCE_TRACE_FILE=/tmp/gp_guidance.csv ./supervisor_silkit_sim
+# fault fixture:
+GP_GUIDANCE_DRY_RUN=1 GP_GUIDANCE_INJECT=stale_ft ./supervisor_silkit_sim
+```
+
+**4E2B acceptance pending:** build `supervisor_silkit_sim` against the
+configured SIL Kit host SDK, run the opt-in host sequence and analyze
+CSV for successive valid samples plus injected-fault rejection; preserve
+all existing HMI/SIL Kit regression tests. No physical motor
+commissioning or certified safety claims are made.

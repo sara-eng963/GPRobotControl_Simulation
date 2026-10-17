@@ -7,6 +7,7 @@ if(ENABLE_SILKIT)
         supervisor_silkit_sim
 
         ${CMAKE_SOURCE_DIR}/Simulation/supervisor_silkit_main.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/host_guidance_demo.c
         ${CMAKE_SOURCE_DIR}/Simulation/Storage/trajectory_prefetch.c
         # Host-only flash model. No change to physical STM32 firmware path.
         ${CMAKE_SOURCE_DIR}/Simulation/Tests/w25q_nor_model.c
@@ -83,6 +84,7 @@ if(ENABLE_SILKIT)
         freertos_kernel
         freertos_config
         control_core
+        hand_guiding
         intercore_ipc
         intercore_validation_storage
         host_timing_trace
