@@ -422,7 +422,7 @@ print_ft_diagnostics() {
     fi
     if ((size > DIAG_BYTE_OFFSET)); then
         tail -c +"$((DIAG_BYTE_OFFSET + 1))" "$SUPERVISOR_LOG" |
-            grep -E '^\\[(FAULT|VFT|SIM|HMI RX|GUIDANCE)\\]' || true
+            grep -E '^\[(FAULT|VFT|SIM|HMI RX|GUIDANCE)\]' || true
         DIAG_BYTE_OFFSET=$size
     fi
 }
