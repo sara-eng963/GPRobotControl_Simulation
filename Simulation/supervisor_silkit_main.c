@@ -1687,6 +1687,13 @@ static void udp_status(void *ctx,const SupervisorDiagnostics *s)
     struct sockaddr_in dst={0};dst.sin_family=AF_INET;dst.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
     dst.sin_port=htons(HMI_PANEL_STATUS_PORT);(void)sendto(udp,w,sizeof(w),MSG_DONTWAIT,(struct sockaddr*)&dst,sizeof(dst));
     dst.sin_port=htons(HMI_TEACH_STATUS_PORT);(void)sendto(udp,w,sizeof(w),MSG_DONTWAIT,(struct sockaddr*)&dst,sizeof(dst));
+    /* Independent read-only feedback stream: does not compete with the
+     * existing teaching_sim status listener on 5012. HMI task only. */
+    if (virtual_ft_mode) {
+        dst.sin_port=htons(HMI_VFT_STATUS_PORT);
+        (void)sendto(udp,w,sizeof(w),MSG_DONTWAIT,
+                     (struct sockaddr*)&dst,sizeof(dst));
+    }
 
     /*
      * MATLAB receives the same versioned status packet on its own port.

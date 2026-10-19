@@ -353,4 +353,36 @@ if(TARGET raylib)
         m
     )
 
+    add_executable(
+        virtual_ft_gui
+        ${CMAKE_SOURCE_DIR}/HMI/virtual_ft_gui_app.c
+        ${CMAKE_SOURCE_DIR}/HMI/hmi_protocol.c
+        ${CMAKE_SOURCE_DIR}/HMI/hmi_theme.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_protocol.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_client.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_controls.c
+    )
+    target_compile_features(virtual_ft_gui PRIVATE c_std_11)
+    target_compile_definitions(virtual_ft_gui PRIVATE _POSIX_C_SOURCE=200809L)
+    target_include_directories(virtual_ft_gui PRIVATE
+        ${CMAKE_SOURCE_DIR}/HMI)
+    target_link_libraries(virtual_ft_gui PRIVATE raylib m)
+
+    # GUI's pure control mapping and real loopback UDP sender are testable
+    # without a graphical display or simulated CAN network.
+    add_executable(test_virtual_ft_controls
+        ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_virtual_ft_controls.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_controls.c)
+    target_link_libraries(test_virtual_ft_controls PRIVATE m)
+    add_executable(test_virtual_ft_client
+        ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_virtual_ft_client.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_client.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_protocol.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_controls.c)
+    target_link_libraries(test_virtual_ft_client PRIVATE m)
+    enable_testing()
+    add_test(NAME virtual_ft_controls COMMAND test_virtual_ft_controls)
+    add_test(NAME virtual_ft_client_udp COMMAND test_virtual_ft_client)
+    set_tests_properties(virtual_ft_client_udp PROPERTIES RUN_SERIAL TRUE)
+
 endif()

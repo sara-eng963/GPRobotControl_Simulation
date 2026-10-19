@@ -15,6 +15,8 @@ extern "C" {
 #define HMI_CONTROLLER_PORT        5010
 #define HMI_PANEL_STATUS_PORT      5011
 #define HMI_TEACH_STATUS_PORT      5012
+/* Read-only copy for the standalone virtual F/T GUI in interactive mode. */
+#define HMI_VFT_STATUS_PORT        5014
 
 #define HMI_COMMAND_MAGIC          0x484D4933U /* HMI3 */
 #define HMI_STATUS_MAGIC           0x53544D33U /* STM3 */
