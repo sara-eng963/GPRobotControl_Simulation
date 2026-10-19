@@ -735,6 +735,8 @@ int hmi_app_run(void)
 
         const bool record_enabled =
             online &&
+            status->robot_state == 3U &&
+            !status->estop_active &&
             status->record_allowed &&
             !status->guidance_active;
 

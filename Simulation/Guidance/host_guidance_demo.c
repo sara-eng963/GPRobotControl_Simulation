@@ -76,8 +76,7 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
         return true;
     }
     out->valid = true;
-    const uint64_t now = (uint64_t)xTaskGetTickCount() *
-        UINT64_C(1000000) / (uint64_t)configTICK_RATE_HZ;
+    const uint64_t now = d->sample_cycle->now_us;
     out->received_time_us = (uint32_t)(
         d->inject_ft_active ? now - UINT64_C(40000) : now);
     out->force_N[0] = 0.5; /* fake handle load, N */
@@ -163,6 +162,51 @@ static void record(GpHostGuidanceDemo *d, const GpGuidanceTraceRow *r)
     taskEXIT_CRITICAL();
 }
 
+static void observe_motion(GpHostGuidanceDemo *d,
+                          const SupervisorGuidanceDryRunCycle *cycle,
+                          bool accepted)
+{
+    /* Integer-position virtual followers: require 20 complete new TPDO
+     * sets at the same attained target, with zero applied wrench. This is
+     * a simulation measurement, not a change to Teaching recording rules. */
+    const unsigned required_sets = 20U;
+    GpGuidanceMotionStatus status = {.time_us = cycle->now_us};
+    status.enabled = accepted && d->adapter.pipeline.active;
+    for (size_t i = 0U; i < ROBOT_DOF; ++i)
+        if (d->adapter.last_output.wrench_base_tcp[i] != 0.0)
+            status.force_applied = true;
+    bool stationary = status.enabled && d->candidate_pending &&
+                      !status.force_applied;
+    bool new_set = true;
+    int32_t target[ROBOT_DOF];
+    for (size_t i = 0U; stationary && i < ROBOT_DOF; ++i) {
+        if (!avatar_m_joint_rad_to_position_units(&cycle->scales[i],
+                d->candidate.position_rad[i], &target[i]) ||
+            target[i] != cycle->feedback[i].actual_position_units) {
+            stationary = false;
+            break;
+        }
+        if (d->stationary_position[i] != target[i])
+            d->stationary_feedback_sets = 0U;
+        if ((int32_t)(cycle->feedback[i].sequence -
+                      d->stationary_sequence[i]) <= 0) new_set = false;
+    }
+    if (!stationary) d->stationary_feedback_sets = 0U;
+    else if (new_set) {
+        for (size_t i = 0U; i < ROBOT_DOF; ++i) {
+            d->stationary_position[i] = target[i];
+            d->stationary_sequence[i] = cycle->feedback[i].sequence;
+        }
+        if (d->stationary_feedback_sets < required_sets)
+            ++d->stationary_feedback_sets;
+    }
+    status.settled = stationary &&
+                    d->stationary_feedback_sets >= required_sets;
+    taskENTER_CRITICAL();
+    d->motion_status = status;
+    taskEXIT_CRITICAL();
+}
+
 static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
 {
     GpHostGuidanceDemo *d = (GpHostGuidanceDemo *)context;
@@ -213,6 +257,7 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
         d->gate_audit.has_last = true;
         taskEXIT_CRITICAL();
     }
+    if (d->virtual_ft_receiver != NULL) observe_motion(d, cycle, accepted);
     GpGuidanceTraceRow r = {0};
     r.time_us = cycle->now_us;
     r.cycle = d->cycles;
@@ -250,6 +295,10 @@ static void stop(void *context)
         d->candidate_pending = false;
         memset(&d->candidate, 0, sizeof(d->candidate));
         hand_guiding_dry_run_stop(&d->adapter);
+        d->stationary_feedback_sets = 0U;
+        taskENTER_CRITICAL();
+        memset(&d->motion_status, 0, sizeof(d->motion_status));
+        taskEXIT_CRITICAL();
     }
 }
 
@@ -272,6 +321,7 @@ bool gp_host_guidance_init(GpHostGuidanceDemo *d,
     if (d == NULL || robot == NULL ||
         (kind != GP_GUIDANCE_INJECT_NONE && after < 5U)) return false;
     memset(d, 0, sizeof(*d));
+    d->simulation_robot = robot;
     d->synthetic_observation_robot = *robot;
     /* Only this observation fixture is perturbed: actual SIL Kit motors,
      * FK and HOMING continue using the UNMODIFIED reference model.
@@ -311,7 +361,14 @@ bool gp_host_guidance_init(GpHostGuidanceDemo *d,
 void gp_host_guidance_use_virtual_ft(GpHostGuidanceDemo *d,
                                      GpVirtualFtReceiver *receiver)
 {
-    if (d != NULL) d->virtual_ft_receiver = receiver;
+    if (d != NULL && d->simulation_robot != NULL) {
+        d->virtual_ft_receiver = receiver;
+        /* Interactive motion must share FK/Jacobian geometry with teaching
+         * and MATLAB. Keep the perturbed model only for the old fixture. */
+        d->synthetic_observation_robot = *d->simulation_robot;
+        if (receiver == NULL)
+            d->synthetic_observation_robot.kinematics.thetaOffset[4] += 0.15;
+    }
 }
 
 SupervisorGuidanceDryRunPort gp_host_guidance_port(GpHostGuidanceDemo *d)
@@ -394,4 +451,17 @@ bool gp_host_guidance_gate_audit_snapshot(
     *out = demo->gate_audit;
     taskEXIT_CRITICAL();
     return out->has_last;
+}
+
+bool gp_host_guidance_motion_status(
+    GpHostGuidanceDemo *demo, GpGuidanceMotionStatus *out)
+{
+    if (demo == NULL || out == NULL) return false;
+    taskENTER_CRITICAL();
+    *out = demo->motion_status;
+    taskEXIT_CRITICAL();
+    const uint64_t now_us = (uint64_t)xTaskGetTickCount() *
+        UINT64_C(1000000) / (uint64_t)configTICK_RATE_HZ;
+    return out->enabled && out->time_us <= now_us &&
+           now_us - out->time_us <= demo->adapter.config.max_feedback_age_us;
 }

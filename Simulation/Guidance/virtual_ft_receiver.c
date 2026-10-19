@@ -35,10 +35,10 @@ bool gp_virtual_ft_receiver_init(GpVirtualFtReceiver *r,
     return true;
 }
 
-void gp_virtual_ft_receiver_poll(GpVirtualFtReceiver *r, uint32_t now_us)
+void gp_virtual_ft_receiver_poll(GpVirtualFtReceiver *r)
 {
     if (r == NULL || r->fd < 0) return;
-    /* Bounded work at HMI priority; last accepted packet wins. */
+    /* Bounded input acquisition; last accepted packet wins. */
     for (unsigned i=0; i<16U; ++i) {
         uint8_t packet[GP_VFT_PACKET_SIZE+1U];
         struct sockaddr_in peer={0};
@@ -49,6 +49,10 @@ void gp_virtual_ft_receiver_poll(GpVirtualFtReceiver *r, uint32_t now_us)
         const bool local=peer.sin_family==AF_INET &&
             peer.sin_addr.s_addr==htonl(INADDR_LOOPBACK);
         taskENTER_CRITICAL();
+        /* Timestamp acceptance, not entry to a possibly preempted poll. */
+        const uint32_t now_us = (uint32_t)(
+            (uint64_t)xTaskGetTickCount() * UINT64_C(1000000) /
+            (uint64_t)configTICK_RATE_HZ);
         const bool accepted=local && gp_vft_accept(&r->state,&r->limits,
                                      packet,(size_t)got,now_us);
         if (!local) {
@@ -57,10 +61,12 @@ void gp_virtual_ft_receiver_poll(GpVirtualFtReceiver *r, uint32_t now_us)
             (void)gp_vft_accept(&r->state,&r->limits,NULL,0U,now_us);
         }
         const bool latched=r->state.fault_latched;
+        const GpVirtualFtFault reason=r->state.fault_reason;
         taskEXIT_CRITICAL();
         if (!accepted && latched && !r->rejected_reported) {
-            fprintf(stderr, "[VFT] input protocol/sequence fault latched; "
-                            "restart simulation to rearm\n");
+            fprintf(stderr, "[VFT] input fault latched (%s); "
+                            "restart simulation to rearm\n",
+                    gp_vft_fault_name(reason));
             r->rejected_reported=true;
         }
     }

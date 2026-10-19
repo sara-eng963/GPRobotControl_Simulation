@@ -104,8 +104,12 @@ int main(void)
         const bool fault=online && (s->estop_active ||
             s->robot_state==ROBOT_STATE_FAULT ||
             s->robot_state==ROBOT_STATE_EMERGENCY_STOP);
+        /* Enable the input source from teaching/readiness, independently
+         * of the busy/settling indication used by the Record button. */
         const bool guidance=online && !fault &&
-            s->robot_state==ROBOT_STATE_TEACHING && s->guidance_active;
+            s->robot_state==ROBOT_STATE_TEACHING &&
+            s->can_expected_nodes>0U &&
+            s->can_ready_nodes==s->can_expected_nodes;
         const bool focus=IsWindowFocused();
         const bool allowed=guidance && focus;
         const Vector2 mouse=GetMousePosition();

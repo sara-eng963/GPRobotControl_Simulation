@@ -46,6 +46,7 @@ static AvatarMPositionScale avatar_position_scales[SIM_NUM_AXES];
 static GpHostGuidanceDemo host_guidance_demo;
 static bool host_guidance_enabled;
 static bool virtual_ft_mode;
+static bool virtual_motion_settled;
 static GpVirtualFtReceiver virtual_ft_receiver;
 /* Exact, already-configured host-only gate limits copied at init for
  * post-fault diagnostics. No access to the Supervisor's live gate state. */
@@ -629,7 +630,7 @@ static void configure_robot(void)
         DEG2RAD(0.0);
 
     robot.configuration.home[4] =
-        DEG2RAD(0.0);
+        virtual_ft_mode ? 0.15 : DEG2RAD(0.0);
 
     robot.configuration.home[5] =
         DEG2RAD(0.0);
@@ -876,14 +877,27 @@ static void post_required(SupervisorMessage *m) {
         safe(NULL);fprintf(stderr,"Supervisor queue overflow in simulation adapter\n");exit(1);
     }
 }
+
 static void input_task(void *arg)
 {
     (void)arg;bool old_estop=false,old_protective=false,old_fault=false;
 
     for(;;) {
         gp_timing_begin(GP_TIMING_SIM_INPUTS);
+        /* Acquisition must not wait behind HMI printf/CSV/file flushing. */
+        if (virtual_ft_mode) gp_virtual_ft_receiver_poll(&virtual_ft_receiver);
         StateMachine machine;
         supervisor_task_get_state(&machine);
+        bool settled = false;
+        if (virtual_ft_mode) {
+            GpGuidanceMotionStatus motion;
+            settled = machine.activeState == ROBOT_STATE_TEACHING &&
+                gp_host_guidance_motion_status(&host_guidance_demo, &motion) &&
+                motion.settled;
+            taskENTER_CRITICAL();
+            virtual_motion_settled = settled;
+            taskEXIT_CRITICAL();
+        }
         if(machine.activeState==ROBOT_STATE_IDLE && machine.previousState==ROBOT_STATE_HOMING)homed=true;
         if(estop||protective||injected_fault||communication_failure) {homed=false;safe(NULL);}
         const bool drives_ready=sim_can_drives_ready();
@@ -934,7 +948,8 @@ static void input_task(void *arg)
         m.data.teaching_runtime.calibration_version=1;
         m.data.teaching_runtime.robot_homed=homed;
         m.data.teaching_runtime.manual_guidance_active=machine.activeState==ROBOT_STATE_TEACHING && !guidance_pending;
-        m.data.teaching_runtime.robot_motion_settled=!guidance_pending;
+        m.data.teaching_runtime.robot_motion_settled=
+            virtual_ft_mode ? settled : !guidance_pending;
         m.data.teaching_runtime.motion_permitted=motion_permitted;
         m.data.teaching_runtime.estop_active=estop;
         m.data.teaching_runtime.protective_stop_active=protective;
@@ -1590,11 +1605,15 @@ static void trace_state(const SupervisorDiagnostics *s)
                     fprintf(stderr,
                         "[FAULT] E062 read-only candidate audit: "
                         "independent_gate=%s, candidate_cycle=%llu us, "
+                        "candidate_time_not_increasing=%u, "
                         "feedback_from_future=%u, "
                         "max_target_feedback_error=%.7g rad (J%d, limit %.4g rad), "
                         "candidate_delta=%.7g rad (J%d, step limit %.4g rad)\n",
                         independent_pass ? "PASS" : "REJECT",
                         (unsigned long long)audit.last_cycle.now_us,
+                        (unsigned)(audit.has_previous &&
+                            audit.last_candidate.produced_us <=
+                            audit.previous_candidate.produced_us),
                         future_feedback, worst_feedback_rad,
                         worst_feedback_axis, diagnostic_gate_limits.max_target_feedback_error_rad[0],
                         worst_candidate_step_rad, worst_step_axis,
@@ -1773,25 +1792,28 @@ static void udp_status(void *ctx,const SupervisorDiagnostics *s)
 {
     (void)ctx;
     trace_state(s);
-    /* Host-only UDP poll on HMI task, never in the 2ms Supervisor path. */
-    if (virtual_ft_mode) gp_virtual_ft_receiver_poll(&virtual_ft_receiver,
-        (uint32_t)((uint64_t)xTaskGetTickCount()*UINT64_C(1000000) /
-                   (uint64_t)configTICK_RATE_HZ));
+    bool settled;
+    taskENTER_CRITICAL();
+    settled = virtual_motion_settled;
+    taskEXIT_CRITICAL();
     uint32_t w[HMI_STATUS_WORD_COUNT]={0};
     w[0]=HMI_STATUS_MAGIC;w[1]=HMI_PROTOCOL_VERSION;w[2]=++status_sequence;
     w[3]=s->machine.activeState;w[4]=s->selected_geometry;w[5]=estop;
     w[6]=s->machine.activeState==ROBOT_STATE_PAUSED;
     w[7]=virtual_ft_mode ?
-         (s->machine.activeState==ROBOT_STATE_TEACHING &&
-          host_guidance_demo.adapter.pipeline.active &&
-          !host_guidance_demo.adapter.pipeline.fault_latched) :
+         (s->machine.activeState==ROBOT_STATE_TEACHING && !settled) :
          (s->machine.activeState==ROBOT_STATE_TEACHING &&
           guidance_pose_queue != NULL &&
           uxQueueMessagesWaiting(guidance_pose_queue) > 0U && !estop);
     w[8]=s->boot.phase;w[9]=s->boot.error;w[10]=s->homing_phase;w[11]=s->homing_error;
     w[14]=s->teaching.phase;w[15]=s->teaching.error;w[16]=s->teaching.status_message_id;
     w[17]=s->teaching.next_point_number;w[18]=s->segment_count;
-    w[19]=float_word(s->teaching.displayed_speed_mps);w[20]=s->teaching.record_allowed;w[21]=s->teaching.validate_allowed;
+    w[19]=float_word(s->teaching.displayed_speed_mps);
+    /* Teaching outputs persist after leaving the state. Restrict their UI
+     * availability here; the StateMachine remains the Record authority. */
+    w[20]=s->machine.activeState==ROBOT_STATE_TEACHING &&
+          s->teaching.record_allowed && (!virtual_ft_mode || settled);
+    w[21]=s->teaching.validate_allowed;
     w[22]=s->validation.report.phase;w[23]=s->validation.report.result;w[24]=s->validation.report.error;w[25]=float_word((float)s->validation.report.progress_0_to_1);
     w[26]=s->approach.report.phase;w[27]=s->approach.report.result;w[28]=s->approach.report.error;w[29]=float_word((float)s->approach.report.progress_0_to_1);
     w[30]=s->machine.executionMode==ROBOT_EXECUTION_PREVIEW && s->machine.activeState==ROBOT_STATE_PATH_EXECUTION;
@@ -1932,7 +1954,6 @@ static bool start_system(void)
     const char *selected=getenv("GP_STORAGE_BACKEND");
     host_flash_mode=selected != NULL && strcmp(selected,"flash")==0;
     if (host_flash_mode && !host_flash_initialize()) return false;
-    configure_robot();configure_state_dependencies();
     /* Strict host opt-in only. Never wired into production STM32 firmware. */
     const char *guidance_opt = getenv("GP_GUIDANCE_DRY_RUN");
     host_guidance_enabled = guidance_opt && strcmp(guidance_opt, "1") == 0;
@@ -1952,6 +1973,9 @@ static bool start_system(void)
                         "GP_GUIDANCE_DRY_RUN=1\\n");
         return false;
     }
+    /* Interactive home is nonsingular in the unmodified simulation model.
+     * Teaching FK, guidance and MATLAB all see the actual J5 angle. */
+    configure_robot();configure_state_dependencies();
     host_guidance_trace_path = getenv("GP_GUIDANCE_TRACE_FILE");
     if (host_guidance_enabled && (!host_guidance_trace_path ||
                                   !*host_guidance_trace_path))
@@ -1977,7 +2001,7 @@ static bool start_system(void)
             gp_host_guidance_use_virtual_ft(&host_guidance_demo,
                                            &virtual_ft_receiver);
         }
-        fprintf(stderr, "[4E2B] OBSERVATION ONLY enabled, synthetic fixture; "
+        fprintf(stderr, "[4E2B] guidance candidate producer enabled; "
                         "fault=%s, trace=%s\n",
                 fault ? fault : "none", host_guidance_trace_path);
     }

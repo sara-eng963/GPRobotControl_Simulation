@@ -1,8 +1,9 @@
 #ifndef GP_HOST_GUIDANCE_DEMO_H
 #define GP_HOST_GUIDANCE_DEMO_H
 
-/* This host-only SIL Kit fixture cannot command drives. Its modified robot
- * geometry and every tuning value are deliberately synthetic. */
+/* Host-only candidate producer; only Supervisor can dispatch to drives.
+ * The old observation fixture perturbs geometry. Interactive F/T uses the
+ * shared simulation model. All tuning remains synthetic. */
 #include "../../HandGuiding/supervisor_dry_run_adapter.h"
 #include <stdio.h>
 #include "virtual_ft_receiver.h"
@@ -49,8 +50,15 @@ typedef struct {
     SupervisorGuidanceCandidate previous_candidate;
 } GpGuidanceGateAudit;
 
+/* Simulation observation, published by the existing Supervisor callback. */
+typedef struct {
+    uint64_t time_us;
+    bool enabled, force_applied, settled;
+} GpGuidanceMotionStatus;
+
 typedef struct {
     HandGuidingDryRunState adapter;
+    const RobotConfig *simulation_robot; /* immutable, outlives this adapter */
     RobotConfig synthetic_observation_robot;
     GpGuidanceFaultKind inject;
     unsigned inject_after;
@@ -68,6 +76,10 @@ typedef struct {
     bool candidate_pending;
     SupervisorGuidanceCandidate candidate;
     GpGuidanceGateAudit gate_audit;
+    GpGuidanceMotionStatus motion_status;
+    unsigned stationary_feedback_sets;
+    uint32_t stationary_sequence[ROBOT_DOF];
+    int32_t stationary_position[ROBOT_DOF];
     GpGuidanceTraceRow rows[GP_GUIDANCE_RING_SIZE];
     unsigned head, tail, dropped;
     unsigned drops_reported;
@@ -88,4 +100,7 @@ void gp_host_guidance_flush(GpHostGuidanceDemo *demo, const char *filename);
 /* Captured in the Supervisor cycle and copied for diagnostics only. */
 bool gp_host_guidance_gate_audit_snapshot(
     GpHostGuidanceDemo *demo, GpGuidanceGateAudit *out);
+/* False on stale observation; never treats repeated feedback as settled. */
+bool gp_host_guidance_motion_status(
+    GpHostGuidanceDemo *demo, GpGuidanceMotionStatus *out);
 #endif
