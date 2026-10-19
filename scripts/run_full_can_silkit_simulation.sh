@@ -427,6 +427,10 @@ while true; do
 
         if ! kill -0 "$pid" 2>/dev/null; then
             echo
+            if ((VIRTUAL_FT)) && [[ "$name" == "virtual-ft-gui" ]]; then
+                echo "Virtual F/T GUI closed; stopping the simulation."
+                exit 0
+            fi
             echo "[FAIL] Core process '$name' stopped unexpectedly." >&2
             tail -n 100 "$log" 2>/dev/null || true
             exit 1

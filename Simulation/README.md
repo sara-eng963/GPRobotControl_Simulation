@@ -176,3 +176,32 @@ the protocol-only virtual nodes.
 
 The removed EtherCAT/A6EC implementation remains recoverable from Git history
 and branch `sara/can-system-integration`.
+
+
+## One-command interactive virtual F/T hand-guiding (Stage 4F2B)
+
+The same canonical full-simulation launcher can run the virtual F/T GUI
+instead of the Cartesian-pose teaching simulator:
+
+```bash
+bash scripts/run_full_can_silkit_simulation.sh --virtual-ft
+```
+
+This mode starts the SIL Kit registry, six virtual AVATAR motors, the
+2 ms C hand-guiding Supervisor with simulated motor dispatch, passive CAN
+monitor, `virtual_ft_gui` and `supervisor_panel`. It preserves the
+existing CANopen control path. The F/T GUI sends sensor-equivalent wrench
+packets on UDP 5013, receives read-only status on UDP 5014 and is started
+before the panel can enter TEACHING. The old `teaching_sim` is not
+launched in this mode to avoid competing command sources.
+
+Wait for IDLE in the supervisor panel, select LINE/TEACHING, then hold
+right/left arrows in the virtual-F/T GUI. MATLAB continues to receive
+virtual-motor feedback on port 5005 and must be opened separately on
+Windows. Ctrl-C shuts down all launched processes. If the F/T GUI is
+closed, the launcher also stops the simulation. Logs are isolated in
+`.simulation-logs/virtual-ft/`; the ordinary launcher uses its previous
+`.simulation-logs/` location and retains its original behavior.
+
+Use `--virtual-ft --no-build` after a successful first build.
+`--virtual-ft --no-gui` is intentionally disallowed.

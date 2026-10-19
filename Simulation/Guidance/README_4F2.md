@@ -192,29 +192,41 @@ ctest --test-dir /tmp/gp-4f2 \
   -R '^supervisor_silkit_virtual_ft_input$' --output-on-failure
 ```
 
-**Manual interactive startup, one terminal per process:**
+**One-command full interactive simulation (recommended):**
 
 ```bash
-# Terminal 1 — registry
-"$SILKIT_ROOT/bin/sil-kit-registry" --listen-uri silkit://localhost:8500
-
-# Terminal 2 — six virtual motors
-/tmp/gp-4f2/avatar_m_silkit_motor_bank
-
-# Terminal 3 — opt-in host controller with logging
-GP_GUIDANCE_DRY_RUN=1 GP_GUIDANCE_SIM_MOTION=1 \
-GP_GUIDANCE_VIRTUAL_FT=1 \
-GP_GUIDANCE_TRACE_FILE=/tmp/gp-4f2-interactive-guidance.csv \
-/tmp/gp-4f2/supervisor_silkit_sim
-
-# Terminal 4 — start GUI BEFORE entering TEACHING
-/tmp/gp-4f2/virtual_ft_gui
-
-# Terminal 5 — existing operator panel selects LINE / TEACHING once IDLE
-/tmp/gp-4f2/supervisor_panel
+cd ~/freertos-pc-test
+bash scripts/run_full_can_silkit_simulation.sh --virtual-ft
 ```
 
-After entering TEACHING, the GUI should show Guidance active. Hold
+This extends the existing canonical launcher; **without** `--virtual-ft`
+its previous normal teaching simulation remains unchanged. F/T mode builds
+and starts the registry, six SIL Kit AVATAR motors, Supervisor with all
+three opt-in guidance flags, passive CAN live monitor, `virtual_ft_gui`
+and `supervisor_panel` in the correct order. It intentionally does
+**not** launch `teaching_sim`, whose legacy Cartesian command interface
+is not the interactive F/T source. The launcher detects the WSL Windows
+host IP for MATLAB UDP :5005 and cleans up its child processes on
+Ctrl-C or an interactive-GUI exit.
+
+The launcher keeps separate F/T logs under
+`.simulation-logs/virtual-ft/`, including `guidance.csv`,
+`timing-metrics.csv`, `supervisor.log`, `can-frames.csv` and the GUI
+log. No separate set of terminals is necessary.
+
+For faster subsequent starts once everything has been compiled:
+
+```bash
+bash scripts/run_full_can_silkit_simulation.sh --virtual-ft --no-build
+```
+
+The incompatible combination `--virtual-ft --no-gui` is rejected: active
+guidance requires a continuously transmitting GUI. MATLAB remains a
+Windows-side process and must still be opened separately.
+
+After the one-command launcher reports running and HOMING reaches IDLE, use
+the started supervisor panel to select LINE / TEACHING. The GUI should show
+Guidance active. Hold
 Right Arrow or +X, then release. Observe a nonzero `fx` and `vx`,
 evolving `q1..q6` and actual `actual_q1..actual_q6` in the existing
 guidance trace. For MATLAB visualization open
