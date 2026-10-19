@@ -1530,6 +1530,15 @@ static void trace_state(const SupervisorDiagnostics *s)
                 fprintf(stderr, "%.1f", (double)input_age_us / 1000.0);
             fprintf(stderr, " (watchdog=%.1f ms)\n",
                     (double)virtual_ft_receiver.limits.timeout_us / 1000.0);
+            if (guidance_failure == GP_GUIDANCE_FAIL_MAPPER_SINGULARITY ||
+                guidance_failure == GP_GUIDANCE_FAIL_MAPPER_TRACKING ||
+                guidance_failure == GP_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT ||
+                guidance_failure == GP_GUIDANCE_FAIL_MAPPER_OTHER) {
+                fprintf(stderr, "[FAULT] mapper_diagnostic_sigma_min=%.9g; "
+                                "maximum_joint_tracking_error=%.6f rad\n",
+                        host_guidance_demo.diagnostic_sigma_min,
+                        host_guidance_demo.diagnostic_max_tracking_error_rad);
+            }
         }
         fflush(stderr);
     }

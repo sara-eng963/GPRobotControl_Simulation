@@ -13,7 +13,13 @@ typedef enum {
     GP_GUIDANCE_FAIL_INPUT,
     GP_GUIDANCE_FAIL_SENSOR_FRAME,
     GP_GUIDANCE_FAIL_FEEDBACK_CONVERSION,
-    GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE
+    GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE,
+    GP_GUIDANCE_FAIL_WRENCH_FRAME,
+    GP_GUIDANCE_FAIL_ADMITTANCE,
+    GP_GUIDANCE_FAIL_MAPPER_SINGULARITY,
+    GP_GUIDANCE_FAIL_MAPPER_TRACKING,
+    GP_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT,
+    GP_GUIDANCE_FAIL_MAPPER_OTHER
 } GpHostGuidanceFailure;
 
 const char *gp_host_guidance_failure_name(GpHostGuidanceFailure reason);
@@ -42,6 +48,13 @@ typedef struct {
     unsigned cycles;
     bool inject_ft_active;
     GpHostGuidanceFailure last_failure;
+    /* Host-only data for a non-committing replay AFTER a failed tick.
+     * Never read by the physical STM32 or a motor command path. */
+    FtSensorSample diagnostic_sample;
+    double diagnostic_measured_q[ROBOT_DOF];
+    double diagnostic_sigma_min;
+    double diagnostic_max_tracking_error_rad;
+    bool diagnostic_sample_ready;
     bool motion_requested;
     bool candidate_pending;
     SupervisorGuidanceCandidate candidate;

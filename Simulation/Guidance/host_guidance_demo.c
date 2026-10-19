@@ -1,6 +1,10 @@
 #include "host_guidance_demo.h"
 #include "virtual_ft_sensor.h"
 
+#include "../../ControlCore/Kinematics/control_jacobian.h"
+#include "../../ControlCore/Analysis/singularity.h"
+
+#include <math.h>
 #include "FreeRTOS.h"
 #include "task.h"
 #include <stddef.h>
@@ -14,7 +18,13 @@ const char *gp_host_guidance_failure_name(GpHostGuidanceFailure reason)
     case GP_GUIDANCE_FAIL_INPUT: return "virtual_ft_input_unavailable";
     case GP_GUIDANCE_FAIL_SENSOR_FRAME: return "virtual_ft_sensor_frame_conversion";
     case GP_GUIDANCE_FAIL_FEEDBACK_CONVERSION: return "virtual_ft_feedback_conversion";
-    case GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE: return "ft_processing_admittance_or_mapper";
+    case GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE: return "pipeline_failure_unclassified";
+    case GP_GUIDANCE_FAIL_WRENCH_FRAME: return "sensor_to_base_tcp_wrench_rejected";
+    case GP_GUIDANCE_FAIL_ADMITTANCE: return "admittance_step_rejected";
+    case GP_GUIDANCE_FAIL_MAPPER_SINGULARITY: return "mapper_singularity_threshold";
+    case GP_GUIDANCE_FAIL_MAPPER_TRACKING: return "mapper_tracking_error_limit";
+    case GP_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT: return "mapper_joint_position_limit";
+    case GP_GUIDANCE_FAIL_MAPPER_OTHER: return "mapper_dls_or_other_constraint";
     default: return "unclassified";
     }
 }
@@ -55,6 +65,9 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
         if (d->inject_ft_active)
             out->received_time_us -= 40000U;
         d->last_failure = GP_GUIDANCE_FAIL_NONE; /* sample accepted */
+        d->diagnostic_sample = *out;
+        memcpy(d->diagnostic_measured_q, measured, sizeof(measured));
+        d->diagnostic_sample_ready = true;
         return true;
     }
     out->valid = true;
@@ -65,6 +78,67 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
     out->force_N[0] = 0.5; /* fake handle load, N */
     d->last_failure = GP_GUIDANCE_FAIL_NONE;
     return true;
+}
+
+/* Host-only diagnostic replay is invoked only AFTER a real rejected tick.
+ * It uses COPIES of the pre-tick states and the original input sample.
+ * It cannot clear a fault, change the live state or dispatch a target.
+ * Reuse the same numerical functions; never duplicate control equations. */
+static GpHostGuidanceFailure classify_failed_pipeline(
+    GpHostGuidanceDemo *d, const HandGuidingPipelineState *before,
+    const SupervisorGuidanceDryRunCycle *cycle)
+{
+    if (!d->diagnostic_sample_ready || !before->active)
+        return GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE;
+
+    const HandGuidingPipelineConfig *cfg = &before->config;
+    const RobotConfig *robot = &d->synthetic_observation_robot;
+    const double *q = d->diagnostic_measured_q;
+    double wrench[ADMITTANCE_AXES] = {0};
+    if (!wrench_frame_sensor_to_base_tcp(
+            &d->diagnostic_sample, (uint32_t)cycle->now_us,
+            d->adapter.config.max_sensor_age_us, &cfg->sensor, &cfg->bias,
+            robot, q, cfg->mapper.model_verified, wrench))
+        return GP_GUIDANCE_FAIL_WRENCH_FRAME;
+
+    AdmittanceState admittance_copy = before->admittance;
+    double twist[ADMITTANCE_AXES] = {0};
+    if (!admittance_step(&cfg->admittance, &admittance_copy,
+                        wrench, cycle->period_s, twist))
+        return GP_GUIDANCE_FAIL_ADMITTANCE;
+
+    CartesianJointMapperState mapper_copy = before->mapper;
+    CartesianJointMapperOutput output = {0};
+    if (cartesian_joint_mapper_step(
+            &mapper_copy, &cfg->mapper, robot, q, twist, cycle->period_s,
+            &output) && output.valid)
+        return GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE;
+
+    /* Discriminate common mapper rejections without weakening any gate. */
+    double max_track = 0.0;
+    for (size_t axis = 0U; axis < ROBOT_DOF; ++axis) {
+        const double distance = fabs(before->mapper.position_ref[axis] - q[axis]);
+        if (distance > max_track) max_track = distance;
+        if (q[axis] < robot->limits.qMin[axis] ||
+            q[axis] > robot->limits.qMax[axis] ||
+            before->mapper.position_ref[axis] < robot->limits.qMin[axis] ||
+            before->mapper.position_ref[axis] > robot->limits.qMax[axis])
+            return GP_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT;
+    }
+    d->diagnostic_max_tracking_error_rad = max_track;
+    if (max_track > cfg->mapper.tracking_error_limit[0])
+        return GP_GUIDANCE_FAIL_MAPPER_TRACKING;
+
+    double J[ROBOT_DOF][ROBOT_DOF];
+    double sigma = 0.0;
+    control_jacobian(robot, q, J);
+    if (!singularity_sigma_min((const double (*)[ROBOT_DOF])J, &sigma) ||
+        !isfinite(sigma) || sigma < cfg->mapper.minimum_sigma) {
+        d->diagnostic_sigma_min = sigma;
+        return GP_GUIDANCE_FAIL_MAPPER_SINGULARITY;
+    }
+    d->diagnostic_sigma_min = sigma;
+    return GP_GUIDANCE_FAIL_MAPPER_OTHER;
 }
 
 static void record(GpHostGuidanceDemo *d, const GpGuidanceTraceRow *r)
@@ -98,13 +172,15 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
     d->candidate_pending = false;
     memset(&d->candidate, 0, sizeof(d->candidate));
     d->last_failure = GP_GUIDANCE_FAIL_PRE_SAMPLE;
+    d->diagnostic_sample_ready = false;
+    const HandGuidingPipelineState before = d->adapter.pipeline;
     d->sample_cycle = &observation;
     const bool accepted = hand_guiding_dry_run_tick(&d->adapter, &observation);
     d->sample_cycle = NULL;
     if (accepted) {
         d->last_failure = GP_GUIDANCE_FAIL_NONE;
     } else if (d->last_failure == GP_GUIDANCE_FAIL_NONE) {
-        d->last_failure = GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE;
+        d->last_failure = classify_failed_pipeline(d, &before, &observation);
     }
     if (accepted && d->adapter.last_output.valid) {
         d->candidate.valid = true;

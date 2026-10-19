@@ -286,3 +286,27 @@ lower priority, never in the time-critical control callback.
 **Verification pending WSL:** Re-run the existing Batch A integration
 test and protocol tests, then an interactive GUI session. Prior
 successful 3/3 tests preceded these diagnostic changes.
+
+
+### Follow-up: identify the rejected controller stage
+
+When the first live GUI session produced Supervisor fault `0x3E061`,
+input was fresh (`20 ms` age, `150 ms` watchdog), valid and enabled.
+The earlier diagnostic label `ft_processing_admittance_or_mapper` could not
+identify the rejecting numerical stage.
+
+On a failed simulation-only guidance cycle, the host callback now saves the
+**pre-failure pipeline state**, and only if the cycle fails performs a
+**non-committing replay on copies** of the admittance and mapper states. It
+uses the existing numerical implementations. The resulting first-fault
+console message identifies whether sensor-to-base wrench conversion,
+admittance, or mapping failed; for mapping, it separately reports Jacobian
+singularity, tracking error and joint-limit checks, as well as sigma minimum.
+This does not retune gains, disable limits, reset a fault, or issue a second
+motor command. Diagnostics may be less specific for other mapper failures,
+which are labeled `mapper_dls_or_other_constraint`.
+
+**Validation pending WSL execution:** Rebuild and retry with the existing
+`--virtual-ft` one-command launcher; if failure repeats, capture the new
+`[FAULT]` lines. Rerun `supervisor_silkit_virtual_ft_input` and existing
+unit/regression tests after this host-only diagnostic change.
