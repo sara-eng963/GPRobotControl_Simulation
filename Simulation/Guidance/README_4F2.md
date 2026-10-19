@@ -310,3 +310,27 @@ which are labeled `mapper_dls_or_other_constraint`.
 `--virtual-ft` one-command launcher; if failure repeats, capture the new
 `[FAULT]` lines. Rerun `supervisor_silkit_virtual_ft_input` and existing
 unit/regression tests after this host-only diagnostic change.
+
+
+### Suspected intermittent E061: mismatched sample timestamps (fixed in host adapter)
+
+Source audit after the first-fault report found a specific time-domain issue:
+`service_guidance_dry_run()` captures `cycle.now_us` before invoking the
+callback, but the interactive `synthetic_ft()` was taking a **second**
+`xTaskGetTickCount()` reading later in that same cycle and stamping the
+simulated sensor sample with it. Crossing an RTOS tick boundary can make the
+sample timestamp *later than* the Supervisor's `input.now_us`.
+`ft_sensor_sample_usable()` uses a modulo-32-bit unsigned sample age,
+so this appears as an extremely old sample, failing the existing **30 ms
+sample freshness check** and producing `0x3E061` despite healthy UDP input.
+
+The virtual sensor adapter now uses the already-captured Supervisor
+`cycle.now_us` for its synthetic sensor timestamp and receiver read.
+The underlying sample-age validation, UDP freshness watchdog, command
+validator, safety gating, control cycle and mathematical controller are
+**unchanged**. This repair is restricted to the host-only interactive mode.
+The fault mechanism is proven possible from source inspection, but whether
+it was the sole cause of the observed GUI fault requires rerunning WSL.
+
+The follow-up stage classifier remains available to identify any other
+F/T/wrench/admittance/mapper failure if a fault occurs again.

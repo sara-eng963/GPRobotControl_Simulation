@@ -37,12 +37,17 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
     if (d->virtual_ft_receiver != NULL) {
         double requested[6], measured[ROBOT_DOF];
         const SupervisorGuidanceDryRunCycle *cycle = d->sample_cycle;
-        const uint32_t now_us = (uint32_t)((uint64_t)xTaskGetTickCount() *
-            UINT64_C(1000000) / (uint64_t)configTICK_RATE_HZ);
         if (cycle == NULL || cycle->scales == NULL) {
             d->last_failure = GP_GUIDANCE_FAIL_PRE_SAMPLE;
             return false;
         }
+        /* Use the Supervisor cycle's authoritative timestamp for BOTH
+         * input freshness and the simulated sensor sample. Reading
+         * xTaskGetTickCount() again here could cross an RTOS tick boundary:
+         * sample_time > cycle.now_us then falsely fails ft_sensor_sample_usable
+         * (unsigned age wraps to ~2^32). This was a rare intermittent E061
+         * even while the GUI UDP stream was healthy. */
+        const uint32_t now_us = (uint32_t)cycle->now_us;
         if (!gp_virtual_ft_receiver_read(d->virtual_ft_receiver,
                                          now_us, requested)) {
             d->last_failure = GP_GUIDANCE_FAIL_INPUT;
@@ -116,9 +121,12 @@ static GpHostGuidanceFailure classify_failed_pipeline(
 
     /* Discriminate common mapper rejections without weakening any gate. */
     double max_track = 0.0;
+    bool excessive_tracking_error = false;
     for (size_t axis = 0U; axis < ROBOT_DOF; ++axis) {
         const double distance = fabs(before->mapper.position_ref[axis] - q[axis]);
         if (distance > max_track) max_track = distance;
+        if (distance > cfg->mapper.tracking_error_limit[axis])
+            excessive_tracking_error = true;
         if (q[axis] < robot->limits.qMin[axis] ||
             q[axis] > robot->limits.qMax[axis] ||
             before->mapper.position_ref[axis] < robot->limits.qMin[axis] ||
@@ -126,7 +134,7 @@ static GpHostGuidanceFailure classify_failed_pipeline(
             return GP_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT;
     }
     d->diagnostic_max_tracking_error_rad = max_track;
-    if (max_track > cfg->mapper.tracking_error_limit[0])
+    if (excessive_tracking_error)
         return GP_GUIDANCE_FAIL_MAPPER_TRACKING;
 
     double J[ROBOT_DOF][ROBOT_DOF];
