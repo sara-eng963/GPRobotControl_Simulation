@@ -9,6 +9,37 @@ static uint32_t read_be32(const uint8_t *p)
            ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+static void write_be32(uint8_t *p, uint32_t word)
+{
+    p[0] = (uint8_t)(word >> 24);
+    p[1] = (uint8_t)(word >> 16);
+    p[2] = (uint8_t)(word >> 8);
+    p[3] = (uint8_t)word;
+}
+
+bool gp_vft_encode(uint32_t sequence, bool enabled, const double wrench[6],
+                   uint8_t packet[GP_VFT_PACKET_SIZE])
+{
+    if (packet == NULL || wrench == NULL) return false;
+    float values[6];
+    for (size_t i = 0U; i < 6U; ++i) {
+        if (!isfinite(wrench[i]) || (!enabled && wrench[i] != 0.0))
+            return false;
+        values[i] = (float)wrench[i];
+        if (!isfinite(values[i])) return false;
+    }
+    write_be32(packet, GP_VFT_MAGIC);
+    write_be32(packet + 4U, GP_VFT_VERSION);
+    write_be32(packet + 8U, sequence);
+    write_be32(packet + 12U, enabled ? 1U : 0U);
+    for (size_t i = 0U; i < 6U; ++i) {
+        uint32_t bits = 0U;
+        memcpy(&bits, &values[i], sizeof(bits));
+        write_be32(packet + 16U + 4U*i, bits);
+    }
+    return true;
+}
+
 static bool limits_valid(const GpVirtualFtLimits *l)
 {
     return l != NULL && isfinite(l->max_force_N) &&

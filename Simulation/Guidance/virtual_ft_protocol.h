@@ -30,6 +30,11 @@ typedef struct {
     bool fault_latched;
 } GpVirtualFtState;
 
+/* Serialize the same packet format the existing receiver validates.
+ * Does not impose sensor limits: receiver owns the authoritative limits. */
+bool gp_vft_encode(uint32_t sequence, bool enabled, const double wrench[6],
+                   uint8_t packet[GP_VFT_PACKET_SIZE]);
+
 void gp_vft_reset(GpVirtualFtState *state);
 
 /* Any malformed, out-of-order, invalid-range or non-finite packet latches

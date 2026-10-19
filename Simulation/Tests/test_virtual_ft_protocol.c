@@ -56,6 +56,21 @@ int main(void)
     frame(b,1,0,0.0f);
     assert(gp_vft_accept(&s,&l,b,sizeof(b),0U));
     assert(!gp_vft_read(&s,&l,10U,w)); /* explicit disable */
+    /* Sender and receiver share one atomic wire format: test encode->accept. */
+    gp_vft_reset(&s);
+    const double cmd[6] = {2.5, -1.25, 0.0, 0.25, -0.5, 1.0};
+    assert(gp_vft_encode(10U, true, cmd, b));
+    assert(gp_vft_accept(&s, &l, b, sizeof(b), 50U));
+    assert(gp_vft_read(&s, &l, 60U, w));
+    for (unsigned i = 0U; i < 6U; ++i)
+        assert(fabs(w[i] - cmd[i]) < 1e-6);
+    assert(!gp_vft_encode(11U, true,
+                          (const double[6]){NAN,0,0,0,0,0}, b));
+    assert(!gp_vft_encode(11U, false, cmd, b));
+    assert(gp_vft_encode(11U, true, (const double[6]){0}, b));
+    assert(gp_vft_accept(&s, &l, b, sizeof(b), 61U));
+    assert(gp_vft_read(&s, &l, 62U, w) && w[0] == 0.0);
+
     puts("PASS: virtual F/T protocol validation, zero-release and watchdog");
     return 0;
 }
