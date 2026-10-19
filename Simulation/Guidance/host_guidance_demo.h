@@ -5,6 +5,7 @@
  * geometry and every tuning value are deliberately synthetic. */
 #include "../../HandGuiding/supervisor_dry_run_adapter.h"
 #include <stdio.h>
+#include "virtual_ft_receiver.h"
 
 #define GP_GUIDANCE_RING_SIZE 256U
 typedef enum {
@@ -37,11 +38,15 @@ typedef struct {
     unsigned drops_reported;
     FILE *csv;
     bool open_attempted;
+    GpVirtualFtReceiver *virtual_ft_receiver; /* NULL => original 0.5 N */
+    const SupervisorGuidanceDryRunCycle *sample_cycle; /* only during tick */
 } GpHostGuidanceDemo;
 
 bool gp_host_guidance_init(GpHostGuidanceDemo *demo,
                            const RobotConfig *simulation_robot,
                            GpGuidanceFaultKind kind, unsigned inject_after);
+void gp_host_guidance_use_virtual_ft(GpHostGuidanceDemo *demo,
+                                     GpVirtualFtReceiver *receiver);
 SupervisorGuidanceDryRunPort gp_host_guidance_port(GpHostGuidanceDemo *demo);
 /* Call only from the lower-priority HMI task; no CSV I/O on Supervisor. */
 void gp_host_guidance_flush(GpHostGuidanceDemo *demo, const char *filename);

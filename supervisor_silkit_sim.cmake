@@ -8,6 +8,9 @@ if(ENABLE_SILKIT)
 
         ${CMAKE_SOURCE_DIR}/Simulation/supervisor_silkit_main.c
         ${CMAKE_SOURCE_DIR}/Simulation/Guidance/host_guidance_demo.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_protocol.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_receiver.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_sensor.c
         ${CMAKE_SOURCE_DIR}/Simulation/Storage/trajectory_prefetch.c
         # Host-only flash model. No change to physical STM32 firmware path.
         ${CMAKE_SOURCE_DIR}/Simulation/Tests/w25q_nor_model.c
@@ -180,6 +183,21 @@ if(ENABLE_SILKIT)
 
     endif()
 
+
+    # 4F2A: pure-protocol and rigid-wrench host unit tests.
+    add_executable(test_virtual_ft_protocol
+        ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_virtual_ft_protocol.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_protocol.c)
+    target_compile_features(test_virtual_ft_protocol PRIVATE c_std_11)
+    target_link_libraries(test_virtual_ft_protocol PRIVATE m)
+    add_executable(test_virtual_ft_sensor
+        ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_virtual_ft_sensor.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_sensor.c)
+    target_compile_features(test_virtual_ft_sensor PRIVATE c_std_11)
+    target_link_libraries(test_virtual_ft_sensor PRIVATE hand_guiding control_core m)
+    enable_testing()
+    add_test(NAME virtual_ft_protocol COMMAND test_virtual_ft_protocol)
+    add_test(NAME virtual_ft_sensor_frame COMMAND test_virtual_ft_sensor)
 
     find_package(
         Python3

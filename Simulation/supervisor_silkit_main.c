@@ -44,6 +44,8 @@ static JointDrivePort retraction_drive;
 static AvatarMPositionScale avatar_position_scales[SIM_NUM_AXES];
 static GpHostGuidanceDemo host_guidance_demo;
 static bool host_guidance_enabled;
+static bool virtual_ft_mode;
+static GpVirtualFtReceiver virtual_ft_receiver;
 static const char *host_guidance_trace_path;
 
 static HomingConfig homing_config;
@@ -1467,6 +1469,8 @@ static bool udp_event(void *ctx,HmiEvent *event)
             (unsigned)(xTaskGetTickCount()*1000/configTICK_RATE_HZ),words[2],words[3]);
     if(words[2]==HMI_PROTOCOL_SIM_ESTOP_TOGGLE){estop=!estop;return false;}
     if(words[2]==HMI_PROTOCOL_SIM_GUIDANCE_POSE){
+        /* Legacy Cartesian-position input is not an interactive F/T source. */
+        if (virtual_ft_mode) return false;
         SimGuidancePose pose;
         for(int i=0;i<3;i++)pose.xyz[i]=word_float(words[4+i]);
         (void)xQueueOverwrite(guidance_pose_queue,&pose);
@@ -1648,13 +1652,21 @@ static void udp_status(void *ctx,const SupervisorDiagnostics *s)
 {
     (void)ctx;
     trace_state(s);
+    /* Host-only UDP poll on HMI task, never in the 2ms Supervisor path. */
+    if (virtual_ft_mode) gp_virtual_ft_receiver_poll(&virtual_ft_receiver,
+        (uint32_t)((uint64_t)xTaskGetTickCount()*UINT64_C(1000000) /
+                   (uint64_t)configTICK_RATE_HZ));
     uint32_t w[HMI_STATUS_WORD_COUNT]={0};
     w[0]=HMI_STATUS_MAGIC;w[1]=HMI_PROTOCOL_VERSION;w[2]=++status_sequence;
     w[3]=s->machine.activeState;w[4]=s->selected_geometry;w[5]=estop;
     w[6]=s->machine.activeState==ROBOT_STATE_PAUSED;
-    w[7]=s->machine.activeState==ROBOT_STATE_TEACHING &&
-         guidance_pose_queue != NULL &&
-         uxQueueMessagesWaiting(guidance_pose_queue) > 0U && !estop;
+    w[7]=virtual_ft_mode ?
+         (s->machine.activeState==ROBOT_STATE_TEACHING &&
+          host_guidance_demo.adapter.pipeline.active &&
+          !host_guidance_demo.adapter.pipeline.fault_latched) :
+         (s->machine.activeState==ROBOT_STATE_TEACHING &&
+          guidance_pose_queue != NULL &&
+          uxQueueMessagesWaiting(guidance_pose_queue) > 0U && !estop);
     w[8]=s->boot.phase;w[9]=s->boot.error;w[10]=s->homing_phase;w[11]=s->homing_error;
     w[14]=s->teaching.phase;w[15]=s->teaching.error;w[16]=s->teaching.status_message_id;
     w[17]=s->teaching.next_point_number;w[18]=s->segment_count;
@@ -1799,6 +1811,14 @@ static bool start_system(void)
     const char *dispatch_opt = getenv("GP_GUIDANCE_SIM_MOTION");
     const bool sim_guidance_dispatch =
         dispatch_opt && strcmp(dispatch_opt, "1") == 0;
+    const char *virtual_opt = getenv("GP_GUIDANCE_VIRTUAL_FT");
+    virtual_ft_mode = virtual_opt && strcmp(virtual_opt, "1") == 0;
+    if (virtual_ft_mode && (!host_guidance_enabled ||
+                            !sim_guidance_dispatch)) {
+        fprintf(stderr, "[VFT] requires GP_GUIDANCE_DRY_RUN=1 and "
+                        "GP_GUIDANCE_SIM_MOTION=1\\n");
+        return false;
+    }
     if (sim_guidance_dispatch && !host_guidance_enabled) {
         fprintf(stderr, "[4E3] GP_GUIDANCE_SIM_MOTION requires "
                         "GP_GUIDANCE_DRY_RUN=1\\n");
@@ -1821,6 +1841,14 @@ static bool start_system(void)
         }
         if (!gp_host_guidance_init(&host_guidance_demo, &robot, kind, 20U))
             return false;
+        if (virtual_ft_mode) {
+            const GpVirtualFtLimits limits = {5.0, 1.0,
+                                            GP_VFT_DEFAULT_TIMEOUT_US};
+            if (!gp_virtual_ft_receiver_init(&virtual_ft_receiver, &limits))
+                return false;
+            gp_host_guidance_use_virtual_ft(&host_guidance_demo,
+                                           &virtual_ft_receiver);
+        }
         fprintf(stderr, "[4E2B] OBSERVATION ONLY enabled, synthetic fixture; "
                         "fault=%s, trace=%s\n",
                 fault ? fault : "none", host_guidance_trace_path);

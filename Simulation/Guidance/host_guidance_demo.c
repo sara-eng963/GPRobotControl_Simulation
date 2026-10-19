@@ -1,4 +1,5 @@
 #include "host_guidance_demo.h"
+#include "virtual_ft_sensor.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -10,6 +11,27 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
     GpHostGuidanceDemo *d = (GpHostGuidanceDemo *)context;
     if (d == NULL || out == NULL) return false;
     memset(out, 0, sizeof(*out));
+    if (d->virtual_ft_receiver != NULL) {
+        double requested[6], measured[ROBOT_DOF];
+        const SupervisorGuidanceDryRunCycle *cycle = d->sample_cycle;
+        const uint32_t now_us = (uint32_t)((uint64_t)xTaskGetTickCount() *
+            UINT64_C(1000000) / (uint64_t)configTICK_RATE_HZ);
+        if (cycle == NULL || cycle->scales == NULL ||
+            !gp_virtual_ft_receiver_read(d->virtual_ft_receiver,
+                                         now_us, requested)) return false;
+        for (size_t i=0; i<ROBOT_DOF; ++i)
+            if (!cycle->feedback[i].feedback_valid ||
+                !avatar_m_position_units_to_joint_rad(&cycle->scales[i],
+                    cycle->feedback[i].actual_position_units, &measured[i]))
+                return false;
+        if (!gp_virtual_ft_sensor_sample(requested,
+                &d->adapter.config.pipeline_config.sensor,
+                &d->synthetic_observation_robot, measured, now_us, out))
+            return false;
+        if (d->inject_ft_active)
+            out->received_time_us -= 40000U;
+        return true;
+    }
     out->valid = true;
     const uint64_t now = (uint64_t)xTaskGetTickCount() *
         UINT64_C(1000000) / (uint64_t)configTICK_RATE_HZ;
@@ -49,7 +71,9 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
 
     d->candidate_pending = false;
     memset(&d->candidate, 0, sizeof(d->candidate));
+    d->sample_cycle = &observation;
     const bool accepted = hand_guiding_dry_run_tick(&d->adapter, &observation);
+    d->sample_cycle = NULL;
     if (accepted && d->adapter.last_output.valid) {
         d->candidate.valid = true;
         d->candidate.produced_us = cycle->now_us;
@@ -154,6 +178,12 @@ bool gp_host_guidance_init(GpHostGuidanceDemo *d,
         cfg.pipeline_config.mapper.tracking_error_limit[i] = 0.2;
     }
     return hand_guiding_dry_run_init(&d->adapter, &cfg);
+}
+
+void gp_host_guidance_use_virtual_ft(GpHostGuidanceDemo *d,
+                                     GpVirtualFtReceiver *receiver)
+{
+    if (d != NULL) d->virtual_ft_receiver = receiver;
 }
 
 SupervisorGuidanceDryRunPort gp_host_guidance_port(GpHostGuidanceDemo *d)
