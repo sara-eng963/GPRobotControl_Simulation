@@ -173,9 +173,10 @@ int main(void)
                     "No recent Supervisor status on UDP 5014",
                     97,163,14,HMI_C_MUTED,false);
 
-        draw_hold(BUTTON_NEG,"LEFT ARROW     -X",plus ? false : minus && enabled,
+        /* Show active buttons only for non-cancelled directions. */
+        draw_hold(BUTTON_NEG,"LEFT ARROW     -X",minus && !plus && enabled,
                   allowed,mouse);
-        draw_hold(BUTTON_POS,"RIGHT ARROW     +X",plus && enabled,
+        draw_hold(BUTTON_POS,"RIGHT ARROW     +X",plus && !minus && enabled,
                   allowed,mouse);
         hmi_ui_text("Hold an arrow key or press and hold a direction button",
                     95,324,15,HMI_C_MUTED,false);
