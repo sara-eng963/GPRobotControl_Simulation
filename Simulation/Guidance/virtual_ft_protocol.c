@@ -48,10 +48,22 @@ static bool limits_valid(const GpVirtualFtLimits *l)
            l->timeout_us < UINT32_C(0x80000000);
 }
 
-static bool trip(GpVirtualFtState *state)
+const char *gp_vft_fault_name(GpVirtualFtFault reason)
+{
+    switch (reason) {
+    case GP_VFT_FAULT_NONE: return "none";
+    case GP_VFT_FAULT_INVALID_PACKET: return "invalid_packet_or_range";
+    case GP_VFT_FAULT_SEQUENCE: return "duplicate_or_out_of_order_sequence";
+    case GP_VFT_FAULT_TIMEOUT: return "wrench_input_timeout";
+    default: return "unknown";
+    }
+}
+
+static bool trip(GpVirtualFtState *state, GpVirtualFtFault reason)
 {
     if (state != NULL) {
         state->fault_latched = true;
+        state->fault_reason = reason;
         state->enabled = false;
         memset(state->wrench_base_tcp, 0, sizeof(state->wrench_base_tcp));
     }
@@ -68,15 +80,16 @@ bool gp_vft_accept(GpVirtualFtState *state, const GpVirtualFtLimits *limits,
 {
     if (state == NULL || state->fault_latched) return false;
     if (!limits_valid(limits) || data == NULL || size != GP_VFT_PACKET_SIZE)
-        return trip(state);
+        return trip(state, GP_VFT_FAULT_INVALID_PACKET);
     const uint32_t magic = read_be32(data);
     const uint32_t version = read_be32(data + 4U);
     const uint32_t sequence = read_be32(data + 8U);
     const uint32_t enabled = read_be32(data + 12U);
     if (magic != GP_VFT_MAGIC || version != GP_VFT_VERSION ||
-        enabled > 1U || (state->connected &&
-        (int32_t)(sequence - state->sequence) <= 0))
-        return trip(state);
+        enabled > 1U)
+        return trip(state, GP_VFT_FAULT_INVALID_PACKET);
+    if (state->connected && (int32_t)(sequence - state->sequence) <= 0)
+        return trip(state, GP_VFT_FAULT_SEQUENCE);
 
     double candidate[6];
     for (size_t i = 0U; i < 6U; ++i) {
@@ -88,7 +101,7 @@ bool gp_vft_accept(GpVirtualFtState *state, const GpVirtualFtLimits *limits,
                                        limits->max_torque_Nm;
         if (!isfinite(candidate[i]) || fabs(candidate[i]) > limit ||
             (enabled == 0U && candidate[i] != 0.0))
-            return trip(state);
+            return trip(state, GP_VFT_FAULT_INVALID_PACKET);
     }
     memcpy(state->wrench_base_tcp, candidate, sizeof(candidate));
     state->sequence = sequence;
@@ -109,7 +122,7 @@ bool gp_vft_read(GpVirtualFtState *state, const GpVirtualFtLimits *limits,
     if (!state->connected || !state->enabled) return false;
     const uint32_t age = now_us - state->received_us;
     if (age >= UINT32_C(0x80000000) || age > limits->timeout_us)
-        return trip(state);
+        return trip(state, GP_VFT_FAULT_TIMEOUT);
     memcpy(wrench_base_tcp, state->wrench_base_tcp, 6U * sizeof(double));
     return true;
 }

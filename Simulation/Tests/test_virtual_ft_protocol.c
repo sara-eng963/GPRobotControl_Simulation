@@ -35,11 +35,13 @@ int main(void)
     assert(gp_vft_read(&s,&l,160U,w) && w[0]==-4.0);
     assert(!gp_vft_read(&s,&l,150151U,w));
     assert(s.fault_latched && w[0]==0.0);
+    assert(s.fault_reason == GP_VFT_FAULT_TIMEOUT);
     assert(!gp_vft_accept(&s,&l,b,sizeof(b),150152U));
 
     gp_vft_reset(&s);
     frame(b,1,1,INFINITY);
     assert(!gp_vft_accept(&s,&l,b,sizeof(b),0U) && s.fault_latched);
+    assert(s.fault_reason == GP_VFT_FAULT_INVALID_PACKET);
     gp_vft_reset(&s);
     frame(b,1,1,6.0f);
     assert(!gp_vft_accept(&s,&l,b,sizeof(b),0U));
@@ -49,6 +51,7 @@ int main(void)
     gp_vft_reset(&s);
     assert(gp_vft_accept(&s,&l,b,sizeof(b),0U));
     assert(!gp_vft_accept(&s,&l,b,sizeof(b),100U)); /* duplicate */
+    assert(s.fault_reason == GP_VFT_FAULT_SEQUENCE);
     gp_vft_reset(&s);
     frame(b,1,0,1.0f);
     assert(!gp_vft_accept(&s,&l,b,sizeof(b),0U)); /* unsafe disarm */

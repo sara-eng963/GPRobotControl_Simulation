@@ -6,6 +6,19 @@
 #include <stddef.h>
 #include <string.h>
 
+const char *gp_host_guidance_failure_name(GpHostGuidanceFailure reason)
+{
+    switch (reason) {
+    case GP_GUIDANCE_FAIL_NONE: return "none";
+    case GP_GUIDANCE_FAIL_PRE_SAMPLE: return "pre_sample_safety_or_feedback_gate";
+    case GP_GUIDANCE_FAIL_INPUT: return "virtual_ft_input_unavailable";
+    case GP_GUIDANCE_FAIL_SENSOR_FRAME: return "virtual_ft_sensor_frame_conversion";
+    case GP_GUIDANCE_FAIL_FEEDBACK_CONVERSION: return "virtual_ft_feedback_conversion";
+    case GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE: return "ft_processing_admittance_or_mapper";
+    default: return "unclassified";
+    }
+}
+
 static bool synthetic_ft(void *context, FtSensorSample *out)
 {
     GpHostGuidanceDemo *d = (GpHostGuidanceDemo *)context;
@@ -16,20 +29,32 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
         const SupervisorGuidanceDryRunCycle *cycle = d->sample_cycle;
         const uint32_t now_us = (uint32_t)((uint64_t)xTaskGetTickCount() *
             UINT64_C(1000000) / (uint64_t)configTICK_RATE_HZ);
-        if (cycle == NULL || cycle->scales == NULL ||
-            !gp_virtual_ft_receiver_read(d->virtual_ft_receiver,
-                                         now_us, requested)) return false;
+        if (cycle == NULL || cycle->scales == NULL) {
+            d->last_failure = GP_GUIDANCE_FAIL_PRE_SAMPLE;
+            return false;
+        }
+        if (!gp_virtual_ft_receiver_read(d->virtual_ft_receiver,
+                                         now_us, requested)) {
+            d->last_failure = GP_GUIDANCE_FAIL_INPUT;
+            return false;
+        }
         for (size_t i=0; i<ROBOT_DOF; ++i)
             if (!cycle->feedback[i].feedback_valid ||
                 !avatar_m_position_units_to_joint_rad(&cycle->scales[i],
                     cycle->feedback[i].actual_position_units, &measured[i]))
+            {
+                d->last_failure = GP_GUIDANCE_FAIL_FEEDBACK_CONVERSION;
                 return false;
+            }
         if (!gp_virtual_ft_sensor_sample(requested,
                 &d->adapter.config.pipeline_config.sensor,
-                &d->synthetic_observation_robot, measured, now_us, out))
+                &d->synthetic_observation_robot, measured, now_us, out)) {
+            d->last_failure = GP_GUIDANCE_FAIL_SENSOR_FRAME;
             return false;
+        }
         if (d->inject_ft_active)
             out->received_time_us -= 40000U;
+        d->last_failure = GP_GUIDANCE_FAIL_NONE; /* sample accepted */
         return true;
     }
     out->valid = true;
@@ -38,6 +63,7 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
     out->received_time_us = (uint32_t)(
         d->inject_ft_active ? now - UINT64_C(40000) : now);
     out->force_N[0] = 0.5; /* fake handle load, N */
+    d->last_failure = GP_GUIDANCE_FAIL_NONE;
     return true;
 }
 
@@ -71,9 +97,15 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
 
     d->candidate_pending = false;
     memset(&d->candidate, 0, sizeof(d->candidate));
+    d->last_failure = GP_GUIDANCE_FAIL_PRE_SAMPLE;
     d->sample_cycle = &observation;
     const bool accepted = hand_guiding_dry_run_tick(&d->adapter, &observation);
     d->sample_cycle = NULL;
+    if (accepted) {
+        d->last_failure = GP_GUIDANCE_FAIL_NONE;
+    } else if (d->last_failure == GP_GUIDANCE_FAIL_NONE) {
+        d->last_failure = GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE;
+    }
     if (accepted && d->adapter.last_output.valid) {
         d->candidate.valid = true;
         d->candidate.produced_us = cycle->now_us;

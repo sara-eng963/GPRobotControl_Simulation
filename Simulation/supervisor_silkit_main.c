@@ -1491,6 +1491,49 @@ static bool udp_event(void *ctx,HmiEvent *event)
 static void trace_state(const SupervisorDiagnostics *s)
 {
     operator_log_outcomes(s);
+    /* First-fault snapshot is captured only by the lower-priority HMI task.
+     * No printf/socket/file operations added to the 2ms M7 control callback. */
+    static RobotStateId previous_diagnostic_state = ROBOT_STATE_COUNT;
+    if (s->machine.activeState == ROBOT_STATE_FAULT &&
+        previous_diagnostic_state != ROBOT_STATE_FAULT) {
+        const uint32_t code = s->machine.activeFaultCode;
+        fprintf(stderr, "[FAULT] code=0x%05X (%u), from_state=%u, detail=0x%04X\n",
+                (unsigned)code, (unsigned)code,
+                (unsigned)((code >> 16U) & 0xffU),
+                (unsigned)(code & 0xffffU));
+        if (((code >> 16U) & 0xffU) == ROBOT_STATE_TEACHING &&
+            (code & 0xffffU) == 0xE061U)
+            fprintf(stderr, "[FAULT] E061: no fresh admissible hand-guiding "
+                            "candidate; retaining simulated safe-stop.\n");
+        if (virtual_ft_mode) {
+            GpVirtualFtState input;
+            GpHostGuidanceFailure guidance_failure;
+            taskENTER_CRITICAL();
+            input = virtual_ft_receiver.state;
+            guidance_failure = host_guidance_demo.last_failure;
+            taskEXIT_CRITICAL();
+            const uint32_t now_us = (uint32_t)(
+                ((uint64_t)xTaskGetTickCount() * UINT64_C(1000000)) /
+                (uint64_t)configTICK_RATE_HZ);
+            const uint32_t input_age_us = input.connected ?
+                now_us - input.received_us : 0U;
+            fprintf(stderr, "[FAULT] last_guidance_failure=%s; "
+                    "vft_connected=%u, enabled=%u, latched=%u, reason=%s, "
+                    "last_seq=%u, last_input_age_ms=%s",
+                    gp_host_guidance_failure_name(guidance_failure),
+                    (unsigned)input.connected, (unsigned)input.enabled,
+                    (unsigned)input.fault_latched,
+                    gp_vft_fault_name(input.fault_reason),
+                    (unsigned)input.sequence,
+                    input.connected ? "" : "never_received");
+            if (input.connected)
+                fprintf(stderr, "%.1f", (double)input_age_us / 1000.0);
+            fprintf(stderr, " (watchdog=%.1f ms)\n",
+                    (double)virtual_ft_receiver.limits.timeout_us / 1000.0);
+        }
+        fflush(stderr);
+    }
+    previous_diagnostic_state = s->machine.activeState;
     if (host_guidance_enabled)
         gp_host_guidance_flush(&host_guidance_demo, host_guidance_trace_path);
 

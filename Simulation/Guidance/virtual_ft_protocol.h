@@ -21,6 +21,13 @@ typedef struct {
     uint32_t timeout_us;
 } GpVirtualFtLimits;
 
+typedef enum {
+    GP_VFT_FAULT_NONE = 0,
+    GP_VFT_FAULT_INVALID_PACKET,
+    GP_VFT_FAULT_SEQUENCE,
+    GP_VFT_FAULT_TIMEOUT
+} GpVirtualFtFault;
+
 typedef struct {
     double wrench_base_tcp[6];
     uint32_t sequence;
@@ -28,6 +35,7 @@ typedef struct {
     bool connected;
     bool enabled;
     bool fault_latched;
+    GpVirtualFtFault fault_reason;
 } GpVirtualFtState;
 
 /* Serialize the same packet format the existing receiver validates.
@@ -35,6 +43,7 @@ typedef struct {
 bool gp_vft_encode(uint32_t sequence, bool enabled, const double wrench[6],
                    uint8_t packet[GP_VFT_PACKET_SIZE]);
 
+const char *gp_vft_fault_name(GpVirtualFtFault fault);
 void gp_vft_reset(GpVirtualFtState *state);
 
 /* Any malformed, out-of-order, invalid-range or non-finite packet latches

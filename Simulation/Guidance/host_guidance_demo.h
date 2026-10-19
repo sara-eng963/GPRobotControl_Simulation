@@ -7,6 +7,17 @@
 #include <stdio.h>
 #include "virtual_ft_receiver.h"
 
+typedef enum {
+    GP_GUIDANCE_FAIL_NONE = 0,
+    GP_GUIDANCE_FAIL_PRE_SAMPLE,
+    GP_GUIDANCE_FAIL_INPUT,
+    GP_GUIDANCE_FAIL_SENSOR_FRAME,
+    GP_GUIDANCE_FAIL_FEEDBACK_CONVERSION,
+    GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE
+} GpHostGuidanceFailure;
+
+const char *gp_host_guidance_failure_name(GpHostGuidanceFailure reason);
+
 #define GP_GUIDANCE_RING_SIZE 256U
 typedef enum {
     GP_GUIDANCE_INJECT_NONE = 0,
@@ -30,6 +41,7 @@ typedef struct {
     unsigned inject_after;
     unsigned cycles;
     bool inject_ft_active;
+    GpHostGuidanceFailure last_failure;
     bool motion_requested;
     bool candidate_pending;
     SupervisorGuidanceCandidate candidate;

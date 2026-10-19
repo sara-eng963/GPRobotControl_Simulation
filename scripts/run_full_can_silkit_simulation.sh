@@ -408,8 +408,34 @@ echo
 echo " Press Ctrl-C here to stop the complete simulation."
 echo "============================================================"
 
+# In interactive F/T mode mirror only meaningful Supervisor events.
+# The full 10 Hz TRACE remains in supervisor.log; never flood the terminal.
+# Byte-offset incremental reads run in this launcher once per second, not in
+# FreeRTOS or the 2 ms control callback.
+DIAG_BYTE_OFFSET=0
+print_ft_diagnostics() {
+    ((VIRTUAL_FT)) || return 0
+    local size
+    size=$(wc -c < "$SUPERVISOR_LOG")
+    if ((size < DIAG_BYTE_OFFSET)); then
+        DIAG_BYTE_OFFSET=0
+    fi
+    if ((size > DIAG_BYTE_OFFSET)); then
+        tail -c +"$((DIAG_BYTE_OFFSET + 1))" "$SUPERVISOR_LOG" |
+            grep -E '^\\[(FAULT|VFT|SIM|HMI RX|GUIDANCE)\\]' || true
+        DIAG_BYTE_OFFSET=$size
+    fi
+}
+
+echo
+if ((VIRTUAL_FT)); then
+    echo "[DIAGNOSTICS] Live state transitions, GUI input faults and first-fault cause:"
+    print_ft_diagnostics
+fi
+
 # Keep the launcher alive and fail loudly if a core process exits.
 while true; do
+    print_ft_diagnostics
     core_entries=(
         "$REGISTRY_PID:registry:$REGISTRY_LOG"
         "$MOTOR_PID:motor-bank:$MOTOR_LOG"

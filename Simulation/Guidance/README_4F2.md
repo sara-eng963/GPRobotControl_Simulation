@@ -261,3 +261,28 @@ guidance. No automatic fault reset is performed.
 execution.** Previous Batch A tests passed 3/3 in user-supplied logs.
 Physical dynamics, STM32 500 Hz timing, F/T commissioning and safety
 chains remain unverified.
+
+### Batch B live fault diagnostics (follow-up)
+
+In interactive mode the canonical launcher now mirrors state changes and
+first-fault diagnostics to its **existing terminal**. No additional terminal
+or GUI is required. The full trace remains at
+`.simulation-logs/virtual-ft/supervisor.log`, and guidance samples in
+`guidance.csv`.
+
+The Supervisor reports its state/detail fault code, its last failed
+hand-guiding stage, and the last validated virtual input's connected/
+enabled/latched flags, protocol fault reason, sequence and age relative
+to the 150 ms watchdog. The fault categories distinguish no input,
+unusable feedback, sensor-frame conversion and downstream pipeline
+rejection; they are diagnostics only and do not reset or bypass faults.
+
+**For example:** `0x3E061` means the TEACHING Supervisor failed to obtain
+a fresh guidance candidate (E061). The sensor diagnostic snapshot is
+needed to tell whether this originated in the F/T link versus another
+hand-guiding gate. Diagnostic printf and logfile tailing run at
+lower priority, never in the time-critical control callback.
+
+**Verification pending WSL:** Re-run the existing Batch A integration
+test and protocol tests, then an interactive GUI session. Prior
+successful 3/3 tests preceded these diagnostic changes.
