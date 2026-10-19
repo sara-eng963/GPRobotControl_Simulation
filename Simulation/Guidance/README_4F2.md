@@ -334,3 +334,26 @@ it was the sole cause of the observed GUI fault requires rerunning WSL.
 
 The follow-up stage classifier remains available to identify any other
 F/T/wrench/admittance/mapper failure if a fault occurs again.
+
+
+### Batch 4F2 — E062 command gate diagnostic (read-only)
+
+After correcting a time-of-sample inconsistency, the interactive GUI reached
+TEACHING and next entered `0x3E062`. Unlike `E061`, this reports failure
+during the Supervisor's **existing** candidate validator / drive readiness /
+CANopen target dispatch (not a virtual F/T packet/watchdog failure).
+
+New host-only telemetry snapshots the latest two *generated* candidates and
+their feedback. Only when a fault is observed, the low-priority HMI task
+re-validates the last candidate with a **fresh independent temporary gate**
+and displays maximum candidate-to-feedback error, candidate step difference,
+future feedback timestamps, and configured synthetic gate thresholds.
+This cannot determine the live gate's private historical state, so a
+PASS in the independent probe does not establish that the live gate passed.
+It also cannot distinguish CAN send failure from readiness failure.
+It never calls send-targets, never resets a fault, never alters StateMachine
+source or firmware, and never changes thresholds.
+
+**Verification pending WSL:** rebuild with the existing single-command
+launcher; inspect `[FAULT] E062 read-only candidate audit` lines. Then
+run the focused hand-guiding and SIL Kit regression tests.

@@ -40,6 +40,15 @@ typedef struct {
     uint64_t feedback_max_age_us;
     bool feedback_measurement_valid;
 } GpGuidanceTraceRow;
+/* Bounded, read-only snapshot of the latest two candidates; no drive API. */
+typedef struct {
+    bool has_last;
+    bool has_previous;
+    SupervisorGuidanceDryRunCycle last_cycle;
+    SupervisorGuidanceCandidate last_candidate;
+    SupervisorGuidanceCandidate previous_candidate;
+} GpGuidanceGateAudit;
+
 typedef struct {
     HandGuidingDryRunState adapter;
     RobotConfig synthetic_observation_robot;
@@ -58,6 +67,7 @@ typedef struct {
     bool motion_requested;
     bool candidate_pending;
     SupervisorGuidanceCandidate candidate;
+    GpGuidanceGateAudit gate_audit;
     GpGuidanceTraceRow rows[GP_GUIDANCE_RING_SIZE];
     unsigned head, tail, dropped;
     unsigned drops_reported;
@@ -75,4 +85,7 @@ void gp_host_guidance_use_virtual_ft(GpHostGuidanceDemo *demo,
 SupervisorGuidanceDryRunPort gp_host_guidance_port(GpHostGuidanceDemo *demo);
 /* Call only from the lower-priority HMI task; no CSV I/O on Supervisor. */
 void gp_host_guidance_flush(GpHostGuidanceDemo *demo, const char *filename);
+/* Captured in the Supervisor cycle and copied for diagnostics only. */
+bool gp_host_guidance_gate_audit_snapshot(
+    GpHostGuidanceDemo *demo, GpGuidanceGateAudit *out);
 #endif

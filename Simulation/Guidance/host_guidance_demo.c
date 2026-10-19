@@ -200,6 +200,18 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
                 d->adapter.last_output.joint_velocity_ref[i];
         }
         d->candidate_pending = true;
+        /* Capture only the last two generated candidates. No validation,
+         * command dispatch, or logging on this real control-cycle path. */
+        taskENTER_CRITICAL();
+        if (d->gate_audit.has_last) {
+            d->gate_audit.previous_candidate =
+                d->gate_audit.last_candidate;
+            d->gate_audit.has_previous = true;
+        }
+        d->gate_audit.last_candidate = d->candidate;
+        d->gate_audit.last_cycle = observation;
+        d->gate_audit.has_last = true;
+        taskEXIT_CRITICAL();
     }
     GpGuidanceTraceRow r = {0};
     r.time_us = cycle->now_us;
@@ -372,4 +384,14 @@ void gp_host_guidance_flush(GpHostGuidanceDemo *d, const char *name)
         fputc('\n', d->csv);
     }
     if (any) (void)fflush(d->csv);
+}
+
+bool gp_host_guidance_gate_audit_snapshot(
+    GpHostGuidanceDemo *demo, GpGuidanceGateAudit *out)
+{
+    if (demo == NULL || out == NULL) return false;
+    taskENTER_CRITICAL();
+    *out = demo->gate_audit;
+    taskEXIT_CRITICAL();
+    return out->has_last;
 }
