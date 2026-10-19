@@ -289,6 +289,18 @@ if(ENABLE_SILKIT)
         )
         set_tests_properties(guidance_4f1_analyzer_fixture PROPERTIES TIMEOUT 10)
 
+        # 4F2A end-to-end simulated force input with no GUI dependency.
+        add_test(
+            NAME supervisor_silkit_virtual_ft_input
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_supervisor_silkit_virtual_ft.py
+                ${SILKIT_ROOT}/bin/sil-kit-registry
+                $<TARGET_FILE:avatar_m_silkit_motor_bank>
+                $<TARGET_FILE:supervisor_silkit_sim>
+        )
+        set_tests_properties(supervisor_silkit_virtual_ft_input PROPERTIES
+            TIMEOUT 100 RUN_SERIAL TRUE)
+
         # Host-only erase-delay/cancellation and transport-failure tests.
         foreach(case_name IN ITEMS cancel program_fail)
             add_test(

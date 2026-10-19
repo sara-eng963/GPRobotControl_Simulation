@@ -558,3 +558,25 @@ writer; guidance CSV writes remain in the HMI task.
 
 Details, limitations, persistent WSL test commands, and interpretation are
 in [Simulation/Guidance/README_4F1.md](../Simulation/Guidance/README_4F1.md).
+
+
+## Stage 4F2A — Interactive virtual F/T input infrastructure (2026-10-19)
+
+Host-only Batch A introduces `Simulation/Guidance/virtual_ft_protocol`,
+`virtual_ft_receiver` and `virtual_ft_sensor`, with an opt-in
+`GP_GUIDANCE_VIRTUAL_FT=1` mode. Input is an atomic six-component base/TCP
+wrench (not a position request). The receiver runs in the HMI task; the
+Supervisor still exclusively owns the 2 ms control and CANopen dispatch.
+Conversion back into a synthetic sensor-frame measurement uses measured
+joint angles and both sensor/TCP moment-arm shifts, then feeds the exact
+existing F/T processing and controller. The legacy Cartesian-pose GUI
+command is excluded while interactive mode is enabled; the original 0.5 N
+source remains the default and all pre-existing regression fixtures are
+preserved. Packet, sequencing, freshness and bounded-input faults inhibit
+simulated guidance without an automatic reset.
+
+Full protocol, frame mathematics, build commands, startup order and
+unverified hardware assumptions: [Simulation/Guidance/README_4F2.md](../Simulation/Guidance/README_4F2.md).
+**Acceptance:** sources committed; unit and SIL Kit tests are registered
+but must run in WSL before any PASS claim. No GUI is implemented in 4F2A;
+that is 4F2B/4F2C. This does not release physical STM32 motion.
