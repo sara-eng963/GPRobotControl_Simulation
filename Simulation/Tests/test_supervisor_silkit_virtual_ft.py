@@ -68,6 +68,14 @@ def rows(path):
     with path.open(newline="") as f:
         return list(csv.DictReader(f))
 
+def teaching_status(sock, predicate, timeout=12):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        words = status_state(sock, 3, deadline - time.monotonic())
+        if predicate(words):
+            return words
+    raise AssertionError("teaching status condition not reached")
+
 def wait_rows(path, predicate, timeout=8):
     deadline=time.monotonic()+timeout
     while time.monotonic()<deadline:
@@ -104,12 +112,29 @@ try:
             initial = status_state(status,3,10)
             initial_q = [struct.unpack("!f",struct.pack("!I",v))[0]
                          for v in initial[37:43]]
-            wait_rows(trace,lambda rr:sum(x["valid"]=="1" for x in rr)>=5)
+            # Exercise idle TEACHING for seconds, not just five cycles.
+            idle = wait_rows(trace,lambda rr:sum(
+                x["valid"]=="1" for x in rr)>=1500)
+            assert all(abs(float(x[f"q{i+1}"])-initial_q[i])<1e-5
+                       for x in idle if x["valid"]=="1" for i in range(6)), \
+                   "zero wrench changed the seeded joint reference"
+            teaching_status(status,lambda w:w[20]==1 and w[7]==0)
+            hmi.sendto(struct.pack("!8I",0x484D4933,3,4,2,0,0,0,0),
+                       ("127.0.0.1",5010))  # Record at rest
+            teaching_status(status,lambda w:w[45]==1)
             with wrench_lock: fx_command[0]=0.5
             applied=wait_rows(trace,lambda rr:sum(
-                x["valid"]=="1" and float(x["fx"])>0.49 for x in rr)>=30)
+                x["valid"]=="1" and float(x["fx"])>0.49 for x in rr)>=150)
             assert any(abs(float(x["vx"]))>1e-7 for x in applied
                        if x["valid"]=="1" and float(x["fx"])>0.49)
+            teaching_status(status,lambda w:w[7]==1 and w[20]==0)
+            # A raw Record event must still be rejected by Teaching's own
+            # unsettled gate; hiding the button alone is insufficient.
+            hmi.sendto(struct.pack("!8I",0x484D4933,3,4,3,0,0,0,0),
+                       ("127.0.0.1",5010))
+            receipt = teaching_status(status,lambda w:w[55]==3)
+            rejected = teaching_status(status,lambda w:w[2]>receipt[2]+3)
+            assert rejected[45]==1, "Record captured a point during force input"
             moved=False
             end=time.monotonic()+5
             while time.monotonic()<end and not moved:
@@ -133,11 +158,13 @@ try:
             assert len(later)>=100
             assert abs(float(later[-1]["vx"]))<abs(float(later[0]["vx"])), \
                    "velocity did not decay after zero wrench"
+            teaching_status(status,lambda w:w[20]==1 and w[7]==0,18)
             stop_send.set()
             thread.join(timeout=2)
-            status_state(status,11,7) # watchdog -> Supervisor fault
+            fault = status_state(status,11,7) # watchdog -> Supervisor fault
+            assert fault[20]==0, "FAULT falsely advertised Record as available"
             print("PASS virtual F/T SIL Kit: applied, moved, "
-                  "released/decayed, lost-input fault")
+                  "idle/settled recording, moving rejection, lost-input fault")
 finally:
     stop_send.set()
     for p in reversed(list(procs.values())):

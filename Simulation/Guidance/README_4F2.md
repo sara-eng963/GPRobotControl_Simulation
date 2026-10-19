@@ -8,7 +8,7 @@
 ```text
 Python sender (4F2A) / Raylib GUI (planned 4F2B,C)
     -> UDP 127.0.0.1:5013, versioned atomic 6-axis base/TCP wrench
-    -> virtual_ft_receiver (nonblocking HMI polling every 10 ms)
+    -> virtual_ft_receiver (bounded nonblocking simulation input acquisition)
     -> virtual_ft_protocol (validation, sequence, watchdog; latched faults)
     -> virtual_ft_sensor (inverse rigid wrench map at measured robot q)
     -> host_guidance_demo synthetic sensor callback
@@ -22,6 +22,10 @@ The interactive mode is opt-in and mutually exclusive with the legacy
 HMI Cartesian-pose input. Default is the existing constant 0.5 N synthetic
 fixture. The existing 4F1 trace and timing hooks remain intact. All interactive
 tuning/model parameters are synthetic test fixtures, not hardware approvals.
+Interactive mode uses the unmodified shared UR5 geometry and an actual J5
+home of 0.15 rad to avoid the singular wrist at zero. Teaching FK and MATLAB
+therefore see the same pose as the guidance Jacobian. The older constant-force
+observation fixture retains its separate perturbed model.
 
 ### Wrench and frame convention
 
@@ -74,8 +78,15 @@ after the last valid packet latches failure. A disabled sample during
 active hand-guiding also fails guidance. No stale wrench is held after
 loss; existing fault path inhibits further candidates and simulated drive
 dispatch. **Recovery is explicit simulation restart**, not automatic reset.
-The receiver is polled in the HMI task; the Supervisor's 2 ms callback
+The receiver is polled in the existing simulation input task, independently
+of HMI logging/CSV flushing; the Supervisor's 2 ms callback
 reads only an in-memory snapshot and does no socket I/O.
+
+Controller enable is separate from force input and measured rest. The host
+reports settled only after zero wrench and 20 new complete feedback sets at
+an unchanged attained integer target. This supplies Teaching's existing
+`robot_motion_settled` input. The Record display also requires TEACHING and
+its existing `record_allowed` output; Teaching remains the acceptance authority.
 
 ## Build and test (WSL)
 
