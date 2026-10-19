@@ -580,3 +580,24 @@ unverified hardware assumptions: [Simulation/Guidance/README_4F2.md](../Simulati
 **Acceptance:** sources committed; unit and SIL Kit tests are registered
 but must run in WSL before any PASS claim. No GUI is implemented in 4F2A;
 that is 4F2B/4F2C. This does not release physical STM32 motion.
+
+
+## Stage 4F2B — Minimal Raylib interactive force input (2026-10-19)
+
+`HMI/virtual_ft_gui_app.c` is a new standalone Raylib executable using
+the existing HMI theme. It produces the same VFT1 atomic base/TCP wrench
+packets as the tested headless sender (X± only for Batch B). New
+`Simulation/Guidance/virtual_ft_client.[ch]` reuses the 4F2A protocol
+encoder and a dedicated sender socket; `virtual_ft_controls.[ch]`
+handles held-input sign/cancellation without any robot physics.
+
+The Supervisor's existing HMI task mirrors *read-only* diagnostics to
+UDP 5014 when virtual input is opted in; the existing status ports and
+motion ownership remain unchanged. Valid zero samples continue on
+release and focus loss. Closing/stalling GUI output causes the original
+150 ms simulation watchdog fault while guidance is active.
+
+Build, launch order, key/button mapping, tests and limitations are in
+[README_4F2.md](../Simulation/Guidance/README_4F2.md).
+Batch B sources are committed, but WSL/GUI/MATLAB validation is pending.
+No firmware or physical motion permission changed.

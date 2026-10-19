@@ -135,3 +135,117 @@ rigidity, collision avoidance or certified E-stop/STO is validated.
 4F2B adds a separate Raylib executable with X± held buttons and a force
 slider, emitting the same protocol. 4F2C adds all axes, torque controls
 and status. MATLAB visualizer requires no command-path modification.
+
+
+## Stage 4F2B — Minimal interactive Raylib GUI (2026-10-19)
+
+**Scope:** standalone `virtual_ft_gui` executable, tested host transport,
+positive/negative X force only. Full six-axis buttons and torque slider
+remain Batch C. Only software simulation is in scope.
+
+### GUI operation
+
+- **Right arrow** or hold the **+X** button: positive X force.
+- **Left arrow** or hold the **-X** button: negative X force.
+- Both held simultaneously: zero force.
+- Release controls: valid **zero wrench** samples remain streaming; the
+  **existing C admittance controller** is responsible for velocity decay.
+- Magnitude slider: 0–5 N (starts at 0.5 N). Software demonstration
+  range only, not a sensor rating or physical safety limit.
+- **Zero Wrench:** suppress force until held directional controls are released.
+- Keyboard/window focus loss forces the transmitted wrench to zero.
+- All other force/torque components are zero in Batch B.
+- Directions are robot base-frame axes, about the TCP; neither button
+  depends on MATLAB camera orientation.
+
+The GUI uses the existing `hmi_theme` styles and `hmi_protocol` decoder.
+The Supervisor sends a **read-only copy** of its existing 57-word status
+packet to UDP **5014**, only while virtual-F/T mode is enabled.
+Ports 5011 (supervisor_panel) and 5012 (teaching_sim) remain unchanged.
+Status reports Disconnected, Ready/awaiting TEACHING, Guidance active,
+or Fault/E-stop. Receiving this status is not a safety guarantee.
+
+The GUI is exclusively an F/T measurement source (UDP 5013); it never
+uses the legacy Cartesian-position command, HMI event output, or CANopen
+interface. The existing panel can still select TEACHING. The old teaching
+simulator's pose commands are ignored in virtual F/T mode.
+
+### WSL build
+
+```bash
+cd ~/freertos-pc-test
+git fetch origin sara/can-replacement
+git switch sara/can-replacement
+git pull --ff-only origin sara/can-replacement
+export SILKIT_ROOT="$HOME/silkit_test/SilKit-5.0.7-ubuntu-24.04-x86_64-gcc/SilKit"
+
+cmake -S . -B /tmp/gp-4f2 -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
+cmake --build /tmp/gp-4f2 --target \
+  virtual_ft_gui supervisor_panel supervisor_silkit_sim \
+  avatar_m_silkit_motor_bank test_virtual_ft_protocol \
+  test_virtual_ft_sensor test_virtual_ft_controls \
+  test_virtual_ft_client -j2
+ctest --test-dir /tmp/gp-4f2 \
+  -R '^virtual_ft_(protocol|sensor_frame|controls|client_udp)$' \
+  --output-on-failure
+ctest --test-dir /tmp/gp-4f2 \
+  -R '^supervisor_silkit_virtual_ft_input$' --output-on-failure
+```
+
+**Manual interactive startup, one terminal per process:**
+
+```bash
+# Terminal 1 — registry
+"$SILKIT_ROOT/bin/sil-kit-registry" --listen-uri silkit://localhost:8500
+
+# Terminal 2 — six virtual motors
+/tmp/gp-4f2/avatar_m_silkit_motor_bank
+
+# Terminal 3 — opt-in host controller with logging
+GP_GUIDANCE_DRY_RUN=1 GP_GUIDANCE_SIM_MOTION=1 \
+GP_GUIDANCE_VIRTUAL_FT=1 \
+GP_GUIDANCE_TRACE_FILE=/tmp/gp-4f2-interactive-guidance.csv \
+/tmp/gp-4f2/supervisor_silkit_sim
+
+# Terminal 4 — start GUI BEFORE entering TEACHING
+/tmp/gp-4f2/virtual_ft_gui
+
+# Terminal 5 — existing operator panel selects LINE / TEACHING once IDLE
+/tmp/gp-4f2/supervisor_panel
+```
+
+After entering TEACHING, the GUI should show Guidance active. Hold
+Right Arrow or +X, then release. Observe a nonzero `fx` and `vx`,
+evolving `q1..q6` and actual `actual_q1..actual_q6` in the existing
+guidance trace. For MATLAB visualization open
+`MATLAB/can_robot_visualizer.m` in MATLAB; it still receives only motor
+feedback via UDP 5005. Set `MATLAB_IP` for the Windows host if required
+in WSL, exactly as with existing visualization.
+
+Do not run the automated Python F/T sender and GUI at the same time.
+Both use the same input stream and conflicting sequences can latch a
+protocol fault. The receiver currently locks to one monotonically
+increasing sequence; after closing/restarting the GUI, **restart the
+Supervisor simulator** before re-entering TEACHING. Ending GUI output
+during TEACHING correctly expires the watchdog and faults simulated
+guidance. No automatic fault reset is performed.
+
+### Test boundaries and evidence
+
+- `virtual_ft_protocol` adds a round-trip test for the shared production
+  packet encoder, positive/negative/zero components and invalid values.
+- `virtual_ft_controls` verifies held X+/X-, opposing cancel, release,
+  invalid magnitude and disabled guidance.
+- `virtual_ft_client_udp` creates an actual localhost UDP receiver and
+  verifies packets from the same sender used by the GUI, with the
+  existing decoder for +X, -X, and zero samples.
+- `supervisor_silkit_virtual_ft_input` reuses the Batch A end-to-end
+  scripted force input to exercise the real C admittance controller, gate,
+  SIL Kit motor feedback, zero-wrench decay, and disconnect fault.
+- GUI clicking, window focus, status rendering, and MATLAB visual motion
+  require a manual interactive test; unit tests do not assert these.
+
+**All new Batch B builds/tests and manual GUI behavior are pending WSL
+execution.** Previous Batch A tests passed 3/3 in user-supplied logs.
+Physical dynamics, STM32 500 Hz timing, F/T commissioning and safety
+chains remain unverified.
