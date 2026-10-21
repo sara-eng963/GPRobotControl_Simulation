@@ -1238,6 +1238,18 @@ static void supervisor_task_entry(void *argument)
                     emit_step_failure(context, 0xE004U);
             }
         } else {
+#if defined(GP_HOST_TIMING) && defined(GP_HOST_GUIDANCE_MOTION_TEST)
+            if (context->config.sim_guidance_dispatch_enabled) {
+                /* WSL/POSIX may miss a release. Skip simulated catch-up
+                 * iterations instead of producing two motion candidates
+                 * with the same tick timestamp. Hardware timer handling
+                 * and the command gate are unchanged. */
+                const TickType_t now_tick = xTaskGetTickCount();
+                if ((TickType_t)(now_tick - last_wake) >=
+                    context->config.period_ticks)
+                    last_wake = now_tick;
+            }
+#endif
             vTaskDelayUntil(&last_wake, context->config.period_ticks);
         }
     }
