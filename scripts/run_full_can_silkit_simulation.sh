@@ -370,7 +370,8 @@ if ((VIRTUAL_FT)); then
     echo "   Virtual F/T GUI -> UDP :5013 -> existing C admittance controller"
     echo "   GUI status feedback <- UDP :5014"
     echo "   Use supervisor_panel: wait for IDLE, then select LINE/TEACHING."
-    echo "   Hold Left/Right arrow in virtual_ft_gui to apply -X/+X force."
+    echo "   Virtual F/T: arrows X/Y, PageUp/Down Z, Q/E roll, S/W pitch, A/D yaw."
+    echo "   Adjust Force (N) and Torque (N.m) independently; combine held keys."
     echo "   Do not launch the Python virtual-F/T sender simultaneously."
 fi
 echo

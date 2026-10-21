@@ -1,12 +1,81 @@
 # Stage 4F2A — Virtual F/T Input (Host Simulation Only)
 
+## Stage 3E — Six-axis interactive virtual F/T keyboard (2026-10-21)
+
+This section supersedes the earlier X-only Batch 4F2B GUI descriptions below.
+The same Raylib `virtual_ft_gui` and existing launcher now emit all six
+base-frame/B, TCP-origin wrench components through the **unchanged** UDP VFT1
+protocol on loopback :5013. These are simulated forces and moments, **not**
+Cartesian position, rotation-angle, or joint reference commands.
+
+| Base-frame wrench channel | Negative (hold) | Positive (hold) | Slider |
+|---|---|---|---|
+| Fx (N), X translation tendency | Left arrow | Right arrow | Force |
+| Fy (N), Y translation tendency | Down arrow | Up arrow | Force |
+| Fz (N), Z translation tendency | PageDown | PageUp | Force |
+| Tx (N·m), roll tendency | Q | E | Torque |
+| Ty (N·m), pitch tendency | S | W | Torque |
+| Tz (N·m), yaw tendency | A | D | Torque |
+
+The on-screen keys are also click-and-hold buttons. Held keys may be combined
+across all six axes. Opposing keys cancel their *own* component; releasing one
+key leaves every other held component unchanged. Translation and rotation are
+coupled through the actual Jacobian, geometry, joint limits and saturation;
+the visible direction is relative to robot base B, **not** the MATLAB camera
+view. Near singularities or limits a particular requested direction may not
+be realizable.
+
+Force slider: **0–5 N** (initial 0.5 N). Torque slider: **0–1 N·m**
+(initial 0.05 N·m). These follow the existing receiver's per-component
+software bounds, not measured hardware limits. Both can be adjusted live.
+The six numeric values labeled **LAST UDP SEND** are updated only after the
+real UDP send succeeds; they do not claim the receiver accepted the sample.
+The status row shows the existing Supervisor state, guidance flag, CAN
+readiness and guidance error (status copy on :5014).
+
+Zero Wrench immediately transmits zero and inhibits still-held keys until
+they are all released. Focus loss does the same. Releasing keys streams valid
+zero-wrench samples at approximately 50 Hz; the unchanged 500-Hz admittance
+controller provides its modeled velocity decay. Normal window close uses
+the existing sender's best-effort triple-zero transmission. A lost sender,
+stale stream, invalid packet or interrupted receiver preserves the existing
+Supervisor fault/watchdog behavior. ZERO is **not** a protective stop or a
+fault reset.
+
+**Launch from WSL** (SIL Kit configured as in the earlier sections):
+
+```bash
+cd ~/freertos-pc-test
+git fetch origin sara/can-replacement
+git switch sara/can-replacement
+git pull --ff-only origin sara/can-replacement
+bash scripts/run_full_can_silkit_simulation.sh --virtual-ft
+```
+
+In `supervisor_panel`, wait for IDLE and select LINE / TEACHING.
+Only one VFT1 sender may run at a time. Open
+`MATLAB/can_robot_visualizer.m` separately on Windows; it reads the original
+joint-feedback stream on UDP :5005, not GUI-provided poses. Test each of
+Fx/Fy/Fz/Tx/Ty/Tz, combinations, release, focus loss and Zero Wrench.
+Inspect `.simulation-logs/virtual-ft/guidance.csv` for accepted wrench,
+twist, `qref` and `actual_q`; consult `supervisor.log` for first faults.
+
+**Scope/limits:** local deterministic C unit tests check signs, every axis,
+combinations, opposite-key cancellation, independent magnitudes, release and
+focus inhibition. A localhost UDP test checks the actual sender/receiver
+wire contract. Raylib interactive focus/button behavior, end-to-end SIL Kit
+motor motion and MATLAB rotation display still require a local graphical
+acceptance run. No safety certification, hardware timing, collision safety
+or physical force/torque ratings are established.
+
+
 **Status:** implementation committed; validation in a full WSL SIL Kit checkout is
 **pending**. No production STM32 source or physical motion permission changed.
 
 ## Boundaries and modules
 
 ```text
-Python sender (4F2A) / Raylib GUI (planned 4F2B,C)
+Python sender (4F2A) / six-axis Raylib GUI (Stage 3E)
     -> UDP 127.0.0.1:5013, versioned atomic 6-axis base/TCP wrench
     -> virtual_ft_receiver (bounded nonblocking simulation input acquisition)
     -> virtual_ft_protocol (validation, sequence, watchdog; latched faults)
@@ -143,16 +212,14 @@ rigidity, collision avoidance or certified E-stop/STO is validated.
 
 ## Next milestone
 
-4F2B adds a separate Raylib executable with X± held buttons and a force
-slider, emitting the same protocol. 4F2C adds all axes, torque controls
-and status. MATLAB visualizer requires no command-path modification.
+The historical Batch 4F2B started with X± only. Stage 3E now supports all six
+force/torque channels and separate sliders, with the same MATLAB feedback path.
 
 
 ## Stage 4F2B — Minimal interactive Raylib GUI (2026-10-19)
 
 **Scope:** standalone `virtual_ft_gui` executable, tested host transport,
-positive/negative X force only. Full six-axis buttons and torque slider
-remain Batch C. Only software simulation is in scope.
+positive/negative X force only. The full six-axis extension is documented in Stage 3E above. Only software simulation is in scope.
 
 ### GUI operation
 
