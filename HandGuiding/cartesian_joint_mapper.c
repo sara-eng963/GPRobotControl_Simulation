@@ -28,7 +28,26 @@ static bool model_valid(const RobotConfig *r)
             if (!isfinite(r->tool.T_F_TCP[i][j])) return false;
     for (size_t j = 0U; j < 3U; ++j)
         if (fabs(r->tool.T_F_TCP[3][j]) > 1e-9) return false;
-    return fabs(r->tool.T_F_TCP[3][3] - 1.0) <= 1e-9;
+    if (fabs(r->tool.T_F_TCP[3][3] - 1.0) > 1e-9) return false;
+
+    /* A finite 4x4 matrix is not necessarily a rigid transform. Require
+     * SO(3), as the wrench-frame stage already does; no scale or reflection. */
+    const double (*T)[4] = r->tool.T_F_TCP;
+    for (size_t i = 0U; i < 3U; ++i) {
+        for (size_t j = 0U; j < 3U; ++j) {
+            double dot = 0.0;
+            for (size_t k = 0U; k < 3U; ++k)
+                dot += T[i][k] * T[j][k];
+            if (!isfinite(dot) ||
+                fabs(dot - (i == j ? 1.0 : 0.0)) > 1e-6)
+                return false;
+        }
+    }
+    const double det =
+        T[0][0] * (T[1][1]*T[2][2] - T[1][2]*T[2][1]) -
+        T[0][1] * (T[1][0]*T[2][2] - T[1][2]*T[2][0]) +
+        T[0][2] * (T[1][0]*T[2][1] - T[1][1]*T[2][0]);
+    return isfinite(det) && fabs(det - 1.0) <= 1e-6;
 }
 
 bool cartesian_joint_mapper_config_valid(
@@ -147,9 +166,25 @@ bool cartesian_joint_mapper_step(
         next_q[i] = position;
         next_qd[i] = vel;
     }
+    /* Diagnostic model-predicted TCP twist AFTER joint constraints.
+     * This is J(q_measured)*qdot_commanded, NOT measured robot velocity.
+     * No arbitrary mixed-unit norm or new runtime motion threshold. */
+    double achieved[ROBOT_DOF] = {0};
+    double residual[ROBOT_DOF] = {0};
+    for (size_t row = 0U; row < ROBOT_DOF; ++row) {
+        for (size_t axis = 0U; axis < ROBOT_DOF; ++axis)
+            achieved[row] += J[row][axis] * next_qd[axis];
+        residual[row] = twist[row] - achieved[row];
+        if (!isfinite(achieved[row]) || !isfinite(residual[row]))
+            goto failure;
+    }
     for (size_t i = 0U; i < ROBOT_DOF; ++i) {
         s->position_ref[i] = out->position_ref[i] = next_q[i];
         s->velocity_ref[i] = out->velocity_ref[i] = next_qd[i];
+    }
+    for (size_t i = 0U; i < ROBOT_DOF; ++i) {
+        out->achieved_twist_base_tcp[i] = achieved[i];
+        out->twist_residual_base_tcp[i] = residual[i];
     }
     out->sigma_min = sigma;
     out->limited = limited;

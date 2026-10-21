@@ -27,6 +27,11 @@ typedef struct {
     double position_ref[ROBOT_DOF];
     double velocity_ref[ROBOT_DOF];
     double sigma_min;                       /* mixed Jacobian units */
+    /* Diagnostic only: J(q_measured)*velocity_ref at TCP in BASE.
+     * Components [m/s, rad/s]. Residual = requested - achieved; not a
+     * physical measured twist, and not a passivity/safety metric. */
+    double achieved_twist_base_tcp[ROBOT_DOF];
+    double twist_residual_base_tcp[ROBOT_DOF];
 } CartesianJointMapperOutput;
 
 bool cartesian_joint_mapper_config_valid(

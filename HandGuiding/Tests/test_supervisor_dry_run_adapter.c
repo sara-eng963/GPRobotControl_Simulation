@@ -135,6 +135,35 @@ int main(void)
     cycle.safety_timestamp_ms = 0U; /* stale safety update */
     assert(!port.tick(port.context, &cycle));
     assert(state.pipeline.fault_latched && fake.commands == 0U);
+    /* Feedback can be individually fresh while describing significantly
+     * different instants. The optional skew guard is inclusive at limit. */
+    cycle.safety_timestamp_ms = cycle.now_ms;
+    HandGuidingDryRunConfig skew_cfg = test_config(&sample);
+    skew_cfg.max_feedback_skew_us = 500U;
+    skew_cfg.require_new_feedback = false;
+    skew_cfg.pipeline_config.require_new_sample = false;
+    HandGuidingDryRunState skew_state = {0};
+    assert(hand_guiding_dry_run_init(&skew_state, &skew_cfg));
+    SupervisorGuidanceDryRunPort skew_port =
+        hand_guiding_dry_run_port(&skew_state);
+    for (size_t axis = 0U; axis < ROBOT_DOF; ++axis)
+        cycle.feedback[axis].timestamp_us = 5000U;
+    cycle.feedback[4].timestamp_us = 4500U; /* 500us skew: allowed */
+    assert(skew_port.tick(skew_port.context, &cycle));
+    assert(skew_state.pipeline.active && !skew_state.pipeline.fault_latched);
+
+    cycle.feedback[4].timestamp_us = 4499U; /* 501us: reject and latch */
+    assert(!skew_port.tick(skew_port.context, &cycle));
+    assert(skew_state.pipeline.fault_latched && !skew_state.last_output.valid);
+    assert(fake.commands == 0U);
+    hand_guiding_dry_run_reset(&skew_state);
+    assert(!skew_port.tick(skew_port.context, &cycle)); /* latch persists */
+    /* Explicitly disabled guard retains legacy individual-age behavior. */
+    skew_cfg.max_feedback_skew_us = 0U;
+    assert(hand_guiding_dry_run_init(&skew_state, &skew_cfg));
+    assert(skew_port.tick(skew_port.context, &cycle));
+    assert(fake.commands == 0U);
+
     puts("PASS: 4E2A dry-run feedback/FT gate and zero motion dispatch");
     return 0;
 }

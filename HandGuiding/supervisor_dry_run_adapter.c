@@ -81,6 +81,8 @@ bool hand_guiding_dry_run_tick(
      * cannot obtain a send-target callback or perform CANopen operations. */
     double measured_q[ROBOT_DOF];
     uint32_t sequences[ROBOT_DOF];
+    uint64_t oldest_feedback_us = UINT64_MAX;
+    uint64_t newest_feedback_us = 0U;
     for (size_t axis = 0U; axis < ROBOT_DOF; ++axis) {
         const JointDriveAxisFeedback *fb = &cycle->feedback[axis];
         if (!fb->feedback_valid || !fb->operation_enabled ||
@@ -93,12 +95,24 @@ bool hand_guiding_dry_run_tick(
                 &measured_q[axis]))
             return fail(state);
         sequences[axis] = fb->sequence;
+        if (fb->timestamp_us < oldest_feedback_us)
+            oldest_feedback_us = fb->timestamp_us;
+        if (fb->timestamp_us > newest_feedback_us)
+            newest_feedback_us = fb->timestamp_us;
         if (state->config.require_new_feedback &&
             state->feedback_sequence_initialized &&
             (int32_t)(sequences[axis] -
                       state->last_feedback_sequence[axis]) <= 0)
             return fail(state);
     }
+
+    /* A set of individually fresh samples can still span different
+     * instants. An explicit nonzero configuration enables this extra
+     * coherence guard without assuming a CANopen transport phase. */
+    if (state->config.max_feedback_skew_us > 0U &&
+        newest_feedback_us - oldest_feedback_us >
+            state->config.max_feedback_skew_us)
+        return fail(state);
 
     FtSensorSample sample = {0};
     if (!state->config.read_sample(state->config.sample_context, &sample))

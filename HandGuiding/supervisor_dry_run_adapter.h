@@ -10,6 +10,10 @@ typedef struct {
     HandGuidingPipelineConfig pipeline_config;
     uint32_t max_sensor_age_us;
     uint64_t max_feedback_age_us;
+    /* Optional bound on newest-oldest of six feedback timestamps (us).
+     * 0 disables this additional skew check until an approved bound exists;
+     * existing individual freshness and monotonic checks remain active. */
+    uint64_t max_feedback_skew_us;
     uint32_t max_runtime_age_ms;
     uint32_t max_safety_age_ms;
     bool require_new_feedback;
