@@ -301,6 +301,25 @@ if(ENABLE_SILKIT)
         set_tests_properties(supervisor_silkit_virtual_ft_input PROPERTIES
             TIMEOUT 100 RUN_SERIAL TRUE)
 
+        # Stage 3B: one host-SIL Kit process per scenario (shared UDP/CAN ports).
+        # These tests require a real SIL Kit installation; they are not GUI tests.
+        foreach(stage3b_case IN ITEMS
+                matrix mixed sustained duplicate out_of_order nonfinite
+                truncated disabled range dropout)
+            add_test(
+                NAME supervisor_silkit_virtual_ft_3b_${stage3b_case}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_supervisor_silkit_virtual_ft_3b.py
+                    ${SILKIT_ROOT}/bin/sil-kit-registry
+                    $<TARGET_FILE:avatar_m_silkit_motor_bank>
+                    $<TARGET_FILE:supervisor_silkit_sim>
+                    ${stage3b_case}
+            )
+            set_tests_properties(
+                supervisor_silkit_virtual_ft_3b_${stage3b_case}
+                PROPERTIES TIMEOUT 190 RUN_SERIAL TRUE)
+        endforeach()
+
         # Host-only erase-delay/cancellation and transport-failure tests.
         foreach(case_name IN ITEMS cancel program_fail)
             add_test(
