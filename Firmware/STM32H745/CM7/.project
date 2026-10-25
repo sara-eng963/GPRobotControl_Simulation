@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>GP_STM32H745_CM7</name>
+	<name>GP_STM32H745ZIT6_BoardConfig_CM7</name>
 	<comment></comment>
 	<projects>
 	</projects>
@@ -130,6 +130,16 @@
 			<locationURI>PARENT-1-PROJECT_LOC/Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim_ex.c</locationURI>
 		</link>
 		<link>
+			<name>Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_uart.c</name>
+			<type>1</type>
+			<locationURI>PARENT-1-PROJECT_LOC/Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c</locationURI>
+		</link>
+		<link>
+			<name>Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_uart_ex.c</name>
+			<type>1</type>
+			<locationURI>PARENT-1-PROJECT_LOC/Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c</locationURI>
+		</link>
+		<link>
 			<name>Middlewares/Third_Party/FreeRTOS/cmsis_os2.c</name>
 			<type>1</type>
 			<locationURI>PARENT-1-PROJECT_LOC/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c</locationURI>
@@ -183,6 +193,131 @@
 			<name>Middlewares/Third_Party/FreeRTOS/timers.c</name>
 			<type>1</type>
 			<locationURI>PARENT-1-PROJECT_LOC/Middlewares/Third_Party/FreeRTOS/Source/timers.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Analysis/singularity.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Analysis/singularity.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Math/matrix6.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Math/matrix6.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Math/math3d.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Math/math3d.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Pipeline/single_segment_circular.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Pipeline/single_segment_circular.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Pipeline/single_segment_line_stream.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Pipeline/single_segment_line_stream.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Pipeline/single_segment_line.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Pipeline/single_segment_line.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Pipeline/single_segment_circular_stream.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Pipeline/single_segment_circular_stream.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Kinematics/control_fk.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Kinematics/control_fk.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Kinematics/adls_ik.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Kinematics/adls_ik.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Kinematics/control_jacobian.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Kinematics/control_jacobian.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Kinematics/dh_transform.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Kinematics/dh_transform.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Trajectory/generate_line_waypoints.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Trajectory/generate_line_waypoints.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Trajectory/joint_trajectory.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Trajectory/joint_trajectory.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Trajectory/arc_length_parameterize.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Trajectory/arc_length_parameterize.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Trajectory/s_curve_profile.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Trajectory/s_curve_profile.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Trajectory/circular_path.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Trajectory/circular_path.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Trajectory/s_curve_time_scaling.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Trajectory/s_curve_time_scaling.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ControlCore/Trajectory/quintic_time_scaling.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ControlCore/Trajectory/quintic_time_scaling.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ServoDrive/CiA402/cia402.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ServoDrive/CiA402/cia402.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ServoDrive/AvatarM/avatar_m_pdo.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ServoDrive/AvatarM/avatar_m_pdo.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ServoDrive/AvatarM/avatar_m_drive.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ServoDrive/AvatarM/avatar_m_drive.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ServoDrive/AvatarM/avatar_m_position.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ServoDrive/AvatarM/avatar_m_position.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ServoDrive/JointDrive/canopen_drive_commissioning_port.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ServoDrive/JointDrive/canopen_drive_commissioning_port.c</locationURI>
+		</link>
+			<link>
+			<name>Application/ServoDrive/JointDrive/canopen_joint_drive_port.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/ServoDrive/JointDrive/canopen_joint_drive_port.c</locationURI>
+		</link>
+			<link>
+			<name>Application/HandGuiding/guidance_command_gate.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/guidance_command_gate.c</locationURI>
 		</link>
 	</linkedResources>
 </projectDescription>

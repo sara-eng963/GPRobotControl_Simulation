@@ -29,7 +29,7 @@ for core in CM7 CM4; do
         -mcpu="$cpu" -mthumb -mfpu="$fpu" -mfloat-abi=hard
         -DSTM32H745xx -DUSE_HAL_DRIVER -D"CORE_$core=1"
         -I"$FW/$core/Core/Inc" -I"$FW/Common/Inc"
-        -I"$ROOT/Intercore"
+        -I"$FW/Common/Inc" -I"$FW/CM7/Application/Intercore"
         -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
         -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2"
         -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F"
@@ -51,7 +51,7 @@ assert 'EXTI_MODE_CORE2_INTERRUPT' in notify and 'EXTI_MODE_CORE1_INTERRUPT' in 
 assert 'HAL_EXTI_GenerateSWI(&exti_tx)' in notify
 assert 'xMessageBufferSendCompletedFromISR' in notify
 assert 'HAL_EXTI_IRQHandler(&exti_rx)' in notify
-assert 'gp_ipc_set_notifier' in notify
+assert 'ipc_set_notifier' in notify
 for core, irq, other in [('CM7', 'EXTI1_IRQHandler', 'EXTI0_IRQHandler'),
                          ('CM4', 'EXTI0_IRQHandler', 'EXTI1_IRQHandler')]:
     project = (fw/core/".cproject").read_text()

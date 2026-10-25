@@ -4,26 +4,27 @@
  * may ship an initial value for live cross-core SRAM4 data.
  */
 #include <stdint.h>
+#define IPC_FREERTOS_BACKEND 1
 #include "ipc_mailbox.h"
 #include "trajectory_stream.h"
 #include "sram4_memory_map.h"
 
-_Static_assert(sizeof(GpIpcShared) <= GP_SHARED_IPC_BYTES,
+_Static_assert(sizeof(IpcShared) <= SRAM4_IPC_BYTES,
                "IPC object exceeds linker IPC reservation");
-_Static_assert(sizeof(GpTrajectoryShared) <= GP_SHARED_TRAJECTORY_BYTES,
+_Static_assert(sizeof(TrajectoryShared) <= SRAM4_TRAJECTORY_BYTES,
                "Trajectory object exceeds linker trajectory reservation");
 
 #define GP_LINKER_PROBE __attribute__((used, aligned(32)))
 
-GpIpcShared gp_stage2_linker_ipc
-    GP_LINKER_PROBE __attribute__((section(".gp_shared_ipc")));
+IpcShared gp_stage2_linker_ipc
+    GP_LINKER_PROBE __attribute__((section(".shared_ipc")));
 
-GpTrajectoryShared gp_stage2_linker_trajectory
-    GP_LINKER_PROBE __attribute__((section(".gp_shared_trajectory")));
+TrajectoryShared gp_stage2_linker_trajectory
+    GP_LINKER_PROBE __attribute__((section(".shared_trajectory")));
 
 /* Synthetic validation allocation, never linked into production. */
-uint8_t gp_stage3_linker_validation[GP_SHARED_VALIDATION_BYTES]
-    GP_LINKER_PROBE __attribute__((section(".gp_shared_validation")));
+uint8_t gp_stage3_linker_validation[SRAM4_VALIDATION_BYTES]
+    GP_LINKER_PROBE __attribute__((section(".shared_validation")));
 
 /* Real app uses CubeMX startup; this standalone probe uses an inert entry. */
 void Reset_Handler(void) { for (;;) { __asm volatile("nop"); } }

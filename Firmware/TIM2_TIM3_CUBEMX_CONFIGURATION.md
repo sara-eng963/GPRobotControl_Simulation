@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 # STM32H745 — TIM2/TIM3 timing configuration record
 
 **Status:** STM32CubeMX GUI configuration **partially completed**, **no generated code, target timer operation or measured 500 Hz performance claimed**.  

@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 ---
 title: "Stage 2 — Shared SRAM4, Linker, MPU and IPC ABI"
 stage: 2

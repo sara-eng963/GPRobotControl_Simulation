@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>GP_STM32H745_CM4</name>
+	<name>GP_STM32H745ZIT6_BoardConfig_CM4</name>
 	<comment></comment>
 	<projects>
 	</projects>
@@ -58,6 +58,11 @@
 			<name>Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_exti.c</name>
 			<type>1</type>
 			<locationURI>PARENT-1-PROJECT_LOC/Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_exti.c</locationURI>
+		</link>
+		<link>
+			<name>Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_fdcan.c</name>
+			<type>1</type>
+			<locationURI>PARENT-1-PROJECT_LOC/Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c</locationURI>
 		</link>
 		<link>
 			<name>Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_flash.c</name>
@@ -178,6 +183,16 @@
 			<name>Middlewares/Third_Party/FreeRTOS/timers.c</name>
 			<type>1</type>
 			<locationURI>PARENT-1-PROJECT_LOC/Middlewares/Third_Party/FreeRTOS/Source/timers.c</locationURI>
+		</link>
+			<link>
+			<name>Application/Intercore/validation_storage_bridge.c</name>
+			<type>1</type>
+			<locationURI>PARENT-1-PROJECT_LOC/CM7/Application/Intercore/validation_storage_bridge.c</locationURI>
+		</link>
+			<link>
+			<name>Application/Intercore/trajectory_storage_service.c</name>
+			<type>1</type>
+			<locationURI>PARENT-1-PROJECT_LOC/CM7/Application/Intercore/trajectory_storage_service.c</locationURI>
 		</link>
 	</linkedResources>
 </projectDescription>

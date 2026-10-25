@@ -1,0 +1,1327 @@
+#include "supervisor_task.h"
+#include "../ServoDrive/JointDrive/canopen_joint_drive_port.h"
+#include "../ServoDrive/JointDrive/canopen_drive_commissioning_port.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#if defined(HOST_TIMING)
+#include "../Simulation/Timing/host_timing_trace.h"
+#define TRACE_BEGIN(source) timing_begin(source)
+#define TRACE_END(source, success) timing_end(source, success)
+#else
+#define TRACE_BEGIN(source) ((void)0)
+#define TRACE_END(source, success) ((void)0)
+#endif
+
+#ifndef SUPERVISOR_DEBUG
+#define SUPERVISOR_DEBUG 0
+#endif
+
+#if SUPERVISOR_DEBUG
+#define SUPERVISOR_LOG(...) printf(__VA_ARGS__)
+#else
+#define SUPERVISOR_LOG(...) ((void)0)
+#endif
+
+#define SUPERVISOR_QUEUE_LENGTH       32U
+#define SUPERVISOR_TASK_STACK_WORDS   4096U
+#define VALIDATION_TASK_STACK_WORDS   4096U
+#define SUPERVISOR_MAX_MESSAGES_CYCLE 16U
+
+typedef enum {
+    VALIDATION_WORKER_IDLE = 0,
+    VALIDATION_WORKER_QUEUED,
+    VALIDATION_WORKER_RUNNING,
+    VALIDATION_WORKER_DONE
+} ValidationWorkerState;
+
+/* Real M7 installs a timer port; PC tests keep their RTOS-tick clock. */
+static SupervisorTimingPort g_timing;
+
+static uint64_t supervisor_now_us(void)
+{
+    if (g_timing.monotonic_us != NULL)
+        return g_timing.monotonic_us(g_timing.context);
+    return (uint64_t)xTaskGetTickCount() * UINT64_C(1000000) /
+           (uint64_t)configTICK_RATE_HZ;
+}
+
+static uint32_t supervisor_now_ms(void)
+{
+    return (uint32_t)(supervisor_now_us() / UINT64_C(1000));
+}
+
+typedef struct
+{
+    StateMachine machine;
+    SupervisorInputSnapshot gpio_inputs;
+    SupervisorDriveSnapshot drive_snapshot;
+    uint32_t last_m4_ipc_sequence;
+    uint32_t m7_status_ipc_sequence;
+    uint32_t last_m7_ipc_status_ms;
+    bool m7_ipc_status_sent;
+    SupervisorTaskConfig config;
+
+    BootState boot;
+    HomingState homing;
+    IdleState idle;
+    TeachingState teaching;
+    PathValidationState validation;
+    ApproachState approach;
+    PathExecutionState path_execution;
+    JointDrivePort joint_drive;
+    DriveCommissioningPort commissioning;
+    PausedState paused;
+    FaultState fault;
+    EmergencyStopState emergency_stop;
+
+    TeachingRuntimeInputs teaching_runtime;
+    TeachingEvent pending_teaching_event;
+    ApproachControlInputs approach_control;
+    PathExecutionInputs path_execution_inputs;
+
+    TeachingOutputs teaching_outputs;
+    PathValidationOutputs validation_outputs;
+    ApproachOutputs approach_outputs;
+    PathExecutionOutputs path_execution_outputs;
+
+    TaughtProgram submitted_program;
+
+    RobotStateId entered_state;
+    uint32_t next_program_id;
+    bool initialized;
+    bool execution_stream_retained;
+    uint32_t timer_missed_periods;
+    uint32_t timer_timeouts;
+    uint32_t timer_overruns;
+    uint32_t timer_max_cycle_us;
+
+    /* Only the validation worker mutates 'validation' or flash storage when
+     * async mode is enabled. Supervisor reads exclusively a copied result.
+     * The draft is frozen here until the worker acknowledges cancellation. */
+    ValidationWorkerState validation_worker_state;
+    bool validation_worker_cancel;
+} SupervisorTaskContext;
+
+static SupervisorTaskContext g_supervisor;
+
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+static StaticQueue_t g_queue_control;
+static uint8_t g_queue_storage[
+    SUPERVISOR_QUEUE_LENGTH * sizeof(SupervisorMessage)
+];
+#endif
+static QueueHandle_t g_queue;
+
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+static StaticTask_t g_task_control;
+static StackType_t g_task_stack[SUPERVISOR_TASK_STACK_WORDS];
+#endif
+static TaskHandle_t g_task;
+static TaskHandle_t g_validation_task;
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+static StaticTask_t g_validation_task_control;
+static StackType_t g_validation_task_stack[VALIDATION_TASK_STACK_WORDS];
+#endif
+
+/* The lower-priority validation worker owns numerical validation state.
+ * With a synchronous backend it also owns storage. With the optional async
+ * M7/M4 bridge, callbacks only enqueue samples and poll durable status;
+ * a separate M4-role task owns all flash erase/program/commit operations.
+ * Cancellation is cooperative and never interrupts in-flight NOR I/O. */
+static void validation_worker_entry(void *argument)
+{
+    SupervisorTaskContext *context = (SupervisorTaskContext *)argument;
+    for (;;) {
+        bool start = false;
+        taskENTER_CRITICAL();
+        if (context->validation_worker_state == VALIDATION_WORKER_QUEUED) {
+            if (context->validation_worker_cancel) {
+                context->validation_worker_state = VALIDATION_WORKER_IDLE;
+            } else {
+                context->validation_worker_state = VALIDATION_WORKER_RUNNING;
+                start = true;
+            }
+        }
+        taskEXIT_CRITICAL();
+        if (!start) {
+            vTaskDelay(1);
+            continue;
+        }
+
+        state_path_validation_enter(
+            &context->validation,
+            context->config.robot,
+            context->config.avatar_position_scales,
+            context->config.validation_config,
+            context->config.validation_services,
+            context->config.validation_workspace,
+            context->config.validation_storage,
+            context->config.validated_trajectory,
+            context->config.validation_worker_program,
+            context->config.validation_worker_program->draft_revision,
+            context->config.validation_worker_program->draft_crc);
+
+        for (;;) {
+            bool cancel;
+            taskENTER_CRITICAL();
+            cancel = context->validation_worker_cancel;
+            taskEXIT_CRITICAL();
+            if (cancel) {
+                /* Never race the same flash device with another validation.
+                 * Abort is called by this sole storage owner, not Supervisor. */
+                state_path_validation_cancel(&context->validation);
+                taskENTER_CRITICAL();
+                context->validation_worker_state = VALIDATION_WORKER_IDLE;
+                taskEXIT_CRITICAL();
+                break;
+            }
+
+            PathValidationOutputs snapshot = {0};
+            TRACE_BEGIN(TIMING_VALIDATION);
+            StateStepResult result = state_path_validation_step(
+                &context->validation,
+                context->config.validation_sample_budget,
+                &snapshot);
+            TRACE_END(TIMING_VALIDATION, result != STATE_STEP_FAILED);
+            taskENTER_CRITICAL();
+            context->validation_outputs = snapshot;
+            if (result != STATE_STEP_RUNNING)
+                context->validation_worker_state = VALIDATION_WORKER_DONE;
+            taskEXIT_CRITICAL();
+            if (result != STATE_STEP_RUNNING)
+                break;
+            /* Yield after one bounded numerical batch. Async storage may
+             * report BUSY; M4 continues flash IO without blocking M7. */
+            vTaskDelay(1);
+        }
+    }
+}
+
+static uint32_t state_error_code(RobotStateId state, uint32_t detail)
+{
+    return (((uint32_t)state & 0xFFU) << 16U) | (detail & 0xFFFFU);
+}
+
+static SupervisorEvent make_result_event(
+    SupervisorEventType type,
+    RobotStateId source,
+    RobotFaultSeverity severity,
+    uint32_t fault_code
+)
+{
+    SupervisorEvent event;
+    memset(&event, 0, sizeof(event));
+    event.type = type;
+    event.sourceState = source;
+    event.faultSeverity = severity;
+    event.faultCode = fault_code;
+    return event;
+}
+
+static void enter_active_state(SupervisorTaskContext *context)
+{
+    StateMachine *machine = &context->machine;
+
+    if (context->entered_state == machine->activeState)
+    {
+        return;
+    }
+
+    /* Dispatch and consumption share this task: on exit no take is in flight.
+     * PAUSED retains the stream; sample count is never proof of quiescence. */
+    if (context->execution_stream_retained &&
+        machine->activeState != ROBOT_STATE_PATH_EXECUTION &&
+        machine->activeState != ROBOT_STATE_PAUSED) {
+        state_path_execution_release_stream(&context->path_execution);
+        context->execution_stream_retained = false;
+    }
+    /* An exited validation must be allowed to finish/cancel on its owner.
+     * Do not reset its storage from another task or overwrite its draft. */
+    if (context->config.validation_run_in_worker &&
+        context->entered_state == ROBOT_STATE_PATH_VALIDATION &&
+        machine->activeState != ROBOT_STATE_PATH_VALIDATION) {
+        taskENTER_CRITICAL();
+        if (context->validation_worker_state == VALIDATION_WORKER_QUEUED ||
+            context->validation_worker_state == VALIDATION_WORKER_RUNNING)
+            context->validation_worker_cancel = true;
+        taskEXIT_CRITICAL();
+    }
+
+    /* A subsequent validation is deferred until the previous worker has
+     * reached a safe quiescent boundary, with no Supervisor-side waiting. */
+    if (context->config.validation_run_in_worker &&
+        machine->activeState == ROBOT_STATE_PATH_VALIDATION) {
+        bool busy;
+        taskENTER_CRITICAL();
+        busy = context->validation_worker_state == VALIDATION_WORKER_QUEUED ||
+               context->validation_worker_state == VALIDATION_WORKER_RUNNING;
+        taskEXIT_CRITICAL();
+        if (busy) return;
+    }
+
+    /* Stop acknowledgment may take an arbitrary flash read duration.
+     * Never block this control task while waiting for it. */
+    if (machine->activeState == ROBOT_STATE_PATH_VALIDATION &&
+        context->config.validation_enter_ready != NULL &&
+        !context->config.validation_enter_ready(
+            context->config.validation_enter_context))
+        return;
+
+    context->entered_state = machine->activeState;
+    SUPERVISOR_LOG("[SUPERVISOR] Enter %s\n",
+                   state_machine_state_name(machine->activeState));
+
+    switch (machine->activeState)
+    {
+        case ROBOT_STATE_BOOT:
+            state_boot_enter(&context->boot);
+            break;
+
+        case ROBOT_STATE_HOMING:
+            state_homing_enter(&context->homing);
+            break;
+
+        case ROBOT_STATE_IDLE:
+            state_idle_enter(&context->idle);
+            break;
+
+        case ROBOT_STATE_TEACHING:
+            context->pending_teaching_event = TEACH_EVENT_NONE;
+            state_teaching_enter(
+                &context->teaching,
+                context->config.teaching_config,
+                context->next_program_id++
+            );
+            break;
+
+        case ROBOT_STATE_PATH_VALIDATION:
+            if (context->config.validation_run_in_worker) {
+                /* State, workspace and QSPI transport have one owner: the
+                 * validation worker. Publish request after draft copy. */
+                *context->config.validation_worker_program = context->submitted_program;
+                taskENTER_CRITICAL();
+                memset(&context->validation_outputs, 0,
+                       sizeof(context->validation_outputs));
+                context->validation_outputs.report.result = PV_RESULT_RUNNING;
+                context->validation_worker_cancel = false;
+                context->validation_worker_state = VALIDATION_WORKER_QUEUED;
+                taskEXIT_CRITICAL();
+                break;
+            }
+            state_path_validation_enter(
+                &context->validation,
+                context->config.robot,
+                context->config.avatar_position_scales,
+                context->config.validation_config,
+                context->config.validation_services,
+                context->config.validation_workspace,
+                context->config.validation_storage,
+                context->config.validated_trajectory,
+                &context->submitted_program,
+                context->submitted_program.draft_revision,
+                context->submitted_program.draft_crc
+            );
+            break;
+
+        case ROBOT_STATE_APPROACH:
+        {
+            if (machine->previousState == ROBOT_STATE_PAUSED &&
+                context->approach.initialized)
+            {
+                break;
+            }
+            ApproachRequest request;
+            memset(&request, 0, sizeof(request));
+
+            request.operation =
+                (machine->executionMode == ROBOT_EXECUTION_PREVIEW)
+                    ? APPROACH_OPERATION_PREVIEW
+                    : APPROACH_OPERATION_WELD;
+            request.trajectory = context->config.validated_trajectory;
+            request.trajectory_ready =
+                machine->validatedTrajectoryAvailable;
+            request.expected_program_id =
+                context->config.validated_trajectory->program_id;
+            request.expected_source_revision =
+                context->config.validated_trajectory->source_revision;
+            request.expected_artifact_crc =
+                context->config.validated_trajectory->artifact_crc;
+
+            memset(&context->approach_control, 0,
+                   sizeof(context->approach_control));
+            state_approach_enter(
+                &context->approach,
+                context->config.robot,
+                &context->joint_drive,
+                context->config.avatar_position_scales,
+                &request,
+                context->config.approach_config,
+                context->config.approach_services
+            );
+            break;
+        }
+
+        case ROBOT_STATE_PATH_EXECUTION:
+        {
+            context->execution_stream_retained = true;
+            if (machine->previousState == ROBOT_STATE_PAUSED &&
+                context->path_execution.initialized)
+            {
+                state_path_execution_resume(
+                    &context->path_execution,
+                    context->path_execution_inputs.now_ms
+                );
+                break;
+            }
+            PathExecutionRequest request;
+            memset(&request, 0, sizeof(request));
+            request.mode = machine->executionMode;
+            request.trajectory = context->config.validated_trajectory;
+            request.trajectory_ready = machine->validatedTrajectoryAvailable;
+            request.expected_program_id =
+                context->config.validated_trajectory->program_id;
+            request.expected_source_revision =
+                context->config.validated_trajectory->source_revision;
+            request.expected_artifact_crc =
+                context->config.validated_trajectory->artifact_crc;
+            memset(&context->path_execution_inputs, 0,
+                   sizeof(context->path_execution_inputs));
+            state_path_execution_enter(
+                &context->path_execution,
+                &context->joint_drive,
+                &request,
+                context->config.path_execution_config,
+                context->config.path_execution_services
+            );
+            break;
+        }
+
+        case ROBOT_STATE_PAUSED:
+            state_paused_enter(
+                &context->paused,
+                machine->resumeState,
+                context->config.paused_services
+            );
+            break;
+
+        case ROBOT_STATE_FAULT:
+            state_fault_enter(
+                &context->fault,
+                machine->previousState,
+                machine->faultSeverity,
+                machine->activeFaultCode,
+                true,
+                context->config.fault_services
+            );
+            break;
+
+        case ROBOT_STATE_EMERGENCY_STOP:
+            state_emergency_stop_enter(
+                &context->emergency_stop,
+                machine->previousState,
+                machine->safety.timestampMs,
+                context->config.emergency_stop_services
+            );
+            break;
+
+        default:
+            /* Later state modules are added here without changing policy. */
+            break;
+    }
+}
+
+static void handle_policy_event(
+    SupervisorTaskContext *context,
+    const SupervisorEvent *event
+)
+{
+    /*
+     * HOME/RESET during motion are requests to the active module first.
+     * The global transition is performed only after that module confirms a
+     * controlled stop with STATE_ABORTED_HOME/RESET.
+     */
+    if (event->type == SUPERVISOR_EVENT_RESET ||
+        event->type == SUPERVISOR_EVENT_HOME)
+    {
+        const bool reset = event->type == SUPERVISOR_EVENT_RESET;
+        if (context->machine.activeState == ROBOT_STATE_APPROACH)
+        {
+            context->approach_control.reset_requested = reset;
+            context->approach_control.home_requested = !reset;
+            return;
+        }
+        if (context->machine.activeState == ROBOT_STATE_PATH_EXECUTION)
+        {
+            context->path_execution_inputs.reset_requested = reset;
+            context->path_execution_inputs.home_requested = !reset;
+            return;
+        }
+    }
+
+    RobotStateId before = context->machine.activeState;
+    SupervisorResult result =
+        state_machine_handle_event(&context->machine, event);
+
+    (void)result;
+
+    SUPERVISOR_LOG("[SUPERVISOR] Event %s: result=%d, state=%s\n",
+                   state_machine_event_name(event->type),
+                   (int)result,
+                   state_machine_state_name(context->machine.activeState));
+
+    if (context->machine.activeState != before)
+    {
+        enter_active_state(context);
+    }
+}
+
+static void handle_hmi_command(SupervisorTaskContext *context,
+                               SupervisorHmiCommand command)
+{
+    TeachingEvent teaching = TEACH_EVENT_NONE;
+    SupervisorEventType policy = SUPERVISOR_EVENT_NONE;
+    switch (command)
+    {
+        case SUP_HMI_LINE: teaching = TEACH_EVENT_SELECT_LINE; break;
+        case SUP_HMI_ARC: teaching = TEACH_EVENT_SELECT_ARC; break;
+        case SUP_HMI_CIRCLE: teaching = TEACH_EVENT_SELECT_CIRCLE; break;
+        case SUP_HMI_RECORD: teaching = TEACH_EVENT_RECORD_POINT; break;
+        case SUP_HMI_SPEED_UP: teaching = TEACH_EVENT_SPEED_INCREASE; break;
+        case SUP_HMI_SPEED_DOWN: teaching = TEACH_EVENT_SPEED_DECREASE; break;
+        case SUP_HMI_SPEED_DEFAULT: teaching = TEACH_EVENT_SPEED_DEFAULT; break;
+        case SUP_HMI_VALIDATE_PREVIEW:
+            if (context->machine.activeState == ROBOT_STATE_TEACHING)
+                teaching = TEACH_EVENT_VALIDATE_PATH;
+            else policy = SUPERVISOR_EVENT_VALIDATE_PREVIEW;
+            break;
+        case SUP_HMI_START_REPLAY: policy = SUPERVISOR_EVENT_START_REPLAY; break;
+        case SUP_HMI_PAUSE:
+            if (context->machine.activeState != ROBOT_STATE_PAUSED)
+                policy = SUPERVISOR_EVENT_PAUSE_RESUME;
+            break;
+        case SUP_HMI_RESUME:
+            if (context->machine.activeState == ROBOT_STATE_PAUSED)
+                policy = SUPERVISOR_EVENT_PAUSE_RESUME;
+            break;
+        case SUP_HMI_PAUSE_RESUME: policy = SUPERVISOR_EVENT_PAUSE_RESUME; break;
+        case SUP_HMI_HOME: policy = SUPERVISOR_EVENT_HOME; break;
+        case SUP_HMI_RESET:
+            if (context->machine.activeState == ROBOT_STATE_TEACHING)
+                teaching = TEACH_EVENT_RESET;
+            else policy = SUPERVISOR_EVENT_RESET;
+            break;
+        default: return;
+    }
+    if (command == SUP_HMI_LINE || command == SUP_HMI_ARC ||
+        command == SUP_HMI_CIRCLE)
+    {
+        if (context->machine.activeState == ROBOT_STATE_IDLE)
+        {
+            SupervisorEvent event = make_result_event(SUPERVISOR_EVENT_TEACH,
+                ROBOT_STATE_IDLE, ROBOT_FAULT_SEVERITY_NONE, 0U);
+            handle_policy_event(context, &event);
+        }
+    }
+    if (teaching != TEACH_EVENT_NONE &&
+        context->machine.activeState == ROBOT_STATE_TEACHING)
+        context->pending_teaching_event = teaching;
+    if (policy != SUPERVISOR_EVENT_NONE)
+    {
+        SupervisorEvent event = make_result_event(policy,
+            context->machine.activeState, ROBOT_FAULT_SEVERITY_NONE, 0U);
+        handle_policy_event(context, &event);
+    }
+}
+
+/* A single CANopen runtime owner. The check is injected into the RTOS-neutral
+ * CANopen coordinator only from its owning FreeRTOS task. */
+static bool supervisor_is_canopen_owner(void *context)
+{
+    return xTaskGetCurrentTaskHandle() == (TaskHandle_t)context;
+}
+
+/* Snapshot protects readers from direct access to mutable drive/heartbeat
+ * data. For Phase 1 all readers share this scheduler and its critical region. */
+static void publish_drive_snapshot(SupervisorTaskContext *context)
+{
+    const CanopenMaster *master = context->config.canopen_master;
+    SupervisorDriveSnapshot snapshot = {0};
+    snapshot.timestamp_ms = supervisor_now_ms();
+    if (master != NULL && master->initialized) {
+        snapshot.valid = true;
+        snapshot.drives_ready = canopen_master_all_feedback_valid(master) &&
+            canopen_master_all_drives_operation_enabled(master);
+        snapshot.heartbeats_operational =
+            canopen_master_all_heartbeats_operational(master);
+        for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis) {
+            const AvatarMDrive *drive = canopen_master_drive(master, axis);
+            if (drive != NULL) {
+                snapshot.feedback_valid[axis] = drive->feedback_valid;
+                snapshot.actual_position_units[axis] =
+                    drive->feedback.actual_position;
+            }
+        }
+    }
+    taskENTER_CRITICAL();
+    context->drive_snapshot = snapshot;
+    taskEXIT_CRITICAL();
+}
+
+/* Only M7 consumes the M4->M7 ring. No shared FreeRTOS queue or mutex. */
+static void consume_m4_ipc(SupervisorTaskContext *context)
+{
+    if (context->config.ipc == NULL) return;
+    IpcMessage msg;
+    for (uint32_t count = 0U; count < 8U; ++count) {
+        /* The teaching state has ONE pending event slot. Do not consume
+         * another M4 command until the previous teaching event is handled
+         * by run_active_state() in the current/next Supervisor cycle. */
+        if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
+        if (!ipc_m7_receive(context->config.ipc, &msg)) break;
+        if (msg.type != IPC_HMI_COMMAND || msg.sequence == 0U ||
+            (int32_t)(msg.sequence - context->last_m4_ipc_sequence) <= 0 ||
+            msg.data[0] >= (uint32_t)SUP_HMI_COMMAND_COUNT) continue;
+        context->last_m4_ipc_sequence = msg.sequence;
+        handle_hmi_command(context, (SupervisorHmiCommand)msg.data[0]);
+    }
+}
+
+/* Status is best-effort. Never wait when a slow M4 fills the telemetry ring. */
+static void publish_m7_ipc_status(SupervisorTaskContext *context)
+{
+    if (context->config.ipc == NULL) return;
+    const uint32_t now = supervisor_now_ms();
+    if (context->m7_ipc_status_sent &&
+        (uint32_t)(now - context->last_m7_ipc_status_ms) < 10U) return;
+    IpcMessage msg = {0};
+    msg.type = IPC_CONTROLLER_STATUS;
+    msg.sequence = ++context->m7_status_ipc_sequence;
+    msg.timestamp_ms = now;
+    msg.data[0] = (uint32_t)context->machine.activeState;
+    msg.data[1] = (uint32_t)context->machine.safety.motionPermitted;
+    msg.data[2] = context->machine.activeFaultCode;
+    msg.data[3] = context->machine.transitionCount;
+    msg.data[4] = (uint32_t)context->machine.safety.estopActive;
+    msg.data[5] = context->last_m4_ipc_sequence; /* receipt, not acceptance */
+    msg.data[6] = context->machine.rejectedEventCount;
+    (void)ipc_m7_send(context->config.ipc, &msg);
+    context->last_m7_ipc_status_ms = now;
+    context->m7_ipc_status_sent = true;
+}
+
+static void handle_message(
+    SupervisorTaskContext *context,
+    const SupervisorMessage *message
+)
+{
+    switch (message->type)
+    {
+        case SUPERVISOR_MESSAGE_HMI_COMMAND:
+            handle_hmi_command(context, message->data.hmi_command);
+            break;
+
+        case SUPERVISOR_MESSAGE_GUIDED_TARGET:
+            /* NEVER let an external producer call the CANopen coordinator.
+             * Apply only in TEACHING with fresh motion authorization. */
+            if (context->machine.activeState == ROBOT_STATE_TEACHING &&
+                context->machine.safety.statusValid &&
+                context->machine.safety.motionPermitted &&
+                canopen_master_ready_for_motion(context->config.canopen_master,
+                                                supervisor_now_ms())) {
+                (void)joint_drive_port_send_targets(
+                    &context->joint_drive, message->data.guided_target_units);
+            }
+            break;
+        case SUPERVISOR_MESSAGE_EVENT:
+            handle_policy_event(context, &message->data.event);
+            break;
+
+        case SUPERVISOR_MESSAGE_SAFETY:
+            state_machine_update_safety(
+                &context->machine,
+                &message->data.safety
+            );
+            break;
+
+        case SUPERVISOR_MESSAGE_TEACHING_EVENT:
+            context->pending_teaching_event =
+                message->data.teaching_event;
+            break;
+
+        case SUPERVISOR_MESSAGE_TEACHING_RUNTIME:
+            context->teaching_runtime =
+                message->data.teaching_runtime;
+            break;
+
+        case SUPERVISOR_MESSAGE_APPROACH_CONTROL:
+            context->approach_control =
+                message->data.approach_control;
+            break;
+
+        case SUPERVISOR_MESSAGE_PATH_EXECUTION_INPUTS:
+            context->path_execution_inputs =
+                message->data.path_execution_inputs;
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void emit_step_failure(
+    SupervisorTaskContext *context,
+    uint32_t detail
+)
+{
+    SupervisorEvent event = make_result_event(
+        SUPERVISOR_EVENT_STATE_FAILED,
+        context->machine.activeState,
+        ROBOT_FAULT_SEVERITY_RECOVERABLE,
+        state_error_code(context->machine.activeState, detail)
+    );
+    handle_policy_event(context, &event);
+}
+
+static void emit_step_complete(SupervisorTaskContext *context)
+{
+    SupervisorEvent event = make_result_event(
+        SUPERVISOR_EVENT_STATE_COMPLETE,
+        context->machine.activeState,
+        ROBOT_FAULT_SEVERITY_NONE,
+        ROBOT_FAULT_CODE_NONE
+    );
+    handle_policy_event(context, &event);
+}
+
+static void run_active_state(SupervisorTaskContext *context)
+{
+    StateStepResult step = STATE_STEP_RUNNING;
+
+    switch (context->machine.activeState)
+    {
+        case ROBOT_STATE_BOOT:
+            step = state_boot_step(
+                &context->boot,
+                &context->commissioning,
+                &context->joint_drive,
+                supervisor_now_ms()
+            );
+            if (step == STATE_STEP_FAILED)
+                emit_step_failure(context, (uint32_t)context->boot.error);
+            else if (step == STATE_STEP_COMPLETE)
+                emit_step_complete(context);
+            break;
+
+        case ROBOT_STATE_HOMING:
+            step = state_homing_step(
+                &context->homing,
+                context->config.homing_config,
+                context->config.robot,
+                &context->joint_drive,
+                context->config.avatar_position_scales,
+                supervisor_now_ms()
+            );
+            if (step == STATE_STEP_FAILED)
+                emit_step_failure(context, (uint32_t)context->homing.error);
+            else if (step == STATE_STEP_COMPLETE)
+                emit_step_complete(context);
+            break;
+
+        case ROBOT_STATE_IDLE:
+            step = state_idle_step(
+                &context->idle,
+                IDLE_COMMAND_NONE,
+                &context->joint_drive,
+                supervisor_now_ms()
+            );
+            if (step == STATE_STEP_FAILED)
+                emit_step_failure(context, (uint32_t)context->idle.error);
+            break;
+
+        case ROBOT_STATE_TEACHING:
+            step = state_teaching_step(
+                &context->teaching,
+                context->config.robot,
+                &context->teaching_runtime,
+                &context->joint_drive,
+                context->config.avatar_position_scales,
+                supervisor_now_ms(),
+                context->pending_teaching_event,
+                &context->teaching_outputs
+            );
+            context->pending_teaching_event = TEACH_EVENT_NONE;
+
+            if (step == STATE_STEP_FAILED)
+            {
+                emit_step_failure(context,
+                                  (uint32_t)context->teaching.error);
+            }
+            else if (step == STATE_STEP_COMPLETE)
+            {
+                context->submitted_program = context->teaching.draft;
+                emit_step_complete(context);
+            }
+            break;
+
+        case ROBOT_STATE_PATH_VALIDATION:
+            /* Entry waits for producer ownership release across ticks. */
+            if (context->entered_state != ROBOT_STATE_PATH_VALIDATION)
+                break;
+            if (context->config.validation_run_in_worker) {
+                ValidationWorkerState worker_status;
+                PathValidationOutputs snapshot;
+                taskENTER_CRITICAL();
+                worker_status = context->validation_worker_state;
+                snapshot = context->validation_outputs;
+                taskEXIT_CRITICAL();
+                if (worker_status != VALIDATION_WORKER_DONE)
+                    break;
+                /* DONE publishes a completed flash commit or a failure;
+                 * no PREVIEW/WELD can run on a queued write. */
+                SupervisorEventType type =
+                    (snapshot.report.result == PV_RESULT_VALID)
+                    ? SUPERVISOR_EVENT_STATE_COMPLETE
+                    : SUPERVISOR_EVENT_VALIDATION_REJECTED;
+                SupervisorEvent event = make_result_event(
+                    type, ROBOT_STATE_PATH_VALIDATION,
+                    ROBOT_FAULT_SEVERITY_NONE, ROBOT_FAULT_CODE_NONE);
+                handle_policy_event(context, &event);
+                break;
+            }
+            step = state_path_validation_step(
+                &context->validation,
+                context->config.validation_sample_budget,
+                &context->validation_outputs
+            );
+
+            if (step == STATE_STEP_FAILED)
+            {
+                emit_step_failure(context,
+                                  (uint32_t)context->validation.error);
+            }
+            else if (step == STATE_STEP_COMPLETE)
+            {
+                SupervisorEventType type =
+                    (context->validation_outputs.report.result ==
+                     PV_RESULT_VALID)
+                        ? SUPERVISOR_EVENT_STATE_COMPLETE
+                        : SUPERVISOR_EVENT_VALIDATION_REJECTED;
+                SupervisorEvent event = make_result_event(
+                    type,
+                    ROBOT_STATE_PATH_VALIDATION,
+                    ROBOT_FAULT_SEVERITY_NONE,
+                    ROBOT_FAULT_CODE_NONE
+                );
+                handle_policy_event(context, &event);
+            }
+            break;
+
+        case ROBOT_STATE_APPROACH:
+            step = state_approach_step(
+                &context->approach,
+                &context->approach_control,
+                supervisor_now_ms(),
+                &context->approach_outputs
+            );
+
+            /* HOME and RESET are one-shot requests. */
+            context->approach_control.home_requested = false;
+            context->approach_control.reset_requested = false;
+
+            if (step == STATE_STEP_FAILED)
+            {
+                emit_step_failure(context,
+                                  (uint32_t)context->approach.error);
+            }
+            else if (step == STATE_STEP_COMPLETE)
+            {
+                SupervisorEventType type = SUPERVISOR_EVENT_STATE_COMPLETE;
+
+                if (context->approach.result == APPROACH_RESULT_ABORTED)
+                {
+                    if (context->approach.error ==
+                        APPROACH_ERR_HOME_REQUESTED)
+                    {
+                        type = SUPERVISOR_EVENT_STATE_ABORTED_HOME;
+                    }
+                    else if (context->approach.error ==
+                             APPROACH_ERR_RESET_REQUESTED)
+                    {
+                        type = SUPERVISOR_EVENT_STATE_ABORTED_RESET;
+                    }
+                    else
+                    {
+                        emit_step_failure(
+                            context,
+                            (uint32_t)context->approach.error
+                        );
+                        break;
+                    }
+                }
+
+                SupervisorEvent event = make_result_event(
+                    type,
+                    ROBOT_STATE_APPROACH,
+                    ROBOT_FAULT_SEVERITY_NONE,
+                    ROBOT_FAULT_CODE_NONE
+                );
+                handle_policy_event(context, &event);
+            }
+            break;
+
+        case ROBOT_STATE_PATH_EXECUTION:
+            /* Incoming operator messages never own trajectory clock time. */
+            context->path_execution_inputs.now_ms = supervisor_now_ms();
+            context->path_execution_inputs.now_us = supervisor_now_us();
+            context->path_execution_inputs.motion_permission =
+                context->machine.safety.motionPermitted;
+            context->path_execution_inputs.estop_active =
+                context->machine.safety.estopActive;
+            context->path_execution_inputs.protective_stop_active =
+                context->machine.safety.protectiveStopActive;
+            context->path_execution_inputs.external_fault_active =
+                context->machine.safety.globalFaultActive;
+            step = state_path_execution_step(
+                &context->path_execution,
+                &context->path_execution_inputs,
+                &context->path_execution_outputs
+            );
+            context->path_execution_inputs.reset_requested = false;
+            context->path_execution_inputs.home_requested = false;
+            context->path_execution_inputs.pause_requested = false;
+
+            if (step == STATE_STEP_FAILED)
+            {
+                emit_step_failure(
+                    context,
+                    (uint32_t)context->path_execution.error
+                );
+            }
+            else if (step == STATE_STEP_COMPLETE)
+            {
+                SupervisorEventType type = SUPERVISOR_EVENT_STATE_COMPLETE;
+                if (context->path_execution.result ==
+                    PATH_EXEC_RESULT_ABORTED)
+                {
+                    type = (context->path_execution.abort_reason ==
+                            PATH_EXEC_ABORT_HOME)
+                        ? SUPERVISOR_EVENT_STATE_ABORTED_HOME
+                        : SUPERVISOR_EVENT_STATE_ABORTED_RESET;
+                }
+                SupervisorEvent event = make_result_event(
+                    type,
+                    ROBOT_STATE_PATH_EXECUTION,
+                    ROBOT_FAULT_SEVERITY_NONE,
+                    ROBOT_FAULT_CODE_NONE
+                );
+                handle_policy_event(context, &event);
+            }
+            break;
+
+        case ROBOT_STATE_PAUSED:
+        {
+            PausedInputs inputs;
+            memset(&inputs, 0, sizeof(inputs));
+            inputs.estop_active = context->machine.safety.estopActive;
+            inputs.external_fault_active =
+                context->machine.safety.globalFaultActive;
+            step = state_paused_step(&context->paused, &inputs);
+            if (step == STATE_STEP_FAILED)
+                emit_step_failure(context, 1U);
+            break;
+        }
+
+        case ROBOT_STATE_FAULT:
+        {
+            FaultInputs inputs;
+            inputs.fault_cause_active =
+                context->machine.safety.globalFaultActive ||
+                context->machine.safety.protectiveStopActive;
+            inputs.safety_healthy =
+                context->machine.safety.statusValid &&
+                !inputs.fault_cause_active &&
+                !context->machine.safety.estopActive;
+            step = state_fault_step(&context->fault, &inputs);
+            (void)step;
+            break;
+        }
+
+        case ROBOT_STATE_EMERGENCY_STOP:
+        {
+            EmergencyStopInputs inputs;
+            inputs.estop_active = context->machine.safety.estopActive;
+            inputs.reset_acknowledged =
+                context->machine.emergencyResetAcknowledged;
+            inputs.safety_healthy =
+                context->machine.safety.statusValid &&
+                !context->machine.safety.estopActive &&
+                !context->machine.safety.protectiveStopActive &&
+                !context->machine.safety.globalFaultActive;
+            step = state_emergency_stop_step(
+                &context->emergency_stop, &inputs);
+            (void)step;
+            break;
+        }
+
+        default:
+            /* Legacy execution states are intentionally not dispatched. */
+            break;
+    }
+}
+
+static void supervisor_task_entry(void *argument)
+{
+    SupervisorTaskContext *context = argument;
+    TickType_t last_wake = xTaskGetTickCount();
+    SupervisorMessage message;
+    if (context->config.canopen_master->initialized) {
+        /* Initialization is pre-scheduler; bind only from the true owner. */
+        const bool owner_bound = canopen_master_bind_runtime_owner(
+            context->config.canopen_master,
+            supervisor_is_canopen_owner,
+            xTaskGetCurrentTaskHandle());
+        configASSERT(owner_bound);
+        if (!owner_bound) {
+            /* Never run an unowned CANopen control loop in release builds. */
+            for (;;) { vTaskDelay(1); }
+        }
+    }
+
+    const bool hardware_timed = context->config.timing.wait_next != NULL;
+    if (hardware_timed &&
+        !context->config.timing.start(context->config.timing.context)) {
+        /* Refuse any operation when the physical timing source fails. */
+        emit_step_failure(context, 0xE002U);
+        for (;;) { vTaskDelay(1U); }
+    }
+
+    for (;;)
+    {
+        if (hardware_timed) {
+            /* TIM3 increments a counting task notification every 2 ms.
+             * A queued count >1 or missing count is a failed deadline. */
+            const uint32_t periods = context->config.timing.wait_next(
+                context->config.timing.context, pdMS_TO_TICKS(6U));
+            if (periods != 1U) {
+                if (periods == 0U) {
+                    if (context->timer_timeouts < UINT32_MAX)
+                        ++context->timer_timeouts;
+                } else {
+                    const uint32_t missed = periods - 1U;
+                    const uint32_t available =
+                        UINT32_MAX - context->timer_missed_periods;
+                    context->timer_missed_periods +=
+                        missed > available ? available : missed;
+                }
+                if (context->machine.activeState != ROBOT_STATE_FAULT &&
+                    context->machine.activeState !=
+                        ROBOT_STATE_EMERGENCY_STOP)
+                    emit_step_failure(context, 0xE003U);
+            }
+        }
+        const uint64_t cycle_start_us =
+            hardware_timed ? supervisor_now_us() : UINT64_C(0);
+        TRACE_BEGIN(TIMING_SUPERVISOR);
+        /* Acquisition only: raw inputs do not authorize motion or create HMI
+         * events until a separately tested input adapter is connected. */
+        SupervisorInputSnapshot sampled = {0};
+        if (context->config.io.read_inputs != NULL)
+        {
+            sampled.valid = context->config.io.read_inputs(
+                context->config.io.context, &sampled);
+        }
+        taskENTER_CRITICAL();
+        context->gpio_inputs = sampled;
+        taskEXIT_CRITICAL();
+        for (uint32_t count = 0U;
+             count < SUPERVISOR_MAX_MESSAGES_CYCLE;
+             ++count)
+        {
+            if (xQueueReceive(g_queue, &message, 0U) != pdPASS)
+            {
+                break;
+            }
+            handle_message(context, &message);
+            /* Consume Teaching commands before another can overwrite the
+             * single pending event slot (Record must never be coalesced). */
+            if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
+        }
+
+        consume_m4_ipc(context);
+
+        /*
+         * Keep producing Node 127's heartbeat even while PAUSED, FAULT,
+         * or EMERGENCY_STOP. A dead/stalled supervisor sends nothing, so
+         * the AVATAR drives' 0x1016 consumer can detect controller loss.
+         */
+        bool controller_hb_ok = true;
+        if (context->config.canopen_master != NULL &&
+            context->config.canopen_master->initialized)
+        {
+            controller_hb_ok = canopen_master_service_heartbeat(
+                context->config.canopen_master,
+                supervisor_now_ms()
+            );
+        }
+        if (!controller_hb_ok &&
+            context->machine.activeState != ROBOT_STATE_FAULT &&
+            context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+        {
+            emit_step_failure(context, 0xE001U);
+        }
+        /* Retries a deferred validation entry without waiting or sleeping.
+         * No-op in an already entered state. */
+        enter_active_state(context);
+        if (controller_hb_ok ||
+            context->machine.activeState == ROBOT_STATE_FAULT ||
+            context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)
+        {
+            run_active_state(context);
+        }
+        publish_drive_snapshot(context);
+        publish_m7_ipc_status(context);
+        if (context->config.io.write_outputs != NULL)
+        {
+            SupervisorOutputSnapshot outputs;
+            supervisor_io_make_status(&context->machine, &outputs);
+            /* The adapter owns output diagnostics; this result does not
+             * silently acknowledge any fault or change motion permission. */
+            (void)context->config.io.write_outputs(
+                context->config.io.context, &outputs);
+        }
+        TRACE_END(TIMING_SUPERVISOR, true);
+        if (hardware_timed) {
+            const uint64_t elapsed = supervisor_now_us() - cycle_start_us;
+            const uint32_t sampled = elapsed > UINT32_MAX
+                ? UINT32_MAX : (uint32_t)elapsed;
+            if (sampled > context->timer_max_cycle_us)
+                context->timer_max_cycle_us = sampled;
+            if (elapsed >= UINT64_C(2000)) {
+                if (context->timer_overruns < UINT32_MAX)
+                    ++context->timer_overruns;
+                if (context->machine.activeState != ROBOT_STATE_FAULT &&
+                    context->machine.activeState !=
+                        ROBOT_STATE_EMERGENCY_STOP)
+                    emit_step_failure(context, 0xE004U);
+            }
+        } else {
+            vTaskDelayUntil(&last_wake, context->config.period_ticks);
+        }
+    }
+}
+
+bool supervisor_task_init(const SupervisorTaskConfig *config)
+{
+    if ((config == NULL) ||
+        (config->canopen_master == NULL) ||
+        (config->avatar_position_scales == NULL) ||
+        (config->robot == NULL) ||
+        (config->homing_config == NULL) ||
+        (config->teaching_config == NULL) ||
+        (config->validation_config == NULL) ||
+        (config->validation_workspace == NULL) ||
+        (config->validation_storage == NULL) ||
+        (config->validated_trajectory == NULL) ||
+        (config->approach_config == NULL) ||
+        (config->approach_services == NULL) ||
+        (config->path_execution_config == NULL) ||
+        (config->path_execution_services == NULL) ||
+        (config->paused_services == NULL) ||
+        (config->fault_services == NULL) ||
+        (config->emergency_stop_services == NULL) ||
+        (config->validation_sample_budget == 0U) ||
+        (config->period_ticks == 0U) ||
+        (((config->timing.monotonic_us != NULL) ||
+          (config->timing.start != NULL) ||
+          (config->timing.wait_next != NULL)) &&
+         ((config->timing.monotonic_us == NULL) ||
+          (config->timing.start == NULL) ||
+          (config->timing.wait_next == NULL) ||
+          (config->period_ticks != 2U))) ||
+        (config->ipc != NULL && !ipc_valid(config->ipc)))
+    {
+        return false;
+    }
+
+    memset(&g_supervisor, 0, sizeof(g_supervisor));
+    g_supervisor.config = *config;
+    g_timing = config->timing;
+    g_supervisor.next_program_id = config->first_program_id;
+    g_supervisor.entered_state = ROBOT_STATE_COUNT;
+
+    /* Prefer static storage when enabled; otherwise use the configured heap. */
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+    g_queue = xQueueCreateStatic(
+        SUPERVISOR_QUEUE_LENGTH,
+        sizeof(SupervisorMessage),
+        g_queue_storage,
+        &g_queue_control
+    );
+#else
+    g_queue = xQueueCreate(SUPERVISOR_QUEUE_LENGTH, sizeof(SupervisorMessage));
+#endif
+    if (g_queue == NULL)
+    {
+        return false;
+    }
+
+    g_supervisor.joint_drive =
+        canopen_joint_drive_port_make(config->canopen_master);
+    g_supervisor.commissioning =
+        canopen_drive_commissioning_port_make(config->canopen_master);
+    state_machine_init(&g_supervisor.machine);
+    state_machine_enable_unified_execution(&g_supervisor.machine);
+    g_supervisor.initialized = true;
+    enter_active_state(&g_supervisor);
+    return true;
+}
+
+bool supervisor_task_start(UBaseType_t priority)
+{
+    if (!g_supervisor.initialized || (g_task != NULL))
+    {
+        return false;
+    }
+
+    if (g_supervisor.config.validation_run_in_worker) {
+        if (g_supervisor.config.validation_worker_program == NULL)
+            return false;
+        const UBaseType_t worker_priority =
+            g_supervisor.config.validation_worker_priority;
+        if (worker_priority >= priority) return false;
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+        g_validation_task = xTaskCreateStatic(
+            validation_worker_entry, "StorageValidate",
+            VALIDATION_TASK_STACK_WORDS, &g_supervisor, worker_priority,
+            g_validation_task_stack, &g_validation_task_control);
+#else
+        if (xTaskCreate(validation_worker_entry, "StorageValidate",
+                        VALIDATION_TASK_STACK_WORDS, &g_supervisor,
+                        worker_priority, &g_validation_task) != pdPASS)
+            g_validation_task = NULL;
+#endif
+        if (g_validation_task == NULL) return false;
+    }
+
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+    g_task = xTaskCreateStatic(
+        supervisor_task_entry,
+        "Supervisor",
+        SUPERVISOR_TASK_STACK_WORDS,
+        &g_supervisor,
+        priority,
+        g_task_stack,
+        &g_task_control
+    );
+#else
+    if (xTaskCreate(
+            supervisor_task_entry,
+            "Supervisor",
+            SUPERVISOR_TASK_STACK_WORDS,
+            &g_supervisor,
+            priority,
+            &g_task) != pdPASS)
+    {
+        g_task = NULL;
+        return false;
+    }
+#endif
+    return g_task != NULL;
+}
+
+bool supervisor_task_post(
+    const SupervisorMessage *message,
+    TickType_t wait_ticks
+)
+{
+    return (message != NULL) && (g_queue != NULL) &&
+           (xQueueSend(g_queue, message, wait_ticks) == pdPASS);
+}
+
+bool supervisor_task_post_from_isr(
+    const SupervisorMessage *message,
+    BaseType_t *higher_priority_task_woken
+)
+{
+    return (message != NULL) && (g_queue != NULL) &&
+           (xQueueSendFromISR(g_queue, message,
+                              higher_priority_task_woken) == pdPASS);
+}
+
+bool supervisor_task_get_state(StateMachine *state)
+{
+    if ((state == NULL) || !g_supervisor.initialized)
+    {
+        return false;
+    }
+
+    taskENTER_CRITICAL();
+    *state = g_supervisor.machine;
+    taskEXIT_CRITICAL();
+
+    return true;
+}
+
+QueueHandle_t supervisor_task_queue(void)
+{
+    return g_queue;
+}
+
+bool supervisor_task_get_inputs(SupervisorInputSnapshot *inputs)
+{
+    if (inputs == NULL || !g_supervisor.initialized) return false;
+    taskENTER_CRITICAL();
+    *inputs = g_supervisor.gpio_inputs;
+    taskEXIT_CRITICAL();
+    return true;
+}
+
+bool supervisor_task_get_drive_snapshot(SupervisorDriveSnapshot *out)
+{
+    if (out == NULL || !g_supervisor.initialized) return false;
+    taskENTER_CRITICAL();
+    *out = g_supervisor.drive_snapshot;
+    taskEXIT_CRITICAL();
+    return true;
+}
+
+bool supervisor_task_post_hmi(SupervisorHmiCommand command, TickType_t wait_ticks)
+{
+    if ((unsigned int)command >= SUP_HMI_COMMAND_COUNT) return false;
+    SupervisorMessage message = {0};
+    message.type = SUPERVISOR_MESSAGE_HMI_COMMAND;
+    message.data.hmi_command = command;
+    return supervisor_task_post(&message, wait_ticks);
+}
+
+TaskHandle_t supervisor_task_handle(void)
+{
+    return g_task;
+}
+
+/* Only safe for same-scheduler readers. M4 must use shared IPC. */
+bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out)
+{
+    if (out == NULL || !g_supervisor.initialized) return false;
+    taskENTER_CRITICAL();
+    out->machine = g_supervisor.machine;
+    out->boot = g_supervisor.boot;
+    out->homing_phase = g_supervisor.homing.phase;
+    out->homing_error = g_supervisor.homing.error;
+    out->teaching = g_supervisor.teaching_outputs;
+    out->validation = g_supervisor.validation_outputs;
+    out->approach = g_supervisor.approach_outputs;
+    out->execution = g_supervisor.path_execution_outputs;
+    out->selected_geometry = g_supervisor.teaching.selected_segment_type;
+    out->working_segment = g_supervisor.teaching.working_segment;
+    out->captured_points = g_supervisor.teaching.captured_point_count;
+    out->segment_count = g_supervisor.teaching.draft.segment_count;
+    out->timer_missed_periods = g_supervisor.timer_missed_periods;
+    out->timer_timeouts = g_supervisor.timer_timeouts;
+    out->timer_overruns = g_supervisor.timer_overruns;
+    out->timer_max_cycle_us = g_supervisor.timer_max_cycle_us;
+    taskEXIT_CRITICAL();
+    return true;
+}

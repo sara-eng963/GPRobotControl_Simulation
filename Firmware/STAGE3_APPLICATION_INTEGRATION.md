@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 ---
 title: "Stage 3 — STM32H745 Application Integration"
 stage: 3

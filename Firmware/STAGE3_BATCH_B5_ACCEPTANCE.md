@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 # Stage 3 — Batch B5 and Consolidated Batch B Acceptance
 
 **Date:** 2026-10-14  

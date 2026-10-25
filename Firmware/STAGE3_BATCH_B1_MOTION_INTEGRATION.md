@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 # Stage 3 Batch B1 — M7 Motion Composition
 
 **Source integration:** `aa8628a` (2026-10-14). **Software acceptance:** PASS, operator-reported 2026-10-14; see `STAGE3_BATCH_B1_ACCEPTANCE.md`.

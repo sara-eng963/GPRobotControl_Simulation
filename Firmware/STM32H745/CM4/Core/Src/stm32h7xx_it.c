@@ -175,7 +175,7 @@ void TIM7_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
-/* Peer FreeRTOS Message Buffer wakeup via STM32 HAL software EXTI. */
+
 void EXTI0_IRQHandler(void)
 {
   intercore_notifications_handle_irq();

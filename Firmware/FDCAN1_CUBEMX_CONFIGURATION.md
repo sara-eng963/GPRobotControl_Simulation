@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 # STM32H745 FDCAN1 — CubeMX Configuration & Decision Log
 
 > **Configuration session:** 2026-10-14  

@@ -15,7 +15,7 @@ trap 'rm -rf "$OUT"' EXIT
 GCC_FLAGS=(-std=c11 -O0 -Wall -Wextra -Werror -ffunction-sections
     -fdata-sections -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
     -DSTM32H745xx -DUSE_HAL_DRIVER -DCORE_CM7=1
-    -I"$FW/CM7/Core/Inc" -I"$ROOT/Intercore"
+    -I"$FW/CM7/Core/Inc" -I"$FW/CM7/Application/Intercore" -I"$FW/Common/Inc" -I"$FW/CM7/Application/Intercore"
     -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
     -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F"
     -I"$FW/Drivers/CMSIS/Device/ST/STM32H7xx/Include"
@@ -31,11 +31,11 @@ for mode in FLASH RAM; do
     echo "[Stage 2E-1] Production M7 objects with $mode linker..."
     elf="$OUT/objects-$mode.elf"
     "$CC" -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard \
-        -nostdlib -Wl,--gc-sections -Wl,-T,"$FW/CM7/STM32H745IITX_$mode.ld" \
+        -nostdlib -Wl,--gc-sections -Wl,-T,"$FW/CM7/STM32H745ZITX_$mode.ld" \
         "$OUT/objects.o" "$OUT/reset.o" -o "$elf"
-    for item in "intercore_ipc_shared 38000000 000008a0 .gp_shared_ipc" \
-                "intercore_trajectory_shared 38001000 00003040 .gp_shared_trajectory" \
-                "intercore_validation_storage 38005000 00003000 .gp_shared_validation"; do
+    for item in "intercore_ipc_shared 38000000 000008a0 .shared_ipc" \
+                "intercore_trajectory_shared 38001000 00003040 .shared_trajectory" \
+                "intercore_validation_storage 38005000 00003000 .shared_validation"; do
         read -r symbol address size section <<< "$item"
         line="$("$NM" -S --defined-only "$elf" | awk -v n="$symbol" '$4==n{print $1, $2}')"
         [[ "$line" == "$address $size" ]] || {

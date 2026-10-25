@@ -1,57 +1,42 @@
-# W25Q512JV STM32H745 QUADSPI FIFO fix (Test 7.7)
+# Robot control firmware and simulation
 
-The archive contains a **drop-in replacement** for `Simulation/Renode/Storage/stm32h7_w25q_bus.{c,h}`, and a standalone host register-mock test. It does **not** touch CAN, FreeRTOS, trajectory CRC/headers, old STM32 application code, or your Renode .resc files. Do not merge to the robot's control path until physical verification.
+STM32H745ZIT6 dual-core firmware, FreeRTOS POSIX simulation, six virtual
+CANopen motor nodes, SIL Kit 5.0.7, trajectory/storage tests, and hand-guiding
+tools live in this repository.
 
-## Changes (STM32 peripheral adapter)
+The authoritative target project is [Firmware/STM32H745](Firmware/STM32H745).
+See [firmware build instructions and ownership](Firmware/README.md).
+The firmware is software-build-ready; physical commissioning and robot motion
+authorization remain incomplete.
 
-- TX byte writes wait for QUADSPI `SR.FTF` before writing `QUADSPI_DR`. `CR.FTHRES=0` configures a 1-byte FIFO threshold. Unlike the old unbounded 256-byte burst, this cannot deliberately overflow the FIFO when the hardware reports it full.
-- RX reads wait for `SR.FLEVEL != 0`, consuming data before waiting for `TCF`/`BUSY` to clear. Reading the DR only **after** TCF risks an already full RX FIFO.
-- Each transaction has a 10,000 microsecond deadline, a loop-count guard (for stuck hardware clocks), checks `TEF` and `TOF`, and requests an abort on a transfer failure.
-- Reads are limited to 256-byte hardware bursts with 32-bit W25Q commands and address increments (including beyond 16 MiB). Program pages remain <=256 bytes and cannot cross physical page boundaries.
-- Uses a conservative QUADSPI clock prescaler divisor 8 by default (`-DW25Q_QSPI_PRESCALER_DIV=<integer>`, 1..256). This divisor must be validated against the board's actual QUADSPI kernel clock and W25Q512JV voltage/clock rating.
-- Retains a separate `W25Q_RENODE_VIRTUAL_TIME` compatibility path for **generic Renode functional tests only**. It intentionally does not use hardware FIFO flags or measure real latency. The prior 7.4/7.5 results are therefore not evidence of silicon FIFO behavior.
+## Host build and regressions
 
-## Install (WSL repo root)
+Install CMake 3.28+, C/C++ compilers and the raylib Linux development dependencies.
+The POSIX FreeRTOS kernel must be available at ../FreeRTOS-Kernel.
+For SIL Kit, set SILKIT_ROOT to the installed 5.0.7 SilKit directory.
 
-```bash
-cd ~/freertos-pc-test
-cp Simulation/Renode/Storage/stm32h7_w25q_bus.c Simulation/Renode/Storage/stm32h7_w25q_bus.c.bak
-cp Simulation/Renode/Storage/stm32h7_w25q_bus.h Simulation/Renode/Storage/stm32h7_w25q_bus.h.bak
-unzip -o w25q_stm32_fifo_fix.zip -d .
-./scripts/run_w25q_fifo_mock_tests.sh
-```
+~~~bash
+cmake -S . -B build/host -DENABLE_SILKIT=ON -DSILKIT_ROOT=/path/to/SilKit
+cmake --build build/host -j8
+ctest --test-dir build/host --output-on-failure -j4
+~~~
 
-## Host mock expectations
+Set ENABLE_SILKIT=OFF for portable tests without SIL Kit. Renode QSPI tests
+register automatically when Renode and the ARM toolchain are installed.
+Simulation tests do not establish physical safety or hardware timing.
+Host APIs retain their existing names; the target APIs are isolated inside
+Firmware/STM32H745. Host code does not depend on STM32 HAL headers.
 
-- 256-byte page write deliberately fills the simulated 32-byte FIFO, but `FTF` backpressure prevents overflow.
-- 600-byte multi-burst read correctly drains the FIFO and increments 32-bit addresses over 16 MiB.
-- 4-byte address erase and invalid-request protection.
-- Injected QUADSPI `TEF` and stalled FIFO cause explicit failures; simulated abort can recover.
+## Tools and records
 
-The test uses a host mock peripheral and wall-clock-independent, synthetic microsecond increments. It does **not** validate hardware latency, electrical waveform, SPI clock polarity, physical FIFO microarchitecture, concurrency, or 500 Hz scheduling.
+- [Simulation](Simulation): virtual drives, F/T interfaces, storage and Renode.
+- [HandGuiding](HandGuiding): sensor processing, admittance and command gating.
+- [scripts](scripts): host simulation, analysis and regression runners.
+- [Firmware/Tests](Firmware/Tests): current target builds and acceptance checks.
+- [Historical firmware tools](Firmware/Tests/historical/README.md): superseded
+  II-package staging workflow; do not run against the ZIT6 project.
+- [Previous local migration README](Firmware/History/README_migration_v4.md)
+  and [W25Q FIFO notes](Firmware/History/README_w25q_fifo_fix.md):
+  preserved reference material; current build instructions are above.
 
-## Rebuild and rerun previously passing Renode tests
-
-```bash
-make -C Simulation/Renode/Firmware/qspi_storage_backend_test clean all && \
-make -C Simulation/Renode/Firmware/qspi_streaming_test clean all
-~/renode_portable/renode --console --disable-gui
-```
-
-At the Renode monitor:
-
-```
-include @Simulation/Renode/run_qspi_storage_backend_test.resc
-include @Simulation/Renode/run_qspi_streaming_test.resc
-```
-
-Both scripts should report `status 0x50415353` and the same counters as before. If they regress, capture full output; do **not** claim the STM32 hardware FIFO logic failed based on the generic model.
-
-## Hardware gates not yet implemented
-
-- Configure/verify QUADSPI kernel source frequency and GPIO alternate-function/memory pins for your STM32H745 board; the adapter only enables the peripheral RCC clock.
-- Implement and validate `uint64_t w25q_board_monotonic_us(void)` from a real microsecond-capable timer; check clock-domain coherence and timer wraparound.
-- Confirm QUADSPI prescaler and CSHT against the actual board and W25Q datasheet. This driver currently uses **one-line** command/address/data, not 4-line Quad SPI.
-- Verify transaction CRC/readback with an actual W25Q512JV above the 16MiB boundary, and measure the peripheral FIFO behavior and worst-case burst latency under interrupt load.
-- Only one task at a time may use QSPI; serialize background reads and all offline program/erase operations. The bus is synchronous, NOT a background DMA reader, and is not safe to call from the 2ms control loop.
-- The actual 500Hz refill task, CAN arbitration, cache/MPU, and brownout recovery remain separate integration and system tests.
+Unrelated local archives, patches, logs and test helpers are preserved.

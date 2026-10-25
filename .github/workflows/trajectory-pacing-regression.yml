@@ -62,6 +62,8 @@ jobs:
           cc -std=c11 -Wall -Wextra -Werror -O2 -pthread \
             Intercore/trajectory_stream.c \
             Intercore/trajectory_stream_path_port.c \
+            Intercore/validation_storage_bridge.c \
+            Intercore/trajectory_storage_service.c \
             Intercore/Tests/test_trajectory_stream_path_port.c \
             -o build-path-regression/test_m7_path_port
           ./build-path-regression/test_m7_path_port

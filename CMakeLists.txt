@@ -47,6 +47,11 @@ find_program(GP_BASH_EXECUTABLE bash)
 # Real FreeRTOS message-buffer transport, isolated from the host SIL Kit
 # kernel configuration. The script builds a separate GCC_POSIX kernel.
 if(GP_BASH_EXECUTABLE)
+    # Native test of the target service with scheduler/provider mocks only.
+    add_test(NAME stm32_cm4_validation_service_policy
+        COMMAND "${GP_BASH_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/check_cm4_validation_service.sh")
+    set_tests_properties(stm32_cm4_validation_service_policy PROPERTIES TIMEOUT 30)
     add_test(NAME intercore_ipc_freertos_runtime_test
         COMMAND "${GP_BASH_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Intercore/Tests/run_ipc_freertos_runtime.sh")
@@ -199,6 +204,10 @@ set_tests_properties(host_timing_trace_test PROPERTIES TIMEOUT 10)
 # summary reports the expected misses, not hardware timing measurements.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME stm32_portable_protocol_regressions
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/check_portable_protocol.py")
+    set_tests_properties(stm32_portable_protocol_regressions PROPERTIES TIMEOUT 60)
     add_test(NAME host_timing_analyzer_test
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/Simulation/Timing/test_analyzer.py

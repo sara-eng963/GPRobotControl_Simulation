@@ -14,8 +14,8 @@ flags=(
     -std=gnu11 -O0 -Wall -Wextra -Werror
     -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
     -DUSE_HAL_DRIVER -DSTM32H745xx -DCORE_CM7=1
-    -DGP_IPC_FREERTOS_BACKEND=1
-    -I"$ROOT/StateMachine" -I"$ROOT/Intercore" -I"$ROOT/CANComm"
+    -DIPC_FREERTOS_BACKEND=1
+    -I"$FW/CM7/Application/StateMachine" -I"$FW/Common/Inc" -I"$FW/CM7/Application/Intercore" -I"$FW/CM7/Application/CANComm"
     -I"$FW/CM7/Core/Inc" -I"$FW/CM7/Board/Inc"
     -I"$FW/Common/Inc"
     -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
@@ -31,8 +31,8 @@ flags=(
 
 # The CANopen adapter is genuinely referenced in the production composition,
 # not forcibly retained via a linker KEEP directive.
-"$NM" -u "$OUT/app.o" | grep -Eq '[[:space:]]U gp_fdcan_classic_backend_open$'
-"$NM" --defined-only "$OUT/fdcan.o" | grep -Eq '[[:space:]]T gp_fdcan_classic_backend_open$'
+"$NM" -u "$OUT/app.o" | grep -Eq '[[:space:]]U fdcan_classic_backend_open$'
+"$NM" --defined-only "$OUT/fdcan.o" | grep -Eq '[[:space:]]T fdcan_classic_backend_open$'
 
 # Inspect the compiled object for real HAL_FDCAN_Init dependencies.
 # References in source comments are harmless.
@@ -43,8 +43,8 @@ fi
 
 # No board supplier is defined by the firmware. A user must provide a real
 # hardware board implementation. A weak unresolved reference is intentional.
-"$NM" "$OUT/app.o" | grep -Eq '[[:space:]]w gp_board_supply_commissioned_config$'
-if "$NM" --defined-only "$OUT/app.o" | grep -Eq '[[:space:]]T gp_board_supply_commissioned_config$'; then
+"$NM" "$OUT/app.o" | grep -Eq '[[:space:]]w board_supply_commissioned_config$'
+if "$NM" --defined-only "$OUT/app.o" | grep -Eq '[[:space:]]T board_supply_commissioned_config$'; then
     echo "FAIL: default production board supplier unexpectedly provided" >&2
     exit 1
 fi
@@ -55,11 +55,11 @@ import sys
 fw=Path(sys.argv[1])
 a=(fw/'CM7/Core/Src/application_supervisor.c').read_text()
 b=(fw/'CM7/Board/Inc/board_commissioning.h').read_text()
-assert 'gp_board_supply_commissioned_config == NULL' in a
+assert 'board_supply_commissioned_config == NULL' in a
 assert 'hardware_interlocks_verified' in a and 'hardware_interlocks_verified' in b
 assert 'io->read_inputs' in a and 'SUP_IO_ESTOP' in a and 'SUP_IO_PROTECTIVE_STOP' in a
-assert 'gp_fdcan_classic_backend_open' in a and 'canopen_master_init' in a
-assert 'gp_ipc_valid(shared)' in a and 'supervisor_task_start(4U)' in a
+assert 'fdcan_classic_backend_open' in a and 'canopen_master_init' in a
+assert 'ipc_valid(shared)' in a and 'supervisor_task_start(4U)' in a
 assert 'revoke_unstarted_board(board)' in a and 'canopen_master_close(&g_canopen_master)' in a
 assert 'CANOPEN_NODE_IDS' not in a
 assert not (fw/'CM7/Board/Src/board_config_real.c').exists()

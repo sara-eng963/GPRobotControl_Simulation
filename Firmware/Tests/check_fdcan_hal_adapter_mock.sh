@@ -3,6 +3,7 @@
 # are the authoritative integration gate once CubeMX enables FDCAN.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+FW="$ROOT/Firmware/STM32H745"
 DIR="$(mktemp -d)"
 trap 'rm -rf "$DIR"' EXIT
 cat > "$DIR/main.h" <<'MOCK_H'
@@ -143,14 +144,14 @@ int main(void)
     h.Init.RxFifo0ElmtsNbr=16U;
     h.Init.TxElmtSize=FDCAN_DATA_BYTES_8;
     h.Init.RxFifo0ElmtSize=FDCAN_DATA_BYTES_8;
-    GpFdcanClassicBackend state={0};
+    FdcanClassicBackend state={0};
     CanBackend bus={0};
 
-    assert(!gp_fdcan_classic_backend_open(NULL,&bus,&h));
+    assert(!fdcan_classic_backend_open(NULL,&bus,&h));
     h.Init.TxFifoQueueElmtsNbr=6U;
-    assert(!gp_fdcan_classic_backend_open(&state,&bus,&h));
+    assert(!fdcan_classic_backend_open(&state,&bus,&h));
     h.Init.TxFifoQueueElmtsNbr=16U;
-    assert(gp_fdcan_classic_backend_open(&state,&bus,&h));
+    assert(fdcan_classic_backend_open(&state,&bus,&h));
     assert(started==1 && global_filter_calls==1);
     assert(can_backend_valid(&bus));
 
@@ -198,7 +199,7 @@ MOCK_TEST
 gcc -std=c11 -O0 -Wall -Wextra -Werror \
     -I"$DIR" \
     -I"$ROOT/Firmware/STM32H745/CM7/Board/Inc" \
-    -I"$ROOT/CANComm" \
+    -I"$FW/CM7/Application/CANComm" \
     "$ROOT/Firmware/STM32H745/CM7/Board/Src/fdcan_classic_backend.c" \
     "$DIR/test.c" -o "$DIR/fdcan_test"
 "$DIR/fdcan_test"

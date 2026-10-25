@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 # Stage C2 — Integrated Fault Injection and Timing Feasibility
 
 **Status:** PASS — C2 software acceptance based on the operator's WSL output on 2026-10-14, at source revision `9c0dd0d3f02240c663f4fa415121be7c75c12edd`. Refer to `STAGE3_C2_ACCEPTANCE.md` for the gate-by-gate evidence. Physical qualification and C3 remain pending.

@@ -11,7 +11,7 @@ for x in "$GCC" "$READELF"; do
     command -v "$x" >/dev/null 2>&1 || { echo "FAIL: missing $x" >&2; exit 1; }
 done
 [[ -f "$SRC" ]] || { echo "FAIL: probe missing: $SRC" >&2; exit 1; }
-[[ -f "$FW/GP_STM32H745.ioc" ]] || { echo "FAIL: CubeMX target missing" >&2; exit 1; }
+[[ -f "$FW/GP_STM32H745ZIT6_BoardConfig.ioc" ]] || { echo "FAIL: CubeMX target missing" >&2; exit 1; }
 KERNEL="$FW/Middlewares/Third_Party/FreeRTOS/Source"
 PORT="$KERNEL/portable/GCC/ARM_CM4F"
 DEV="$FW/Drivers/CMSIS/Device/ST/STM32H7xx/Include"
@@ -32,8 +32,8 @@ for core in CM7 CM4; do
     "$GCC" -std=c11 -O0 -Wall -Wextra -Werror \
         -mcpu="$cpu" -mthumb -mfpu="$fpu" -mfloat-abi=hard \
         -DSTM32H745xx -DUSE_HAL_DRIVER -D"CORE_$core=1" \
-        -D"GP_IPC_CORE_M${core#CM}=1" -DGP_IPC_FREERTOS_BACKEND=1 \
-        -I"$FW/$core/Core/Inc" -I"$ROOT/Intercore" -I"$FW/Common/Inc" \
+        -D"IPC_CORE_M${core#CM}=1" -DIPC_FREERTOS_BACKEND=1 \
+        -I"$FW/$core/Core/Inc" -I"$FW/Common/Inc" -I"$FW/CM7/Application/Intercore" -I"$FW/CM7/Application/Intercore" -I"$FW/Common/Inc" -I"$FW/CM7/Application/Intercore" \
         -I"$KERNEL/include" -I"$PORT" -I"$DEV" -I"$CORE" \
         -I"$HAL" -I"$HAL/Legacy" \
         -c "$SRC" -o "$TMP/$core.o"
@@ -60,8 +60,8 @@ traj="$(get_size gp_stage2_shared_trajectory)"
 combined=$((ipc + traj))
 reserve=$((65536 - combined))
 echo
-printf 'GpIpcShared:         %6d bytes\n' "$ipc"
-printf 'GpTrajectoryShared:  %6d bytes\n' "$traj"
+printf 'IpcShared:         %6d bytes\n' "$ipc"
+printf 'TrajectoryShared:  %6d bytes\n' "$traj"
 printf 'Combined minimum:    %6d / 65536 SRAM4 bytes\n' "$combined"
 printf 'Unallocated budget:  %6d bytes (not yet reserved)\n' "$reserve"
 echo

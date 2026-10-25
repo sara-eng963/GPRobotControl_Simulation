@@ -14,8 +14,8 @@ flags=(
   -std=gnu11 -O0 -Wall -Wextra -Werror
   -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
   -DSTM32H745xx -DUSE_HAL_DRIVER -DCORE_CM4=1
-  -I"$FW/CM4/Core/Inc" -I"$FW/Common/Inc"
-  -I"$ROOT/Intercore" -I"$ROOT/StateMachine"
+  -I"$FW/CM4/Core/Inc" -I"$FW/CM4/Application/Intercore" -I"$FW/Common/Inc"
+  -I"$FW/Common/Inc" -I"$FW/CM7/Application/Intercore" -I"$FW/CM7/Application/StateMachine"
   -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
   -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2"
   -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F"
@@ -32,7 +32,7 @@ for symbol in application_ipc_service_initialize application_ipc_service_run app
     echo "FAIL: missing $symbol" >&2; exit 1;
   }
 done
-python3 - "$FW/CM4/Core/Src/main.c" "$ROOT/Intercore/ipc_mailbox_freertos.c" <<'PY'
+python3 - "$FW/CM4/Core/Src/main.c" "$FW/Common/Src/ipc_mailbox_freertos.c" <<'PY'
 from pathlib import Path
 import sys
 main = Path(sys.argv[1]).read_text()

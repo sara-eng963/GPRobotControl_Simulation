@@ -9,7 +9,7 @@
 /* CM4-local view of the M7 supervisor's existing seven status data fields.
  * last_hmi_received_sequence acknowledges IPC receipt, NOT command acceptance.
  * Status from the remote kernel is advisory and never authorizes motion. */
-typedef GpHmiControllerStatus ApplicationControllerStatus;
+typedef HmiControllerStatus ApplicationControllerStatus;
 
 /* Call once in the CM4 default task after the scheduler has started.
  * Requires Stage 2 M7-owned shared memory to be valid. */

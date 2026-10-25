@@ -18,7 +18,7 @@ static const uint32_t k_dlc[CAN_CLASSIC_MAX_DATA_BYTES + 1U] = {
     FDCAN_DLC_BYTES_6, FDCAN_DLC_BYTES_7, FDCAN_DLC_BYTES_8
 };
 
-static bool fdcan_running(const GpFdcanClassicBackend *state)
+static bool fdcan_running(const FdcanClassicBackend *state)
 {
     if (state == NULL || !state->started || state->handle == NULL ||
         HAL_FDCAN_GetState(state->handle) != HAL_FDCAN_STATE_BUSY)
@@ -31,7 +31,7 @@ static bool fdcan_running(const GpFdcanClassicBackend *state)
 
 static CanBackendResult fdcan_send(void *context, const CanFrame *frame)
 {
-    GpFdcanClassicBackend *state = (GpFdcanClassicBackend *)context;
+    FdcanClassicBackend *state = (FdcanClassicBackend *)context;
     if (!fdcan_running(state) || frame == NULL ||
         frame->id > CAN_STANDARD_ID_MAX ||
         frame->dlc > CAN_CLASSIC_MAX_DATA_BYTES)
@@ -58,7 +58,7 @@ static CanBackendResult fdcan_send(void *context, const CanFrame *frame)
 
 static CanBackendResult fdcan_receive(void *context, CanFrame *frame)
 {
-    GpFdcanClassicBackend *state = (GpFdcanClassicBackend *)context;
+    FdcanClassicBackend *state = (FdcanClassicBackend *)context;
     if (!fdcan_running(state) || frame == NULL)
         return CAN_BACKEND_ERROR;
 
@@ -90,7 +90,7 @@ static CanBackendResult fdcan_receive(void *context, CanFrame *frame)
 
 static void fdcan_close(void *context)
 {
-    GpFdcanClassicBackend *state = (GpFdcanClassicBackend *)context;
+    FdcanClassicBackend *state = (FdcanClassicBackend *)context;
     if (state == NULL || !state->started || state->handle == NULL)
         return;
 
@@ -99,7 +99,7 @@ static void fdcan_close(void *context)
 }
 
 /* Never change CAN bit timing here. The generated HAL_FDCAN_Init owns it. */
-bool gp_fdcan_classic_backend_open(GpFdcanClassicBackend *state,
+bool fdcan_classic_backend_open(FdcanClassicBackend *state,
                                    CanBackend *interface,
                                    FDCAN_HandleTypeDef *fdcan)
 {

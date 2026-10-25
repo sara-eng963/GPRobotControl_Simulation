@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 # New-chat handoff — STM32H745 Stage 3 B and C
 
 You are a senior embedded robotics architect and implementation engineer. Continue my graduation-project **STM32H745 dual-core (Cortex-M7 + Cortex-M4)** firmware on **GitHub repository https://github.com/sara-eng963/GPRobotControl_Simulation**, branch **sara/can-replacement**.

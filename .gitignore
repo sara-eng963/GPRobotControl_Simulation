@@ -33,3 +33,13 @@ Firmware/STM32H745/**/*.bin
 Firmware/STM32H745/**/*.map
 Firmware/STM32H745/**/*.list
 Firmware/STM32H745/**/*.su
+
+# Firmware scratch files; CubeMX .ioc and Eclipse project files stay tracked.
+Firmware/STM32H745/**/*.cyclo
+Firmware/STM32H745/**/*.d
+Firmware/STM32H745/**/*.bak
+Firmware/STM32H745/**/.ipc_naming_backup/
+Firmware/Tests/__pycache__/
+scripts/__pycache__/
+/stm32_migration.py
+/restore_cm4_validation_candidate.py

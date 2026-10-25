@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 # Stage 3 Batch A — M7 CANopen composition (2026-10-14)
 
 **Scope:** compile-safe bridge from a real board-supplied commissioning configuration through the existing ST HAL1 FDCAN backend into the existing CANopen coordinator and Supervisor, without inventing board inputs or bypassing independent E-stop/STO. The active CubeMX FDCAN1 setup remains generated; no manually duplicated peripheral init or register accesses.

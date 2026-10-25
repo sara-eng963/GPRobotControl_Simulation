@@ -57,6 +57,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define FDCAN1_STB_Pin GPIO_PIN_3
+#define FDCAN1_STB_GPIO_Port GPIOD
 
 /* USER CODE BEGIN Private defines */
 

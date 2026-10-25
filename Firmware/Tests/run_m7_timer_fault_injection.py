@@ -11,7 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "Firmware/STM32H745/CM7/Core/Src/application_supervisor.c"
-SUP = ROOT / "StateMachine/supervisor_task.c"
+SUP = ROOT / "Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c"
 TEMPLATE = Path(__file__).with_name("m7_timer_fault_host.c")
 
 
@@ -36,9 +36,9 @@ def extract(text, marker):
 def main():
     app, sup = APP.read_text(), SUP.read_text()
     functions = "\n\n".join(extract(app, marker) for marker in (
-        "static uint64_t gp_time_now_us(void *unused)",
-        "static bool gp_timer_start(void *unused)",
-        "static uint32_t gp_timer_wait(",
+        "static uint64_t time_now_us(void *unused)",
+        "static bool timer_start(void *unused)",
+        "static uint32_t timer_wait(",
         "void application_supervisor_timer_period_elapsed_isr(",
     ))
     task = sup.split("static void supervisor_task_entry(void *argument)", 1)[1]
@@ -47,7 +47,7 @@ def main():
         "if (hardware_timed) {"
     )
     elapsed_part = extract(
-        task.split("TRACE_END(GP_TIMING_SUPERVISOR, true);", 1)[1],
+        task.split("TRACE_END(TIMING_SUPERVISOR, true);", 1)[1],
         "if (hardware_timed) {"
     )
     source = TEMPLATE.read_text()

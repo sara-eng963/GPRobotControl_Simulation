@@ -1,5 +1,5 @@
-#ifndef GP_STM32_FDCAN_CLASSIC_BACKEND_H
-#define GP_STM32_FDCAN_CLASSIC_BACKEND_H
+#ifndef STM32_FDCAN_CLASSIC_BACKEND_H
+#define STM32_FDCAN_CLASSIC_BACKEND_H
 
 /*
  * STM32CubeH7 HAL1 transport for the existing CanBackend abstraction.
@@ -18,7 +18,7 @@ typedef struct
 {
     FDCAN_HandleTypeDef *handle;
     bool started;
-} GpFdcanClassicBackend;
+} FdcanClassicBackend;
 
 /* The FDCAN instance, kernel clock, timing, GPIO pins and message RAM are
  * exclusively configured by CubeMX and HAL_FDCAN_Init().
@@ -29,8 +29,8 @@ typedef struct
  * Caller keeps both state and interface objects alive; use from the
  * single CM7 CANopen supervisor owner task (not ISR).
  */
-bool gp_fdcan_classic_backend_open(GpFdcanClassicBackend *state,
+bool fdcan_classic_backend_open(FdcanClassicBackend *state,
                                    CanBackend *interface,
                                    FDCAN_HandleTypeDef *fdcan);
 
-#endif /* GP_STM32_FDCAN_CLASSIC_BACKEND_H */
+#endif /* STM32_FDCAN_CLASSIC_BACKEND_H */

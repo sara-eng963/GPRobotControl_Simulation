@@ -19,7 +19,7 @@
  * This adapter delivers interrupts and a kernel completion opportunity,
  * but application task wait registration is not implemented here.
  */
-#define GP_IPC_FREERTOS_BACKEND 1
+#define IPC_FREERTOS_BACKEND 1
 #include "intercore_notifications.h"
 
 #include <stdint.h>
@@ -40,12 +40,12 @@
 #define IPC_RX_LINE            EXTI_LINE_1
 #define IPC_TX_LINE            EXTI_LINE_0
 #define IPC_RX_IRQn            EXTI1_IRQn
-#define IPC_TX_EVENT           GP_IPC_NOTIFY_M7_TO_M4_DATA
+#define IPC_TX_EVENT           IPC_NOTIFY_M7_TO_M4_DATA
 #elif defined(CORE_CM4)
 #define IPC_RX_LINE            EXTI_LINE_0
 #define IPC_TX_LINE            EXTI_LINE_1
 #define IPC_RX_IRQn            EXTI0_IRQn
-#define IPC_TX_EVENT           GP_IPC_NOTIFY_M4_TO_M7_DATA
+#define IPC_TX_EVENT           IPC_NOTIFY_M4_TO_M7_DATA
 #else
 #error "Compile intercore_notifications.c separately for CORE_CM7 or CORE_CM4"
 #endif
@@ -55,7 +55,7 @@ static EXTI_HandleTypeDef exti_tx;
 static MessageBufferHandle_t received_buffer;
 static bool notifications_ready;
 
-static void notify_remote_after_send(GpIpcNotifyEvent event, void *context)
+static void notify_remote_after_send(IpcNotifyEvent event, void *context)
 {
     (void)context;
     if (notifications_ready && event == IPC_TX_EVENT)
@@ -85,10 +85,10 @@ static void on_peer_data(void)
 
 bool intercore_notifications_initialize(void)
 {
-    const GpIpcShared *const ipc =
-        (const GpIpcShared *)(uintptr_t)GP_SHARED_IPC_BASE;
+    const IpcShared *const ipc =
+        (const IpcShared *)(uintptr_t)SRAM4_IPC_BASE;
 
-    if (!gp_ipc_valid(ipc))
+    if (!ipc_valid(ipc))
         return false;
 
 #if defined(CORE_CM7)
@@ -128,7 +128,7 @@ bool intercore_notifications_initialize(void)
     HAL_EXTI_ClearPending(&exti_rx, EXTI_TRIGGER_RISING);
     HAL_NVIC_SetPriority(IPC_RX_IRQn, 6U, 0U);
     notifications_ready = true;
-    gp_ipc_set_notifier(notify_remote_after_send, NULL);
+    ipc_set_notifier(notify_remote_after_send, NULL);
     HAL_NVIC_EnableIRQ(IPC_RX_IRQn);
     return true;
 }

@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 # Stage 3 Batch B5 — HMI lifecycle and consolidated software qualification
 
 **Software acceptance (2026-10-14): PASS**, as confirmed by operator-reported successful CM7/CM4 CubeIDE builds and the complete B5 acceptance script transcript. See `STAGE3_BATCH_B5_ACCEPTANCE.md`.

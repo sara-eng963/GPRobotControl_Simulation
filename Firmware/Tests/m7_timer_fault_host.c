@@ -12,7 +12,7 @@
 #define TIM_FLAG_UPDATE 1U
 #define RESET 0
 #define HAL_OK 0
-#define RCC_APB1_DIV1 1U
+#define RCC_APB1_DIV2 2U
 #define pdTRUE 1
 #define pdFALSE 0
 #define pdMS_TO_TICKS(x) (x)
@@ -30,7 +30,7 @@ static TIM_HandleTypeDef htim2, htim3;
 static volatile uint32_t g_tim2_wraps;
 static volatile bool g_timing_running;
 static unsigned critical_depth, notifications, starts, tim2_stops, yields;
-static uint32_t pclk = 64000000U;
+static uint32_t pclk = 100000000U;
 static int fail_tim3;
 static TaskHandle_t supervisor = (void *)(uintptr_t)1;
 #define taskENTER_CRITICAL() (void)(++critical_depth)
@@ -40,7 +40,7 @@ static TaskHandle_t supervisor = (void *)(uintptr_t)1;
 #define __HAL_TIM_SET_COUNTER(t,n) ((t)->Counter = (n))
 #define __HAL_TIM_CLEAR_FLAG(t,f) ((t)->UIF = 0)
 static void HAL_RCC_GetClockConfig(RCC_ClkInitTypeDef *c, uint32_t *l)
-{ c->APB1CLKDivider = RCC_APB1_DIV1; *l = 1U; }
+{ c->APB1CLKDivider = RCC_APB1_DIV2; *l = 1U; }
 static uint32_t HAL_RCC_GetPCLK1Freq(void) { return pclk; }
 static int HAL_TIM_Base_Start_IT(TIM_HandleTypeDef *t)
 { ++starts; return t == &htim3 && fail_tim3 ? 1 : HAL_OK; }
@@ -91,12 +91,12 @@ static void supervisor_elapsed_block(SupervisorTaskContext *context,
 }
 static void reset(void)
 {
-    htim2.Instance=TIM2; htim2.Init.Prescaler=63; htim2.Init.Period=UINT32_MAX;
-    htim3.Instance=TIM3; htim3.Init.Prescaler=63; htim3.Init.Period=1999;
+    htim2.Instance=TIM2; htim2.Init.Prescaler=199; htim2.Init.Period=UINT32_MAX;
+    htim3.Instance=TIM3; htim3.Init.Prescaler=199; htim3.Init.Period=1999;
     htim2.Counter=0; htim3.Counter=0; htim2.UIF=0; htim3.UIF=0;
     g_tim2_wraps=0; g_timing_running=false; critical_depth=0;
     notifications=0; starts=0; tim2_stops=0; yields=0; fail_tim3=0;
-    pclk=64000000U; supervisor=(void *)(uintptr_t)1;
+    pclk=100000000U; supervisor=(void *)(uintptr_t)1;
 }
 static SupervisorTaskContext new_context(void)
 {
@@ -107,33 +107,33 @@ static SupervisorTaskContext new_context(void)
 }
 static void test_timestamp_wrap(void)
 {
-    reset(); assert(gp_timer_start(NULL));
+    reset(); assert(timer_start(NULL));
     htim2.Counter=UINT32_MAX-1U;
-    assert(gp_time_now_us(NULL)==UINT64_C(4294967294));
+    assert(time_now_us(NULL)==UINT64_C(4294967294));
     htim2.Counter=1U; htim2.UIF=1;
-    assert(gp_time_now_us(NULL)==UINT64_C(4294967297));
+    assert(time_now_us(NULL)==UINT64_C(4294967297));
     assert(critical_depth==0);
     application_supervisor_timer_period_elapsed_isr(&htim2);
     htim2.UIF=0;
-    assert(gp_time_now_us(NULL)==UINT64_C(4294967297));
+    assert(time_now_us(NULL)==UINT64_C(4294967297));
     puts("PASS: TIM2 pending-wrap and serviced-overflow timestamp");
 }
 static void test_start_guard(void)
 {
     reset(); pclk=32000000U;
-    assert(!gp_timer_start(NULL) && starts==0);
+    assert(!timer_start(NULL) && starts==0);
     reset(); fail_tim3=1;
-    assert(!gp_timer_start(NULL) && !g_timing_running && tim2_stops==1);
+    assert(!timer_start(NULL) && !g_timing_running && tim2_stops==1);
     puts("PASS: invalid timer clock and partial HAL startup roll back");
 }
 static void test_notifications(void)
 {
     reset(); application_supervisor_timer_period_elapsed_isr(&htim3);
     assert(notifications==0);
-    assert(gp_timer_start(NULL));
+    assert(timer_start(NULL));
     for(int i=0;i<3;i++) application_supervisor_timer_period_elapsed_isr(&htim3);
     assert(notifications==3 && yields==3);
-    assert(gp_timer_wait(NULL,6)==3 && gp_timer_wait(NULL,6)==0);
+    assert(timer_wait(NULL,6)==3 && timer_wait(NULL,6)==0);
     puts("PASS: TIM3 ISR counting notifications and drain");
 }
 static void test_missed_cycles(void)

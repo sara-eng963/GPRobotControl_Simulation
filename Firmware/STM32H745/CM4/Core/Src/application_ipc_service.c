@@ -6,7 +6,7 @@
  * HMI electrical transport is intentionally board-specific/unselected.
  * This module does not itself permit motion or implement a safety channel.
  */
-#define GP_IPC_FREERTOS_BACKEND 1
+#define IPC_FREERTOS_BACKEND 1
 #include "application_ipc_service.h"
 #include "ipc_mailbox.h"
 #include "sram4_memory_map.h"
@@ -37,7 +37,7 @@ static StaticQueue_t status_queue_control;
 static uint8_t status_queue_storage[sizeof(StatusSnapshot)];
 static QueueHandle_t status_queue;
 
-static GpIpcShared *shared_ipc;
+static IpcShared *shared_ipc;
 static uint32_t last_status_sequence;
 static uint32_t next_command_sequence;
 
@@ -56,8 +56,8 @@ bool application_ipc_service_initialize(void)
     if (shared_ipc != NULL || command_queue != NULL || status_queue != NULL)
         return false;
 
-    GpIpcShared *const ipc = (GpIpcShared *)(uintptr_t)GP_SHARED_IPC_BASE;
-    if (!gp_ipc_valid(ipc) || APPLICATION_IPC_PERIOD_TICKS == 0U)
+    IpcShared *const ipc = (IpcShared *)(uintptr_t)SRAM4_IPC_BASE;
+    if (!ipc_valid(ipc) || APPLICATION_IPC_PERIOD_TICKS == 0U)
         return false;
 
     QueueHandle_t commands = xQueueCreateStatic(
@@ -82,7 +82,7 @@ bool application_ipc_service_read_status(
     StatusSnapshot snapshot;
     if (xQueuePeek(status_queue, &snapshot, 0U) != pdPASS) return false;
     if (max_age_ms != 0U &&
-        !gp_hmi_status_is_fresh((uint32_t)xTaskGetTickCount(),
+        !hmi_status_is_fresh((uint32_t)xTaskGetTickCount(),
                                 (uint32_t)snapshot.local_receipt_tick,
                                 (uint32_t)age_ticks(max_age_ms)))
         return false;
@@ -99,7 +99,7 @@ bool application_ipc_service_submit_hmi(SupervisorHmiCommand command)
     ApplicationControllerStatus status;
     if (!application_ipc_service_read_status(
             &status, APPLICATION_IPC_STATUS_TIMEOUT_MS) ||
-        !gp_hmi_command_allowed(&status, command))
+        !hmi_command_allowed(&status, command))
         return false;
 
     /* Local queue is multi-writer safe. Only the service task ever sends
@@ -110,17 +110,17 @@ bool application_ipc_service_submit_hmi(SupervisorHmiCommand command)
 static bool receive_controller_status(void)
 {
     bool invalidate_pending = false;
-    GpIpcMessage message;
+    IpcMessage message;
     for (uint32_t i = 0; i < APPLICATION_IPC_MAX_RECEIVES_PER_CYCLE; ++i) {
-        if (!gp_ipc_m4_receive(shared_ipc, &message)) break;
+        if (!ipc_m4_receive(shared_ipc, &message)) break;
         StatusSnapshot snapshot = {0};
-        if (!gp_hmi_status_decode(&message, last_status_sequence,
+        if (!hmi_status_decode(&message, last_status_sequence,
                                   &snapshot.status))
             continue;
         StatusSnapshot prior = {0};
         const bool had_previous =
             xQueuePeek(status_queue, &prior, 0U) == pdPASS;
-        if (gp_hmi_should_drop_pending(
+        if (hmi_should_drop_pending(
                 had_previous ? &prior.status : NULL, &snapshot.status))
             invalidate_pending = true;
         last_status_sequence = message.sequence;
@@ -166,19 +166,19 @@ void application_ipc_service_run(void)
                 (void)xQueueReceive(command_queue, &pending, 0U);
 
             if (pending != SUP_HMI_COMMAND_COUNT &&
-                !gp_hmi_command_allowed(&status, pending))
+                !hmi_command_allowed(&status, pending))
                 pending = SUP_HMI_COMMAND_COUNT;
 
             if (pending != SUP_HMI_COMMAND_COUNT) {
                 const uint32_t sequence = next_command_sequence + 1U;
-                GpIpcMessage command = {0};
-                command.type = GP_IPC_HMI_COMMAND;
+                IpcMessage command = {0};
+                command.type = IPC_HMI_COMMAND;
                 command.sequence = (sequence == 0U) ? 1U : sequence;
                 command.timestamp_ms = (uint32_t)(
                     ((uint64_t)xTaskGetTickCount() * 1000ULL) /
                     (uint64_t)configTICK_RATE_HZ);
                 command.data[0] = (uint32_t)pending;
-                if (gp_ipc_m4_send(shared_ipc, &command)) {
+                if (ipc_m4_send(shared_ipc, &command)) {
                     next_command_sequence = command.sequence;
                     pending = SUP_HMI_COMMAND_COUNT;
                 }

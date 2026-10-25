@@ -11,8 +11,8 @@ flags=(
   -std=gnu11 -O0 -Wall -Wextra -Werror
   -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
   -DSTM32H745xx -DUSE_HAL_DRIVER -DCORE_CM7=1
-  -DGP_IPC_FREERTOS_BACKEND=1
-  -I"$ROOT/StateMachine" -I"$ROOT/Intercore" -I"$ROOT/CANComm"
+  -DIPC_FREERTOS_BACKEND=1
+  -I"$FW/CM7/Application/StateMachine" -I"$FW/Common/Inc" -I"$FW/CM7/Application/Intercore" -I"$FW/CM7/Application/CANComm"
   -I"$FW/CM7/Core/Inc" -I"$FW/CM7/Board/Inc" -I"$FW/Common/Inc"
   -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
   -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2"
@@ -31,11 +31,11 @@ fw=Path(sys.argv[1])
 p=(fw/'CM7/.cproject').read_text()
 s=(fw/'CM7/Core/Src/main.c').read_text()
 a=(fw/'CM7/Core/Src/application_supervisor.c').read_text()
-assert p.count('value="GP_IPC_FREERTOS_BACKEND=1"')==2
+assert '#define IPC_FREERTOS_BACKEND 1' in a
 assert p.count('name="Application"')==2
-assert p.count('value="../Application/StateMachine"')==4
-assert 'application_supervisor_board_configure(&config)' in s
-assert 'application_supervisor_start(&config)' in s
+assert p.count('value="../Application/Intercore"')==2
+assert 'application_supervisor_board_configure(&board_config)' in s
+assert 'application_supervisor_start(&board_config)' in s
 assert '__attribute__((weak))' in a
 assert 'config.ipc = shared' in a
 print('PASS: M7 board gating, IPC ownership, and CubeIDE settings')

@@ -15,7 +15,7 @@ done
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 INCLUDE_FLAGS=(
-    -I"$FW/CM7/Core/Inc" -I"$ROOT/Intercore"
+    -I"$FW/CM7/Core/Inc" -I"$FW/Common/Inc" -I"$FW/CM7/Application/Intercore"
     -I"$FW/Common/Inc"
     -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include"
     -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2"
@@ -31,8 +31,8 @@ GCC_FLAGS=(-std=gnu11 -O0 -Wall -Wextra -Werror
 echo "[Stage 2E-2] Compiling production inter-core initialization sources..."
 for f in \
     "$FW/CM7/Core/Src/intercore_shared_memory.c" \
-    "$ROOT/Intercore/ipc_mailbox_freertos.c" \
-    "$ROOT/Intercore/trajectory_stream.c"; do
+    "$FW/Common/Src/ipc_mailbox_freertos.c" \
+    "$FW/Common/Src/trajectory_stream.c"; do
     "$CC" "${GCC_FLAGS[@]}" "${INCLUDE_FLAGS[@]}" -c "$f" \
         -o "$OUT/$(basename "$f").o"
     echo "PASS: $(basename "$f") compiles for CM7"
@@ -40,10 +40,10 @@ done
 "$NM" "$OUT/intercore_shared_memory.c.o" | grep -Eq ' T intercore_shared_memory_initialize$' || {
     echo "FAIL: M7 initializer symbol not exported" >&2; exit 1;
 }
-"$NM" "$OUT/ipc_mailbox_freertos.c.o" | grep -Eq ' T gp_ipc_initialize$' || {
+"$NM" "$OUT/ipc_mailbox_freertos.c.o" | grep -Eq ' T ipc_initialize$' || {
     echo "FAIL: native FreeRTOS IPC initializer not linked in source" >&2; exit 1;
 }
-"$NM" "$OUT/trajectory_stream.c.o" | grep -Eq ' T gp_traj_shared_initialize$' || {
+"$NM" "$OUT/trajectory_stream.c.o" | grep -Eq ' T trajectory_shared_initialize$' || {
     echo "FAIL: existing trajectory initializer not built" >&2; exit 1;
 }
 python3 - "$FW/CM7/Core/Src/main.c" <<'PY'
@@ -72,8 +72,8 @@ M4_FLAGS=(-std=gnu11 -O0 -Wall -Wextra -Werror
 M4_INCLUDE_FLAGS=(-I"$FW/CM4/Core/Inc" "${INCLUDE_FLAGS[@]:1}")
 for f in \
     "$FW/CM4/Core/Src/intercore_startup_validation.c" \
-    "$ROOT/Intercore/ipc_mailbox_freertos.c" \
-    "$ROOT/Intercore/trajectory_stream.c"; do
+    "$FW/Common/Src/ipc_mailbox_freertos.c" \
+    "$FW/Common/Src/trajectory_stream.c"; do
     "$CC" "${M4_FLAGS[@]}" "${M4_INCLUDE_FLAGS[@]}" -c "$f" \
         -o "$OUT/CM4-$(basename "$f").o"
     echo "PASS: $(basename "$f") compiles for CM4"

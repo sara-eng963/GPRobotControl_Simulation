@@ -43,6 +43,7 @@ set(
 
     ${REPO_ROOT}/ServoDrive/AvatarM/Sim/avatar_m_node_sim.c
     ${REPO_ROOT}/ServoDrive/AvatarM/avatar_m_pdo.c
+    ${REPO_ROOT}/ServoDrive/CiA402/cia402.c
 )
 
 function(configure_avatar_m_silkit_test target_name)

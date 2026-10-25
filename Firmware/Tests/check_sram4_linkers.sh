@@ -15,9 +15,9 @@ for core in CM7 CM4; do
         -ffunction-sections -fdata-sections \
         -mcpu="$cpu" -mthumb -mfpu="$fpu" -mfloat-abi=hard \
         -DSTM32H745xx -DUSE_HAL_DRIVER -D"CORE_$core=1" \
-        -D"GP_IPC_CORE_M${core#CM}=1" -DGP_IPC_FREERTOS_BACKEND=1 \
+        -D"IPC_CORE_M${core#CM}=1" -DIPC_FREERTOS_BACKEND=1 \
         -I"$FW/$core/Core/Inc" -I"$FW/Common/Inc" \
-        -I"$ROOT/Intercore" \
+        -I"$FW/Common/Inc" -I"$FW/CM7/Application/Intercore" \
         -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/include" \
         -I"$FW/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F" \
         -I"$FW/Drivers/CMSIS/Device/ST/STM32H7xx/Include" \
@@ -29,11 +29,11 @@ for core in CM7 CM4; do
         elf="$OUT/$core-$mode.elf"
         "$CC" -mcpu="$cpu" -mthumb -mfpu="$fpu" -mfloat-abi=hard \
             -nostdlib -Wl,--gc-sections \
-            "-Wl,-T,$FW/$core/STM32H745IITX_$mode.ld" \
+            "-Wl,-T,$FW/$core/STM32H745ZITX_$mode.ld" \
             "-Wl,-Map,$OUT/$core-$mode.map" "$OUT/$core.o" -o "$elf"
-        for pair in "gp_stage2_linker_ipc 38000000 .gp_shared_ipc 000008a0" \
-                    "gp_stage2_linker_trajectory 38001000 .gp_shared_trajectory 00003040" \
-                    "gp_stage3_linker_validation 38005000 .gp_shared_validation 00003000"; do
+        for pair in "gp_stage2_linker_ipc 38000000 .shared_ipc 000008a0" \
+                    "gp_stage2_linker_trajectory 38001000 .shared_trajectory 00003040" \
+                    "gp_stage3_linker_validation 38005000 .shared_validation 00003000"; do
             read -r symbol addr section size <<< "$pair"
             actual="$("$NM" --defined-only "$elf" | awk -v n="$symbol" '$3==n {print $1}')"
             [[ "$actual" == "$addr" ]] || { echo "FAIL: $symbol at $actual, expected $addr"; exit 1; }

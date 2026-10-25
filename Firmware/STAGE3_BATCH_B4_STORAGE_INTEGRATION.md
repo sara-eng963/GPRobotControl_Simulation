@@ -1,3 +1,5 @@
+> Historical engineering record: the ZIT6 integration supersedes these build/staging instructions. See [current firmware instructions](README.md). The original evidence below is retained.
+
 # Stage 3 — Batch B4 NOR Reader and Trajectory Producer
 
 **Date:** 2026-10-14. **Branch:** `sara/can-replacement`.  

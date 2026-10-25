@@ -48,11 +48,10 @@ MEMORY
   FLASH   (rx)   : ORIGIN = 0x08000000, LENGTH = 1024K    /* Memory is divided. Actual start is 0x8000000 and actual length is 2048K */
   DTCMRAM (xrw)  : ORIGIN = 0x20000000, LENGTH = 128K
   RAM_D2 (xrw)   : ORIGIN = 0x30000000, LENGTH = 288K
-  /* Partition SRAM4 without overlapping physical MEMORY regions. */
-  GP_SRAM4_IPC        (rw)  : ORIGIN = 0x38000000, LENGTH = 4K
-  GP_SRAM4_TRAJECTORY (rw)  : ORIGIN = 0x38001000, LENGTH = 16K
-  GP_SRAM4_RESERVED   (rw)  : ORIGIN = 0x38005000, LENGTH = 12K
-  RAM_D3              (xrw) : ORIGIN = 0x38008000, LENGTH = 32K
+  SRAM4_IPC        (rw)  : ORIGIN = 0x38000000, LENGTH = 4K
+  SRAM4_TRAJECTORY (rw)  : ORIGIN = 0x38001000, LENGTH = 16K
+  SRAM4_RESERVED   (rw)  : ORIGIN = 0x38005000, LENGTH = 12K
+  RAM_D3           (xrw) : ORIGIN = 0x38008000, LENGTH = 32K
   ITCMRAM (xrw)  : ORIGIN = 0x00000000, LENGTH = 64K
 }
 
@@ -174,48 +173,48 @@ SECTIONS
   /* Stage 2C: shared SRAM4 objects, NOT part of either core's .bss clear.
    * These sections must hold only uninitialized objects. Cross-core
    * initialization and MPU cache policy are separate future gates. */
-  .gp_shared_ipc (NOLOAD) :
+  .shared_ipc (NOLOAD) :
   {
     . = ALIGN(32);
-    __gp_shared_ipc_start__ = .;
-    KEEP(*(.gp_shared_ipc))
-    KEEP(*(.gp_shared_ipc.*))
+    __shared_ipc_start__ = .;
+    KEEP(*(.shared_ipc))
+    KEEP(*(.shared_ipc.*))
     . = ALIGN(32);
-    __gp_shared_ipc_end__ = .;
-  } >GP_SRAM4_IPC
+    __shared_ipc_end__ = .;
+  } >SRAM4_IPC
 
-  .gp_shared_trajectory (NOLOAD) :
+  .shared_trajectory (NOLOAD) :
   {
     . = ALIGN(32);
-    __gp_shared_trajectory_start__ = .;
-    KEEP(*(.gp_shared_trajectory))
-    KEEP(*(.gp_shared_trajectory.*))
+    __shared_trajectory_start__ = .;
+    KEEP(*(.shared_trajectory))
+    KEEP(*(.shared_trajectory.*))
     . = ALIGN(32);
-    __gp_shared_trajectory_end__ = .;
-  } >GP_SRAM4_TRAJECTORY
+    __shared_trajectory_end__ = .;
+  } >SRAM4_TRAJECTORY
 
   /* Stage 3D reserved validation slot, inactive until protocol binding. */
-  .gp_shared_validation (NOLOAD) :
+  .shared_validation (NOLOAD) :
   {
     . = ALIGN(32);
-    __gp_shared_validation_start__ = .;
-    KEEP(*(.gp_shared_validation))
-    KEEP(*(.gp_shared_validation.*))
+    __shared_validation_start__ = .;
+    KEEP(*(.shared_validation))
+    KEEP(*(.shared_validation.*))
     . = ALIGN(32);
-    __gp_shared_validation_end__ = .;
-  } >GP_SRAM4_RESERVED
+    __shared_validation_end__ = .;
+  } >SRAM4_RESERVED
 
-  ASSERT(ADDR(.gp_shared_validation) == ORIGIN(GP_SRAM4_RESERVED),
+  ASSERT(ADDR(.shared_validation) == ORIGIN(SRAM4_RESERVED),
          "Validation address mismatch")
-  ASSERT(SIZEOF(.gp_shared_validation) <= LENGTH(GP_SRAM4_RESERVED),
+  ASSERT(SIZEOF(.shared_validation) <= LENGTH(SRAM4_RESERVED),
          "Validation exceeds 12 KiB")
-  ASSERT(ADDR(.gp_shared_ipc) == ORIGIN(GP_SRAM4_IPC),
+  ASSERT(ADDR(.shared_ipc) == ORIGIN(SRAM4_IPC),
          "Shared IPC base does not match STM32H745 SRAM4 contract")
-  ASSERT(ADDR(.gp_shared_trajectory) == ORIGIN(GP_SRAM4_TRAJECTORY),
+  ASSERT(ADDR(.shared_trajectory) == ORIGIN(SRAM4_TRAJECTORY),
          "Shared trajectory base does not match STM32H745 SRAM4 contract")
-  ASSERT(SIZEOF(.gp_shared_ipc) <= LENGTH(GP_SRAM4_IPC),
+  ASSERT(SIZEOF(.shared_ipc) <= LENGTH(SRAM4_IPC),
          "Shared IPC exceeds 4 KiB")
-  ASSERT(SIZEOF(.gp_shared_trajectory) <= LENGTH(GP_SRAM4_TRAJECTORY),
+  ASSERT(SIZEOF(.shared_trajectory) <= LENGTH(SRAM4_TRAJECTORY),
          "Shared trajectory exceeds 16 KiB")
 
   /* User_heap_stack section, used to check that there is enough "RAM" Ram  type memory left */

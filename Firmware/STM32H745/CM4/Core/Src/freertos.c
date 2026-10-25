@@ -55,5 +55,19 @@
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 
+/* Stop this core on a detected FreeRTOS task stack overflow. */
+volatile TaskHandle_t cm4_stack_overflow_task = NULL;
+
+void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
+{
+    (void)task_name;
+    cm4_stack_overflow_task = task;
+    taskDISABLE_INTERRUPTS();
+    for (;;)
+    {
+    }
+}
+
+
 /* USER CODE END Application */
 

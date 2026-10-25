@@ -4,7 +4,7 @@
 /* Use CubeMX's public HAL umbrella header: it loads hal_conf and the
  * enabled TIM module in the supported include order. */
 #include "stm32h7xx_hal.h"
-#include "supervisor_task.h"
+#include "../../Application/StateMachine/supervisor_task.h"
 
 /* Fail-closed default until an actual STM32 board port supplies real I/O. */
 bool application_supervisor_board_configure(SupervisorTaskConfig *config);

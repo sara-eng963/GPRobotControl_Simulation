@@ -7,7 +7,7 @@
  *
  * No physical board provider is supplied by default: fail closed.
  */
-#define GP_IPC_FREERTOS_BACKEND 1
+#define IPC_FREERTOS_BACKEND 1
 #include "application_supervisor.h"
 #include "board_commissioning.h"
 #include "fdcan_classic_backend.h"
@@ -28,7 +28,7 @@ extern TIM_HandleTypeDef htim3;
 static volatile uint32_t g_tim2_wraps;
 static volatile bool g_timing_running;
 
-static uint64_t gp_time_now_us(void *unused)
+static uint64_t time_now_us(void *unused)
 {
     (void)unused;
     taskENTER_CRITICAL();  /* Masks the configured TIM2 priority 5. */
@@ -42,7 +42,7 @@ static uint64_t gp_time_now_us(void *unused)
     return ((uint64_t)high << 32U) | (uint64_t)low;
 }
 
-static bool gp_timer_start(void *unused)
+static bool timer_start(void *unused)
 {
     (void)unused;
     if (g_timing_running || htim2.Instance != TIM2 ||
@@ -53,10 +53,10 @@ static bool gp_timer_start(void *unused)
     HAL_RCC_GetClockConfig(&clock, &flash_latency);
     /* Fail closed if the measured system clock configuration no longer
      * matches the CubeMX-generated 1 MHz counter / 2 ms cycle settings. */
-    if (HAL_RCC_GetPCLK1Freq() != 64000000U ||
-        clock.APB1CLKDivider != RCC_APB1_DIV1 ||
-        htim2.Init.Prescaler != 63U || htim2.Init.Period != UINT32_MAX ||
-        htim3.Init.Prescaler != 63U || htim3.Init.Period != 1999U)
+    if (HAL_RCC_GetPCLK1Freq() != 100000000U ||
+        clock.APB1CLKDivider != RCC_APB1_DIV2 ||
+        htim2.Init.Prescaler != 199U || htim2.Init.Period != UINT32_MAX ||
+        htim3.Init.Prescaler != 199U || htim3.Init.Period != 1999U)
         return false;
 
     g_tim2_wraps = 0U;
@@ -76,7 +76,7 @@ static bool gp_timer_start(void *unused)
     return true;
 }
 
-static uint32_t gp_timer_wait(void *unused, TickType_t timeout_ticks)
+static uint32_t timer_wait(void *unused, TickType_t timeout_ticks)
 {
     (void)unused;
     return (uint32_t)ulTaskNotifyTake(pdTRUE, timeout_ticks);
@@ -102,27 +102,27 @@ void application_supervisor_timer_period_elapsed_isr(
 /* An UNDEFINED weak function reference is NULL when no real board module
  * is linked. The header declaration intentionally remains strong so the
  * eventual board implementation is a normal strong definition. */
-extern bool gp_board_supply_commissioned_config(
-    GpBoardCommissioning *out) __attribute__((weak));
+extern bool board_supply_commissioned_config(
+    BoardCommissioning *out) __attribute__((weak));
 
 /* Persistent storage: do not place this large CANopen/robot config on the
  * 512-byte CubeMX defaultTask stack. Exactly one CM7 CANopen owner exists. */
-static GpBoardCommissioning g_board_candidate;
-static GpFdcanClassicBackend g_fdcan_state;
+static BoardCommissioning g_board_candidate;
+static FdcanClassicBackend g_fdcan_state;
 static CanBackend g_can_backend;
 static CanopenMaster g_canopen_master;
 static bool g_board_prepared;
 /* Stream consumer and wrapper must outlive every Supervisor state transition. */
-static GpTrajectoryExecutionBinding g_motion_binding;
+static TrajectoryExecutionBinding g_motion_binding;
 /* Persistent M7-side async validation client; no flash peripheral access.
  * A successful real M4 backend publication is a prerequisite for use. */
-static GpValidationM7Client g_validation_client;
+static ValidationM7Client g_validation_client;
 static PathValidationStorage g_validation_proxy;
-static bool gp_validation_enter_ready(void *unused)
+static bool validation_enter_ready(void *unused)
 {
     (void)unused;
-    return gp_validation_m4_idle(
-        (const GpValidationShared *)(uintptr_t)GP_SHARED_VALIDATION_BASE);
+    return validation_m4_idle(
+        (const ValidationShared *)(uintptr_t)SRAM4_VALIDATION_BASE);
 }
 
 
@@ -135,14 +135,14 @@ __attribute__((weak))
 bool application_supervisor_board_configure(SupervisorTaskConfig *config)
 {
     if (config == NULL || g_board_prepared ||
-        gp_board_supply_commissioned_config == NULL)
+        board_supply_commissioned_config == NULL)
         return false;
 
     memset(&g_board_candidate, 0, sizeof(g_board_candidate));
-    if (!gp_board_supply_commissioned_config(&g_board_candidate))
+    if (!board_supply_commissioned_config(&g_board_candidate))
         return false;
 
-    const GpBoardCommissioning *const board = &g_board_candidate;
+    const BoardCommissioning *const board = &g_board_candidate;
     const SupervisorIoServices *const io = &board->supervisor.io;
 
     /* All of these dependencies must be implemented by the physical
@@ -169,7 +169,7 @@ bool application_supervisor_board_configure(SupervisorTaskConfig *config)
      * allowed CANopen IDs using the supplied physical drive configuration. */
     memset(&g_fdcan_state, 0, sizeof(g_fdcan_state));
     memset(&g_can_backend, 0, sizeof(g_can_backend));
-    if (!gp_fdcan_classic_backend_open(
+    if (!fdcan_classic_backend_open(
             &g_fdcan_state, &g_can_backend, &hfdcan1))
         return false;
 
@@ -219,8 +219,8 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
         return false;
     }
 
-    GpIpcShared *const shared = (GpIpcShared *)(uintptr_t)GP_SHARED_IPC_BASE;
-    if (!gp_ipc_valid(shared) ||
+    IpcShared *const shared = (IpcShared *)(uintptr_t)SRAM4_IPC_BASE;
+    if (!ipc_valid(shared) ||
         (board->ipc != NULL && board->ipc != shared))
     {
         revoke_unstarted_board(board);
@@ -235,27 +235,27 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
     config.ipc = shared;
     /* The actual board provider remains mandatory: timing cannot spoof
      * safety conditions, a CAN transport or physical drive feedback. */
-    config.timing.monotonic_us = gp_time_now_us;
-    config.timing.start = gp_timer_start;
-    config.timing.wait_next = gp_timer_wait;
+    config.timing.monotonic_us = time_now_us;
+    config.timing.start = timer_start;
+    config.timing.wait_next = timer_wait;
     config.timing.context = NULL;
 
     /* Only the M7 Supervisor consumes SRAM4 samples. Preserve the real
      * board's wire-feed/retraction/stop callbacks and their own context.
      * No M4 producer is commissioned at this point; stream_ready must
      * remain false until a matching durable trajectory is published. */
-    GpTrajectoryShared *const trajectory =
-        (GpTrajectoryShared *)(uintptr_t)GP_SHARED_TRAJECTORY_BASE;
-    if (!gp_traj_execution_bind(&g_motion_binding, trajectory,
+    TrajectoryShared *const trajectory =
+        (TrajectoryShared *)(uintptr_t)SRAM4_TRAJECTORY_BASE;
+    if (!trajectory_execution_bind(&g_motion_binding, trajectory,
                                 config.validated_trajectory,
                                 config.path_execution_services))
     {
         revoke_unstarted_board(board);
         return false;
     }
-    GpValidationShared *const storage_ipc =
-        (GpValidationShared *)(uintptr_t)GP_SHARED_VALIDATION_BASE;
-    if (!gp_traj_execution_attach_playback(&g_motion_binding, storage_ipc))
+    ValidationShared *const storage_ipc =
+        (ValidationShared *)(uintptr_t)SRAM4_VALIDATION_BASE;
+    if (!trajectory_execution_attach_playback(&g_motion_binding, storage_ipc))
     {
         revoke_unstarted_board(board);
         return false;
@@ -265,9 +265,9 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
     /* A validation transaction cannot proceed without a real M4 storage
      * worker. A board declares capacity only; it may NOT inject synchronous
      * M7 storage callbacks or bypass the inter-core durable-commit protocol. */
-    const GpValidationShared *const validation =
-        (const GpValidationShared *)(uintptr_t)GP_SHARED_VALIDATION_BASE;
-    if (!gp_validation_m4_idle(validation) ||
+    const ValidationShared *const validation =
+        (const ValidationShared *)(uintptr_t)SRAM4_VALIDATION_BASE;
+    if (!validation_m4_idle(validation) ||
         config.validation_storage == NULL ||
         config.validation_storage->capacity_samples == 0U ||
         config.validation_storage->begin != NULL ||
@@ -282,13 +282,13 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
         revoke_unstarted_board(board);
         return false;
     }
-    gp_validation_m7_init(&g_validation_client,
-        (GpValidationShared *)(uintptr_t)GP_SHARED_VALIDATION_BASE);
-    g_validation_proxy = gp_validation_m7_storage(
+    validation_m7_init(&g_validation_client,
+        (ValidationShared *)(uintptr_t)SRAM4_VALIDATION_BASE);
+    g_validation_proxy = validation_m7_storage(
         &g_validation_client, config.validation_storage->capacity_samples);
     config.validation_storage = &g_validation_proxy;
     config.validation_run_in_worker = true;
-    config.validation_enter_ready = gp_validation_enter_ready;
+    config.validation_enter_ready = validation_enter_ready;
     config.validation_enter_context = NULL;
     if (!supervisor_task_init(&config) || !supervisor_task_start(4U))
     {

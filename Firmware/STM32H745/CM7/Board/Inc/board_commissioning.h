@@ -1,7 +1,7 @@
-#ifndef GP_BOARD_COMMISSIONING_H
-#define GP_BOARD_COMMISSIONING_H
+#ifndef BOARD_COMMISSIONING_H
+#define BOARD_COMMISSIONING_H
 
-#include "supervisor_task.h"
+#include "../../Application/StateMachine/supervisor_task.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -24,11 +24,11 @@ typedef struct {
     /* Explicit interlock integration must exist in the physical board port. */
     bool (*hardware_interlocks_verified)(void *context);
     void *hardware_interlock_context;
-} GpBoardCommissioning;
+} BoardCommissioning;
 
 /* Declared strong here. In the composition implementation, this symbol is
  * referenced weakly so an absent production board port links and fails closed.
  * No drive node IDs, safety status, or physical pin mapping are invented. */
-bool gp_board_supply_commissioned_config(GpBoardCommissioning *out);
+bool board_supply_commissioned_config(BoardCommissioning *out);
 
-#endif /* GP_BOARD_COMMISSIONING_H */
+#endif /* BOARD_COMMISSIONING_H */
