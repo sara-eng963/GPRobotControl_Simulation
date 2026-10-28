@@ -26,7 +26,7 @@ bool ipc_valid(const IpcShared *shared)
 static bool message_valid(const IpcMessage *message)
 {
     return message != NULL && message->type >= IPC_HMI_COMMAND &&
-           message->type <= IPC_DIAGNOSTICS;
+           message->type <= IPC_CM4_HELLO;
 }
 
 static bool ring_send(IpcRing *ring, const IpcMessage *message)

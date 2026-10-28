@@ -25,6 +25,7 @@
 #include "ipc_mailbox.h"
 #include "../../../Common/Inc/supervision_progress.h"
 #include "../../../Common/Inc/drive_restart_gate.h"
+#include "../../../Common/Inc/runtime_evidence.h"
 _Static_assert(IPC_ABI_VERSION == 2U, "Incorrect STM32 IPC ABI");
 
 #include "FreeRTOS.h"
@@ -151,6 +152,9 @@ typedef struct
      * NOT part of IPC ABI; independent of HMI commands. */
     DriveRestartBoardPort drive_restart_board;
     ResetDiagnostics reset_diagnostics;
+    /* Provisional P03 commissioning contracts; null => default denial. */
+    RuntimeSafetyPort safety_evidence;
+    RuntimeIpcSessionPort ipc_session;
 } SupervisorTaskConfig;
 
 /* Read-only diagnostics; state contexts remain owned by SupervisorTask. */

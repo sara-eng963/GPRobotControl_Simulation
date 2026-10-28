@@ -13,6 +13,7 @@
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "task.h"
+#include "../../../Common/Inc/runtime_evidence.h"
 
 #include <stddef.h>
 
@@ -48,6 +49,12 @@ static volatile bool cm4_refresh_candidate_eligible;
 static IpcShared *shared_ipc;
 static uint32_t last_status_sequence;
 static uint32_t next_command_sequence;
+static uint32_t current_m7_session;
+static bool hello_sent;
+static uint32_t pending_challenge;
+static uint32_t last_seen_challenge;
+static uint32_t last_sent_challenge;
+static uint32_t confirmed_challenge;
 static SupervisionProgressSample ipc_progress;
 
 static TickType_t age_ticks(uint32_t max_age_ms)
@@ -156,9 +163,39 @@ static bool receive_controller_status(void)
     for (uint32_t i = 0; i < APPLICATION_IPC_MAX_RECEIVES_PER_CYCLE; ++i) {
         if (!ipc_m4_receive(shared_ipc, &message)) break;
         StatusSnapshot snapshot = {0};
+        if (message.type != IPC_CONTROLLER_STATUS ||
+            message.data[7] == 0U ||
+            message.data[8] != RUNTIME_PEER_PROTOCOL_VERSION)
+            continue;
+        if (current_m7_session != 0U &&
+            message.data[7] != current_m7_session) {
+            /* A changed controller session invalidates all pending HMI.
+             * Last-sequence reset is safe only because CM7 rejects a
+             * command whose session token differs from its own. */
+            invalidate_pending = true;
+            last_status_sequence = 0U;
+            (void)xQueueReset(command_queue);
+        }
         if (!hmi_status_decode(&message, last_status_sequence,
                                   &snapshot.status))
             continue;
+        if (message.data[7] != current_m7_session) {
+            hello_sent = false;
+            pending_challenge = 0U;
+            last_seen_challenge = 0U;
+            last_sent_challenge = 0U;
+            confirmed_challenge = 0U;
+        }
+        current_m7_session = message.data[7];
+        if (hello_sent && message.data[9] != 0U &&
+            (last_seen_challenge == 0U ||
+             runtime_forward(message.data[9], last_seen_challenge))) {
+            last_seen_challenge = message.data[9];
+            pending_challenge = last_seen_challenge;
+        }
+        if (hello_sent && message.data[10] != 0U &&
+            message.data[10] == last_sent_challenge)
+            confirmed_challenge = message.data[10];
         StatusSnapshot prior = {0};
         const bool had_previous =
             xQueuePeek(status_queue, &prior, 0U) == pdPASS;
@@ -203,7 +240,8 @@ void application_ipc_service_run(void)
              * Queue reset affects only this CM4-local FreeRTOS queue. */
             pending = SUP_HMI_COMMAND_COUNT;
             (void)xQueueReset(command_queue);
-        } else {
+        } else if (current_m7_session != 0U && hello_sent &&
+                   confirmed_challenge != 0U) {
             if (pending == SUP_HMI_COMMAND_COUNT)
                 (void)xQueueReceive(command_queue, &pending, 0U);
 
@@ -220,6 +258,8 @@ void application_ipc_service_run(void)
                     ((uint64_t)xTaskGetTickCount() * 1000ULL) /
                     (uint64_t)configTICK_RATE_HZ);
                 command.data[0] = (uint32_t)pending;
+                command.data[1] = current_m7_session;
+                command.data[2] = confirmed_challenge;
                 if (ipc_m4_send(shared_ipc, &command)) {
                     next_command_sequence = command.sequence;
                     pending = SUP_HMI_COMMAND_COUNT;
@@ -235,6 +275,43 @@ void application_ipc_service_run(void)
         supervision_record_completion(&ipc_progress, 1U,
             (uint32_t)xTaskGetTickCount(), SUP_PROGRESS_SERVICE, true, true);
         taskEXIT_CRITICAL();
+        /* Every CM4 APPLICATION BOOT sends HELLO before progress/HMI.
+         * A full mailbox retries, and cannot silently skip HELLO. */
+        if (!hello_sent && current_m7_session != 0U) {
+            IpcMessage hello = {0};
+            hello.type = IPC_CM4_HELLO;
+            hello.sequence = 1U;
+            hello.data[0] = current_m7_session;
+            hello.data[1] = RUNTIME_PEER_PROTOCOL_VERSION;
+            hello.data[2] = 1U;
+            hello_sent = ipc_m4_send(shared_ipc, &hello);
+        }
+        /* Reply once to a challenge SEEN BEFORE this completed service
+         * cycle. CM7 checks its own issue-to-receipt round-trip age.
+         * No free-running CM4 progress floods the bounded mailbox. */
+        if (hello_sent && pending_challenge != 0U &&
+            pending_challenge != last_sent_challenge) {
+            SupervisionProgressSample sample = {0};
+            if (application_ipc_service_get_progress(&sample) &&
+                sample.completed_ok && sample.response_ok &&
+                sample.mode == SUP_PROGRESS_SERVICE) {
+                IpcMessage message = {0};
+                message.type = IPC_CM4_PROGRESS;
+                message.sequence = sample.sequence;
+                message.timestamp_ms = sample.completed_tick_ms; /* CM4-local */
+                message.data[0] = current_m7_session;
+                message.data[1] = RUNTIME_PEER_PROTOCOL_VERSION;
+                message.data[2] = (uint32_t)sample.mode;
+                message.data[3] = (uint32_t)sample.completed_ok;
+                message.data[4] = (uint32_t)sample.valid;
+                message.data[5] = (uint32_t)sample.response_ok;
+                message.data[6] = pending_challenge;
+                if (ipc_m4_send(shared_ipc, &message)) {
+                    last_sent_challenge = pending_challenge;
+                    pending_challenge = 0U;
+                }
+            }
+        }
         vTaskDelayUntil(&last_wake, APPLICATION_IPC_PERIOD_TICKS);
     }
 }

@@ -209,8 +209,8 @@ def main():
                 "                    10000U)) {"),
             "P02 BOOT ignores motion permission": (
                 SM / "supervisor_task.c",
-                ".safety_valid = s->statusValid && s->motionPermitted,",
-                ".safety_valid = s->statusValid,"),
+                ".safety_valid = s->statusValid && s->motionPermitted &&",
+                ".safety_valid = s->statusValid &&"),
             "P02 queue overload fault omitted": (
                 SM / "supervisor_task.c",
                 "        emit_step_failure(context, 0xE016U);",

@@ -48,10 +48,24 @@ TaskHandle_t xTaskGetCurrentTaskHandle(void) { return &ctx; }
 
 /* All unused RTOS functions are discarded with --gc-sections. */
 bool ipc_valid(const IpcShared *ipc) { return ipc != NULL; }
+static IpcMessage p03_last_m7_status;
 bool ipc_m7_send(IpcShared *ipc, const IpcMessage *msg)
-{ (void)ipc; (void)msg; return false; }
+{ (void)ipc; p03_last_m7_status = *msg; return true; }
+static IpcMessage p03_ipc_frames[16];
+static unsigned p03_ipc_read, p03_ipc_write;
+#ifndef ALIGNMENT_DESKTOP
+static void p03_ipc_push(IpcMessage msg)
+{
+    if (p03_ipc_write < 16U) p03_ipc_frames[p03_ipc_write++] = msg;
+}
+#endif
 bool ipc_m7_receive(IpcShared *ipc, IpcMessage *msg)
-{ (void)ipc; (void)msg; return false; }
+{
+    (void)ipc;
+    if (p03_ipc_read >= p03_ipc_write) return false;
+    *msg = p03_ipc_frames[p03_ipc_read++];
+    return true;
+}
 
 static bool owner(void *unused) { (void)unused; return true; }
 static bool stop(bool *out, void *unused)
@@ -64,6 +78,16 @@ static bool read_sample(uint32_t index, PvExecutionSample *out, void *unused)
 static bool yes(void *unused) { (void)unused; return true; }
 static StateStepResult complete(void *unused) { (void)unused; return STATE_STEP_COMPLETE; }
 
+#ifndef ALIGNMENT_DESKTOP
+static uint32_t p03_fixture_sequence;
+static bool p03_fixture_verify(void *unused,
+    const RobotSafetySnapshot *s, uint32_t *session, uint32_t *sequence)
+{
+    (void)unused; (void)s;
+    *session = 51U; *sequence = ++p03_fixture_sequence;
+    return true;
+}
+#endif
 static void setup(RobotStateId state)
 {
     memset(&ctx, 0, sizeof(ctx));
@@ -71,6 +95,9 @@ static void setup(RobotStateId state)
     memset(&trajectory, 0, sizeof(trajectory));
     memset(&frozen_program, 0, sizeof(frozen_program));
     memset(&g_timing, 0, sizeof(g_timing));
+#ifndef ALIGNMENT_DESKTOP
+    p03_ipc_read = p03_ipc_write = 0U;
+#endif
     state_machine_init(&ctx.machine);
     state_machine_enable_unified_execution(&ctx.machine);
     ctx.machine.activeState = state;
@@ -110,6 +137,11 @@ static void setup(RobotStateId state)
         .approach_config=&approach_config, .approach_services=&approach_services,
         .homing_config=&homing_config, .paused_services=&paused_services,
         .fault_services=&fault_services, .emergency_stop_services=&emergency_services};
+#ifndef ALIGNMENT_DESKTOP
+    ctx.config.safety_evidence = (RuntimeSafetyPort){
+        .verify=p03_fixture_verify, .max_age_ms=100U };
+    p03_fixture_sequence = 0U;
+#endif
     state_teaching_enter(&ctx.teaching, &teaching_config, 42U);
     ctx.submitted_program.program_id = 42U;
     frozen_program.program_id = 42U;
@@ -666,6 +698,17 @@ static void p02_startup_setup(void)
     ctx.config.drive_restart_board.context = NULL;
     p02_authorization_press = false;
     p02_motion_ready_master(400U);
+    /* Explicit test evidence, never the physical default. */
+    now_tick = 400U;
+    ctx.machine.safety.timestampMs = 400U;
+    ctx.safety_evidence = (RuntimeSafetyEvidence){
+        .accepted=true, .producer_session=51U, .last_sequence=1U,
+        .last_source_ms=400U, .last_receipt_ms=400U };
+    p03_fixture_sequence = 1U;
+    ctx.peer_evidence = (RuntimePeerEvidence){
+        .accepted=true, .expected_session=71U, .hello_seen=true,
+        .last_sequence=1U, .have_sequence=true, .last_response_ms=400U,
+        .last_accepted_challenge=1U };
     master.drive_command_permission = false;
 }
 static bool p02_invalid_board_read(void *unused, SupervisorInputSnapshot *out)
@@ -699,6 +742,8 @@ static void test_p02_authorization(void)
     SupervisorMessage boot_safety = {0};
     boot_safety.type = SUPERVISOR_MESSAGE_SAFETY;
     boot_safety.data.safety = ctx.machine.safety;
+    boot_safety.data.safety.timestampMs = 401U;
+    now_tick = 401U;
     handle_message(&ctx, &boot_safety);
     CHECK(ctx.machine.activeState == ROBOT_STATE_BOOT);
     CHECK(ctx.restart_gate.authorized && master.drive_command_permission);
@@ -1012,6 +1057,177 @@ static void test_p02_queue_and_board_failure(void)
     check_revoked();
     puts("PASS: P02 adverse queued order, bounded overload, raw board failure");
 }
+/* P03: production CM7 pre-dispatch cycle, FIFO frames and C2B gate. */
+static bool p03_good_board_inputs(void *unused,SupervisorInputSnapshot *out)
+{
+    (void)unused;
+    *out=(SupervisorInputSnapshot){.valid=true};
+    return true;
+}
+static void p03_prepare_pre_dispatch(void)
+{
+    ctx.config.io.read_inputs=p03_good_board_inputs;
+    ctx.config.io.context=NULL;
+    p02_queue_reset();
+}
+
+static void p03_ready_evidence(SupervisorTaskContext *c,uint32_t now)
+{
+    c->config.safety_evidence=(RuntimeSafetyPort){
+        .verify=p03_fixture_verify,.max_age_ms=100U};
+    c->machine.safety.timestampMs=now;
+    c->safety_evidence=(RuntimeSafetyEvidence){.accepted=true,
+        .producer_session=51U,.last_sequence=1U,
+        .last_source_ms=now,.last_receipt_ms=now};
+    c->peer_evidence=(RuntimePeerEvidence){.expected_session=71U,
+        .hello_seen=true,.accepted=true,.last_sequence=10U,.have_sequence=true,
+        .last_response_ms=now,.last_accepted_challenge=1U};
+}
+static IpcMessage p03_hello(uint32_t session)
+{
+    IpcMessage m={0};m.type=IPC_CM4_HELLO;m.sequence=1U;
+    m.data[0]=session;m.data[1]=RUNTIME_PEER_PROTOCOL_VERSION;
+    m.data[2]=1U;return m;
+}
+static IpcMessage p03_progress(uint32_t session,uint32_t seq,uint32_t challenge)
+{
+    IpcMessage m={0};m.type=IPC_CM4_PROGRESS;m.sequence=seq;
+    m.data[0]=session;m.data[1]=RUNTIME_PEER_PROTOCOL_VERSION;
+    m.data[2]=SUP_PROGRESS_SERVICE;m.data[3]=1U;
+    m.data[4]=1U;m.data[5]=1U;m.data[6]=challenge;return m;
+}
+static void test_p03_fault_evidence(void)
+{
+    /* BOOT requires first accepted safety snapshot + HELLO + timely
+     * post-work response to a CM7 issued challenge + physical release/press. */
+    p02_startup_setup();
+    /* P03 starts without the peer evidence seeded by the P02 fixture.
+     * HELLO and fresh challenge completion must establish it anew. */
+    ctx.peer_evidence=(RuntimePeerEvidence){.expected_session=71U};
+    ctx.safety_evidence.accepted=false;
+    DriveRestartSystemSample sample=supervisor_restart_system_sample(&ctx,400U);
+    CHECK(!sample.safety_valid && !sample.ipc_valid);
+    p03_ipc_push(p03_hello(71U));
+    consume_m4_ipc(&ctx);
+    CHECK(ctx.peer_evidence.hello_seen);
+    CHECK(!runtime_peer_fresh(&ctx.peer_evidence,400U));
+    now_tick=400U;
+    publish_m7_ipc_status(&ctx);
+    CHECK(ctx.peer_evidence.challenge_outstanding);
+    const uint32_t challenge=ctx.peer_evidence.challenge_pending;
+    CHECK(p03_last_m7_status.data[9]==challenge);
+    CHECK(p03_last_m7_status.data[8]==RUNTIME_PEER_PROTOCOL_VERSION);
+    p03_ipc_push(p03_progress(71U,2U,challenge));
+    now_tick=402U;
+    consume_m4_ipc(&ctx);
+    CHECK(runtime_peer_fresh(&ctx.peer_evidence,402U));
+    SupervisorMessage safety={0};safety.type=SUPERVISOR_MESSAGE_SAFETY;
+    safety.data.safety=ctx.machine.safety;
+    safety.data.safety.statusValid=true;
+    safety.data.safety.motionPermitted=true;
+    safety.data.safety.communicationHealthy=true;
+    safety.data.safety.drivesReady=false;
+    safety.data.safety.timestampMs=402U;
+    handle_message(&ctx,&safety);
+    CHECK(ctx.safety_evidence.accepted);
+    sample=supervisor_restart_system_sample(&ctx,402U);
+    CHECK(sample.safety_valid && sample.ipc_valid && sample.state_ready);
+    p02_authorization_press=false;
+    CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
+          &ctx.config.reset_diagnostics,&ctx.config.drive_restart_board,&sample));
+    p02_authorization_press=true;
+    CHECK(drive_restart_gate_tick(&ctx.restart_gate,
+          &ctx.config.reset_diagnostics,&ctx.config.drive_restart_board,&sample));
+    /* A HELLO in the same CM7 session means CM4 restarted. Even a high
+     * progress sequence cannot outrun this explicit boot ordering fence. */
+    p03_ipc_push(p03_hello(71U));
+    consume_m4_ipc(&ctx);
+    CHECK(ctx.machine.activeState==ROBOT_STATE_FAULT);
+    check_revoked();
+    run_active_state(&ctx);
+    CHECK(ctx.fault_response_step_ok);
+    p03_ipc_push(p03_progress(71U,UINT32_MAX,challenge));
+    consume_m4_ipc(&ctx);
+    CHECK(ctx.restart_gate.inhibited && !master.drive_command_permission);
+    policy(SUPERVISOR_EVENT_RESET);
+    CHECK(ctx.machine.activeState==ROBOT_STATE_FAULT);
+
+    for (unsigned i=0;i<2U;i++) {
+        RobotStateId state=i==0U?ROBOT_STATE_APPROACH:ROBOT_STATE_PATH_EXECUTION;
+        setup(state);
+        p03_ready_evidence(&ctx,100U);
+        p03_prepare_pre_dispatch();
+        p02_motion_ready_master(100U);
+        now_tick=100U;
+        supervisor_pre_dispatch_cycle(&ctx);
+        CHECK(ctx.machine.activeState==state);
+        now_tick=201U;
+        supervisor_pre_dispatch_cycle(&ctx);
+        CHECK(ctx.machine.activeState==ROBOT_STATE_FAULT);
+        CHECK(ctx.machine.activeFaultCode==state_error_code(state,0xE017U));
+        check_revoked();
+        run_active_state(&ctx);
+        CHECK(ctx.fault_response_step_ok);
+        ctx.safety_evidence.last_source_ms=201U;
+        ctx.safety_evidence.last_receipt_ms=201U;
+        ctx.peer_evidence.last_response_ms=201U;
+        supervisor_runtime_evidence_check(&ctx,202U);
+        CHECK(ctx.restart_gate.inhibited);
+    }
+    for (unsigned i=0;i<2U;i++) {
+        RobotStateId state=i==0U?ROBOT_STATE_APPROACH:ROBOT_STATE_PATH_EXECUTION;
+        setup(state);
+        p03_ready_evidence(&ctx,100U);
+        ctx.peer_evidence.last_response_ms=49U;
+        p03_prepare_pre_dispatch();
+        p02_motion_ready_master(100U);
+        now_tick=100U;
+        supervisor_pre_dispatch_cycle(&ctx);
+        CHECK(ctx.machine.activeState==ROBOT_STATE_FAULT);
+        CHECK(ctx.machine.activeFaultCode==state_error_code(state,0xE018U));
+        check_revoked();
+        run_active_state(&ctx);
+        CHECK(ctx.fault_response_step_ok);
+    }
+    /* Delayed progress cannot renew authority after the challenge deadline. */
+    setup(ROBOT_STATE_APPROACH);
+    p03_ready_evidence(&ctx,100U);
+    ctx.peer_evidence.challenge_pending=2U;
+    ctx.peer_evidence.challenge_issued_ms=100U;
+    ctx.peer_evidence.challenge_outstanding=true;
+    p03_ipc_push(p03_progress(71U,11U,2U));
+    p03_prepare_pre_dispatch();
+    now_tick=131U;supervisor_pre_dispatch_cycle(&ctx);
+    CHECK(ctx.machine.activeState==ROBOT_STATE_FAULT);
+    check_revoked();
+
+    /* Wrong/old CM7 session HMI commands cannot become Supervisor events. */
+    setup(ROBOT_STATE_IDLE);
+    p03_ready_evidence(&ctx,400U);
+    ctx.config.ipc=(IpcShared*)&ctx;
+    IpcMessage cmd={0};cmd.type=IPC_HMI_COMMAND;cmd.sequence=1;
+    cmd.data[0]=SUP_HMI_HOME;cmd.data[1]=70;cmd.data[2]=1;
+    p03_ipc_push(cmd);
+    now_tick=400U;consume_m4_ipc(&ctx);
+    CHECK(ctx.last_m4_ipc_sequence==0U);
+    cmd.data[1]=71;cmd.data[2]=0;
+    p03_ipc_push(cmd);consume_m4_ipc(&ctx);
+    CHECK(ctx.last_m4_ipc_sequence==0U);
+    /* P02 backlog still revokes BEFORE any command dispatch in cycle path. */
+    setup(ROBOT_STATE_TEACHING);
+    p03_ready_evidence(&ctx,400U);
+    p03_prepare_pre_dispatch();
+    p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE+1U);
+    now_tick=400U;
+    supervisor_pre_dispatch_cycle(&ctx);
+    CHECK(ctx.machine.activeState==ROBOT_STATE_FAULT);
+    CHECK(ctx.machine.activeFaultCode==
+          state_error_code(ROBOT_STATE_TEACHING,0xE016U));
+    check_revoked();
+    run_active_state(&ctx);
+    CHECK(ctx.fault_response_step_ok);
+    puts("PASS: P03 production CM7 BOOT, expiry, HELLO reset, delayed progress, HMI replay");
+}
 #endif
 
 int main(void)
@@ -1032,6 +1248,7 @@ int main(void)
     test_p02_authorization();
     test_p02_containment();
     test_p02_queue_and_board_failure();
+    test_p03_fault_evidence();
 #endif
     puts("PASS: exact production Supervisor behavioral regressions (mock scheduling)");
     return 0;

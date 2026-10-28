@@ -115,6 +115,8 @@ typedef struct
     bool fault_response_step_ok;
     SupervisionProgressSample progress;
     DriveRestartGate restart_gate;
+    RuntimeSafetyEvidence safety_evidence;
+    RuntimePeerEvidence peer_evidence;
 
     /* Only the validation worker mutates 'validation' or flash storage when
      * async mode is enabled. Supervisor reads exclusively a copied result.
@@ -736,6 +738,8 @@ static void publish_drive_snapshot(SupervisorTaskContext *context)
     taskEXIT_CRITICAL();
 }
 
+/* P03: both explicit CM4 protocol rejection and timeout fault here. */
+static void emit_step_failure(SupervisorTaskContext *context, uint32_t detail);
 /* Only M7 consumes the M4->M7 ring. No shared FreeRTOS queue or mutex. */
 static void consume_m4_ipc(SupervisorTaskContext *context)
 {
@@ -747,6 +751,30 @@ static void consume_m4_ipc(SupervisorTaskContext *context)
          * by run_active_state() in the current/next Supervisor cycle. */
         if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
         if (!ipc_m7_receive(context->config.ipc, &msg)) break;
+        if (msg.type == IPC_CM4_HELLO) {
+            if (!runtime_peer_on_hello(&context->peer_evidence, &msg) &&
+                context->restart_gate.authorized &&
+                context->machine.activeState != ROBOT_STATE_FAULT &&
+                context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+                emit_step_failure(context, 0xE018U);
+            continue;
+        }
+        if (msg.type == IPC_CM4_PROGRESS) {
+            if (!runtime_peer_accept(&context->peer_evidence, &msg,
+                                     supervisor_now_ms()) &&
+                context->restart_gate.authorized &&
+                context->machine.activeState != ROBOT_STATE_FAULT &&
+                context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+                emit_step_failure(context, 0xE018U);
+            continue;
+        }
+        /* Old CM7 sessions and prior challenge generations cannot replay HMI. */
+        if (msg.type != IPC_HMI_COMMAND ||
+            !runtime_peer_fresh(&context->peer_evidence, supervisor_now_ms()) ||
+            msg.data[1] != context->peer_evidence.expected_session ||
+            msg.data[2] == 0U ||
+            msg.data[2] != context->peer_evidence.last_accepted_challenge)
+            continue;
         if (msg.type != IPC_HMI_COMMAND || msg.sequence == 0U ||
             (int32_t)(msg.sequence - context->last_m4_ipc_sequence) <= 0 ||
             msg.data[0] >= (uint32_t)SUP_HMI_COMMAND_COUNT) continue;
@@ -773,6 +801,13 @@ static void publish_m7_ipc_status(SupervisorTaskContext *context)
     msg.data[4] = (uint32_t)context->machine.safety.estopActive;
     msg.data[5] = context->last_m4_ipc_sequence; /* receipt, not acceptance */
     msg.data[6] = context->machine.rejectedEventCount;
+    msg.data[7] = context->peer_evidence.expected_session;
+    msg.data[8] = RUNTIME_PEER_PROTOCOL_VERSION;
+    /* One outstanding CM7-local round-trip; retransmit same nonce. */
+    uint32_t challenge = 0U;
+    if (runtime_peer_challenge(&context->peer_evidence, now, &challenge))
+        msg.data[9] = challenge;
+    msg.data[10] = context->peer_evidence.last_accepted_challenge;
     (void)ipc_m7_send(context->config.ipc, &msg);
     context->last_m7_ipc_status_ms = now;
     context->m7_ipc_status_sent = true;
@@ -877,12 +912,15 @@ static DriveRestartSystemSample supervisor_restart_system_sample(
             context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP &&
             context->machine.faultSeverity == ROBOT_FAULT_SEVERITY_NONE &&
             (boot || s->drivesReady),
-        .safety_valid = s->statusValid && s->motionPermitted,
+        .safety_valid = s->statusValid && s->motionPermitted &&
+            runtime_safety_fresh(&context->safety_evidence,
+                                 &context->config.safety_evidence, now_ms),
         .estop_clear = !s->estopActive,
         .protective_stop_clear = !s->protectiveStopActive,
         .fault_clear = !s->globalFaultActive,
         .ipc_valid = context->config.ipc != NULL &&
-                     ipc_valid(context->config.ipc),
+                     ipc_valid(context->config.ipc) &&
+                     runtime_peer_fresh(&context->peer_evidence, now_ms),
         .preenable_status_checked = context->boot.preenable_status_checked
     };
     return sample;
@@ -974,8 +1012,41 @@ static void handle_message(
 
         case SUPERVISOR_MESSAGE_SAFETY:
         {
-            state_machine_update_safety(&context->machine,
-                                        &message->data.safety);
+            const RobotSafetySnapshot *incoming = &message->data.safety;
+            /* An unverified unsafe observation may still ASSERT a stop;
+             * it can never clear one. Preserve E-stop precedence. */
+            if (incoming->estopActive &&
+                context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP) {
+                const SupervisorEvent stop = make_result_event(
+                    SUPERVISOR_EVENT_ESTOP_ASSERTED,
+                    context->machine.activeState,
+                    ROBOT_FAULT_SEVERITY_EMERGENCY,
+                    ROBOT_FAULT_CODE_EMERGENCY_STOP);
+                handle_policy_event(context, &stop);
+                return;
+            }
+            if (incoming->protectiveStopActive &&
+                context->machine.activeState != ROBOT_STATE_FAULT &&
+                context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP) {
+                const SupervisorEvent stop = make_result_event(
+                    SUPERVISOR_EVENT_PROTECTIVE_STOP_ASSERTED,
+                    context->machine.activeState,
+                    ROBOT_FAULT_SEVERITY_PROTECTIVE_STOP,
+                    ROBOT_FAULT_CODE_PROTECTIVE_STOP);
+                handle_policy_event(context, &stop);
+                return;
+            }
+            if (!runtime_safety_accept(&context->safety_evidence,
+                                       &context->config.safety_evidence,
+                                       incoming, supervisor_now_ms())) {
+                /* Do not replace the last trusted sample with replay. */
+                if (context->restart_gate.authorized &&
+                    context->machine.activeState != ROBOT_STATE_FAULT &&
+                    context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+                    emit_step_failure(context, 0xE017U);
+                return;
+            }
+            state_machine_update_safety(&context->machine, incoming);
             const RobotSafetySnapshot *s = &context->machine.safety;
             const RobotStateId state = context->machine.activeState;
             SupervisorEvent event = {0};
@@ -1413,6 +1484,31 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
      * No candidate extraction, motor dispatch or safety authority. */
 }
 
+/* P03: called on EVERY 500 Hz cycle before any active-state dispatch.
+ * Fault service is never conditional on additional peer traffic. */
+static void supervisor_runtime_evidence_check(
+    SupervisorTaskContext *context, uint32_t now_ms)
+{
+    if (!context->restart_gate.authorized ||
+        context->machine.activeState == ROBOT_STATE_FAULT ||
+        context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)
+        return;
+    if (!runtime_safety_fresh(&context->safety_evidence,
+                              &context->config.safety_evidence, now_ms))
+        emit_step_failure(context, 0xE017U);
+    else if (!runtime_peer_fresh(&context->peer_evidence, now_ms))
+        emit_step_failure(context, 0xE018U);
+}
+
+static void supervisor_pre_dispatch_cycle(SupervisorTaskContext *context)
+{
+    supervisor_sample_inputs(context);
+    supervisor_process_message_batch(context);
+    consume_m4_ipc(context);
+    supervisor_runtime_evidence_check(context, supervisor_now_ms());
+    (void)supervisor_motion_containment_check(context, supervisor_now_ms(), false);
+}
+
 static void supervisor_task_entry(void *argument)
 {
     SupervisorTaskContext *context = argument;
@@ -1474,15 +1570,8 @@ static void supervisor_task_entry(void *argument)
         const uint64_t cycle_start_us =
             hardware_timed ? supervisor_now_us() : UINT64_C(0);
         TRACE_BEGIN(TIMING_SUPERVISOR);
-        /* Read and validate inputs before consuming queued motion messages. */
-        supervisor_sample_inputs(context);
-        supervisor_process_message_batch(context);
-
-        consume_m4_ipc(context);
-        /* One bounded preflight per cycle: no state module may issue a new
-         * coordinated motion command after a monitored network/axis loss. */
-        (void)supervisor_motion_containment_check(
-            context, supervisor_now_ms(), false);
+        /* P03: actual production pre-dispatch cycle; tests call the same function. */
+        supervisor_pre_dispatch_cycle(context);
 
         /*
          * Keep producing Node 127's heartbeat even while PAUSED, FAULT,
@@ -1684,6 +1773,13 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
     memset(&g_supervisor, 0, sizeof(g_supervisor));
     drive_restart_gate_init(&g_supervisor.restart_gate);
     g_supervisor.config = *config;
+    /* A unique CM7 boot session must be issued by a real provider.
+     * Zero remains default-denied; no synthetic tick-derived token. */
+    uint32_t boot_session = 0U;
+    if (config->ipc_session.issue != NULL &&
+        !runtime_session_issue(&config->ipc_session, &boot_session))
+        return false;
+    g_supervisor.peer_evidence.expected_session = boot_session;
     g_timing = config->timing;
     g_supervisor.next_program_id = config->first_program_id;
     g_supervisor.entered_state = ROBOT_STATE_COUNT;

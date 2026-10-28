@@ -71,7 +71,7 @@ bool ipc_valid(const IpcShared *shared)
 static bool valid_message(const IpcMessage *msg)
 {
     return msg != NULL && msg->type >= IPC_HMI_COMMAND &&
-           msg->type <= IPC_DIAGNOSTICS;
+           msg->type <= IPC_CM4_HELLO;
 }
 
 static bool send_message(const IpcShared *shared, MessageBufferHandle_t handle,

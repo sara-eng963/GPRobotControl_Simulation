@@ -710,7 +710,7 @@ static void publish_drive_snapshot(SupervisorTaskContext *context)
 static void consume_m4_ipc(SupervisorTaskContext *context)
 {
     if (context->config.ipc == NULL) return;
-    IpcMessage msg;
+    IpcMessage msg = {0};
     for (uint32_t count = 0U; count < 8U; ++count) {
         /* The teaching state has ONE pending event slot. Do not consume
          * another M4 command until the previous teaching event is handled

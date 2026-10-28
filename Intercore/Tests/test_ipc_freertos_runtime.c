@@ -145,6 +145,28 @@ static void unit_checks(void)
     require(ipc_m7_receive(&ipc_shared, &rx) && rx.sequence == 7U,
             "second duplicate read");
     require(pending(0U) == 0U, "duplicate test drained");
+
+    tx = (IpcMessage){ .type = IPC_CM4_HELLO, .sequence = 1U };
+    tx.data[0] = 71U;
+    require(ipc_m4_send(&ipc_shared, &tx), "P03 HELLO accepted");
+    tx = (IpcMessage){ .type = IPC_CM4_PROGRESS, .sequence = 2U };
+    tx.data[6] = 123U;
+    require(ipc_m4_send(&ipc_shared, &tx), "P03 progress accepted");
+
+    require(ipc_m7_receive(&ipc_shared, &rx), "P03 HELLO received");
+    require(rx.type == IPC_CM4_HELLO &&
+            rx.sequence == 1U && rx.data[0] == 71U,
+            "P03 HELLO preserved");
+    require(ipc_m7_receive(&ipc_shared, &rx), "P03 progress received");
+    require(rx.type == IPC_CM4_PROGRESS &&
+            rx.sequence == 2U && rx.data[6] == 123U,
+            "P03 progress preserved");
+    require(pending(0U) == 0U, "P03 mailbox drained");
+
+    tx.type = IPC_CM4_HELLO + 1U;
+    require(!ipc_m4_send(&ipc_shared, &tx),
+            "P03 unknown type rejected");
+
 }
 
 static void worker_task(void *parameter)

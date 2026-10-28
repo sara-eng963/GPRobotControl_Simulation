@@ -62,6 +62,25 @@ int main(void)
     CHECK(!ipc_m4_send(&shared, NULL));
     IpcMessage bad = { .type = 99U };
     CHECK(!ipc_m4_send(&shared, &bad));
+
+    IpcMessage hello = { .type = IPC_CM4_HELLO, .sequence = 1U };
+    hello.data[0] = 71U;
+    IpcMessage progress = { .type = IPC_CM4_PROGRESS, .sequence = 2U };
+    progress.data[6] = 123U;
+
+    CHECK(ipc_m4_send(&shared, &hello));
+    CHECK(ipc_m4_send(&shared, &progress));
+    CHECK(ipc_m7_receive(&shared, &result));
+    CHECK(result.type == IPC_CM4_HELLO &&
+          result.sequence == 1U && result.data[0] == 71U);
+    CHECK(ipc_m7_receive(&shared, &result));
+    CHECK(result.type == IPC_CM4_PROGRESS &&
+          result.sequence == 2U && result.data[6] == 123U);
+    CHECK(!ipc_m7_receive(&shared, &result));
+
+    bad.type = IPC_CM4_HELLO + 1U;
+    CHECK(!ipc_m4_send(&shared, &bad));
+
     for (uint32_t i=0U; i<IPC_RING_CAPACITY; ++i) {
         input.sequence = i + 1U;
         CHECK(ipc_m4_send(&shared, &input));

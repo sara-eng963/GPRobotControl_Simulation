@@ -28,7 +28,10 @@ typedef enum {
     IPC_CONTROLLER_STATUS = 2,
     IPC_STORAGE_REQUEST = 3,
     IPC_STORAGE_RESULT = 4,
-    IPC_DIAGNOSTICS = 5
+    IPC_DIAGNOSTICS = 5,
+    /* P03 protocol v2. Fixed 60-byte application ABI is retained. */
+    IPC_CM4_PROGRESS = 6,
+    IPC_CM4_HELLO = 7
 } IpcType;
 
 typedef struct {
