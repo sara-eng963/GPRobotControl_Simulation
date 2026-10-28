@@ -10,6 +10,7 @@
 #define IPC_FREERTOS_BACKEND 1
 #include "application_supervisor.h"
 #include "board_commissioning.h"
+#include "../../../../../HandGuiding/admittance_matlab_reference.h"
 #include "fdcan_classic_backend.h"
 #include "ipc_mailbox.h"
 #include "sram4_memory_map.h"
@@ -170,10 +171,23 @@ bool application_supervisor_board_configure(SupervisorTaskConfig *config)
 
     /* Explicit opt-in only; no F/T sample generator or permissive fallback.
      * An invalid adapter config prevents board startup. */
-    if (board->guidance_dry_run_config != NULL &&
-        !hand_guiding_dry_run_init(&g_guidance_observer,
-                                   board->guidance_dry_run_config))
+    if (board->guidance_use_matlab_reference_md &&
+        board->guidance_dry_run_config == NULL)
         return false;
+    if (board->guidance_dry_run_config != NULL) {
+        if (!hand_guiding_dry_run_init(&g_guidance_observer,
+                                       board->guidance_dry_run_config))
+            return false;
+        if (board->guidance_use_matlab_reference_md &&
+            !admittance_matlab_reference_md(
+                &g_guidance_observer.config.pipeline_config.admittance))
+            return false;
+        /* A reference profile never provides speed, acceleration or timing
+         * limits; the commissioned provider must specify those separately. */
+        if (!admittance_params_valid(
+                &g_guidance_observer.config.pipeline_config.admittance))
+            return false;
+    }
 
     /* No made-up motor node IDs: the coordinator checks uniqueness and
      * allowed CANopen IDs using the supplied physical drive configuration. */
