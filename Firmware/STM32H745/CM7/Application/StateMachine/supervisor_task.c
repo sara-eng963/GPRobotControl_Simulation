@@ -96,6 +96,8 @@ typedef struct
     uint32_t timer_timeouts;
     uint32_t timer_overruns;
     uint32_t timer_max_cycle_us;
+    uint32_t guidance_dry_run_ok_cycles;
+    uint32_t guidance_dry_run_rejected_cycles;
 
     /* Only the validation worker mutates 'validation' or flash storage when
      * async mode is enabled. Supervisor reads exclusively a copied result.
@@ -971,6 +973,67 @@ static void run_active_state(SupervisorTaskContext *context)
     }
 }
 
+/* Observation-only Stage 4: runs within the M7 Supervisor owner task.
+ * All feedback is copied, and this function has NO motor-target dispatch.
+ * The read_sample callback is supplied explicitly by the commissioned board;
+ * the firmware deliberately has no synthetic F/T provider. */
+static void service_guidance_dry_run(SupervisorTaskContext *context)
+{
+    const SupervisorGuidanceDryRunPort *port =
+        &context->config.guidance_dry_run;
+    if (port->tick == NULL) return;
+    if (context->machine.activeState != ROBOT_STATE_TEACHING ||
+        !context->teaching_runtime.manual_guidance_active) {
+        port->stop(port->context);
+        return;
+    }
+
+    const RobotSafetySnapshot *safety = &context->machine.safety;
+    SupervisorGuidanceDryRunCycle cycle = {0};
+    cycle.now_us = supervisor_now_us();
+    cycle.now_ms = (uint32_t)(cycle.now_us / UINT64_C(1000));
+    cycle.feedback_healthy =
+        joint_drive_port_healthy(&context->joint_drive, cycle.now_ms);
+    for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis) {
+        if (!joint_drive_port_read_axis(&context->joint_drive, axis,
+                                        &cycle.feedback[axis]))
+            cycle.feedback_healthy = false;
+    }
+    cycle.scales = context->config.avatar_position_scales;
+    cycle.robot = context->config.robot;
+    cycle.period_s = (double)context->config.period_ticks /
+                     (double)configTICK_RATE_HZ;
+    cycle.runtime_timestamp_ms = context->teaching_runtime.timestamp_ms;
+    cycle.safety_timestamp_ms = safety->timestampMs;
+    cycle.teaching_active = true;
+    cycle.manual_guidance_requested = true;
+    cycle.motion_permitted = safety->motionPermitted &&
+        context->teaching_runtime.motion_permitted;
+    cycle.robot_homed = context->teaching_runtime.robot_homed;
+    cycle.drives_ready = safety->drivesReady &&
+        canopen_master_ready_for_motion(context->config.canopen_master,
+                                        cycle.now_ms);
+    cycle.communication_healthy = safety->communicationHealthy;
+    cycle.safety_valid = safety->statusValid;
+    cycle.estop_active = safety->estopActive ||
+        context->teaching_runtime.estop_active;
+    cycle.protective_stop_active = safety->protectiveStopActive ||
+        context->teaching_runtime.protective_stop_active;
+    cycle.global_fault_active = safety->globalFaultActive ||
+        context->teaching_runtime.global_fault_active;
+
+    const bool observer_ok = port->tick(port->context, &cycle);
+    if (observer_ok) {
+        if (context->guidance_dry_run_ok_cycles < UINT32_MAX)
+            ++context->guidance_dry_run_ok_cycles;
+    } else {
+        if (context->guidance_dry_run_rejected_cycles < UINT32_MAX)
+            ++context->guidance_dry_run_rejected_cycles;
+    }
+    /* Candidate references remain exclusively in the observer state.
+     * NO take_candidate(), NO send_targets(), NO safety authority. */
+}
+
 static void supervisor_task_entry(void *argument)
 {
     SupervisorTaskContext *context = argument;
@@ -1080,6 +1143,7 @@ static void supervisor_task_entry(void *argument)
         {
             run_active_state(context);
         }
+        service_guidance_dry_run(context);
         publish_drive_snapshot(context);
         publish_m7_ipc_status(context);
         if (context->config.io.write_outputs != NULL)
@@ -1131,6 +1195,9 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
         (config->paused_services == NULL) ||
         (config->fault_services == NULL) ||
         (config->emergency_stop_services == NULL) ||
+        ((config->guidance_dry_run.tick == NULL) !=
+         (config->guidance_dry_run.stop == NULL)) ||
+        (config->guidance_dry_run.take_candidate != NULL) ||
         (config->validation_sample_budget == 0U) ||
         (config->period_ticks == 0U) ||
         (((config->timing.monotonic_us != NULL) ||
@@ -1322,6 +1389,10 @@ bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out)
     out->timer_timeouts = g_supervisor.timer_timeouts;
     out->timer_overruns = g_supervisor.timer_overruns;
     out->timer_max_cycle_us = g_supervisor.timer_max_cycle_us;
+    out->guidance_dry_run_ok_cycles =
+        g_supervisor.guidance_dry_run_ok_cycles;
+    out->guidance_dry_run_rejected_cycles =
+        g_supervisor.guidance_dry_run_rejected_cycles;
     taskEXIT_CRITICAL();
     return true;
 }
