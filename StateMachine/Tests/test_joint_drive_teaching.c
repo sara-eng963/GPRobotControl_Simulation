@@ -26,10 +26,14 @@ static void reset_fake(FakeDrive *f)
 static TeachingConfig teaching_config(void)
 {
     TeachingConfig c = {
-        .default_speed_mps = 0.01F,
+        .default_speed_mps = TEACHING_SPEED_PRESET_MEDIUM_MPS,
         .minimum_speed_mps = 0.001F,
         .maximum_speed_mps = 0.1F,
-        .speed_step_mps = 0.001F,
+        .speed_low_mps = TEACHING_SPEED_PRESET_LOW_MPS,
+        .speed_medium_mps = TEACHING_SPEED_PRESET_MEDIUM_MPS,
+        .speed_high_mps = TEACHING_SPEED_PRESET_HIGH_MPS,
+        .duplicate_position_tolerance_m = 0.002F,
+        .duplicate_orientation_tolerance_rad = 0.010F,
         .minimum_point_separation_m = 0.002F,
         .collinearity_epsilon_m2 = 1.0e-10F
     };
@@ -83,6 +87,96 @@ int main(void)
           "Recorded joint position matches measured raw position conversion");
     CHECK(fake.commands == 0U,
           "TEACHING never sends motion commands itself");
+
+
+    const uint8_t first_count = state.captured_point_count;
+    const TeachingPhase first_phase = state.phase;
+    const TaughtProgram first_draft = state.draft;
+    const TaughtPoint first_point = state.working_segment.points[0];
+    CHECK(state_teaching_step(&state, &robot, &runtime, &port, scales,
+                              102U, TEACH_EVENT_RECORD_POINT, &output) ==
+              STATE_STEP_RUNNING &&
+          state.last_event_accepted &&
+          state.error == TEACH_ERR_NONE &&
+          state.status_message_id == TEACH_MSG_POINT_ALREADY_RECORDED &&
+          state.captured_point_count == first_count &&
+          state.phase == first_phase &&
+          memcmp(&state.draft, &first_draft, sizeof(first_draft)) == 0 &&
+          memcmp(&state.working_segment.points[0], &first_point,
+                 sizeof(first_point)) == 0,
+          "TEACHING treats repeated identical point as a harmless no-op");
+
+    state.working_segment.points[0] = first_point;
+    for (size_t i = 0; i < 4U; ++i)
+        state.working_segment.points[0].orientation_quat[i] =
+            -state.working_segment.points[0].orientation_quat[i];
+    const TaughtPoint equivalent_point = state.working_segment.points[0];
+    CHECK(state_teaching_step(&state, &robot, &runtime, &port, scales,
+                              103U, TEACH_EVENT_RECORD_POINT, &output) ==
+              STATE_STEP_RUNNING &&
+          state.last_event_accepted &&
+          state.error == TEACH_ERR_NONE &&
+          state.status_message_id == TEACH_MSG_POINT_ALREADY_RECORDED &&
+          state.captured_point_count == first_count &&
+          state.phase == first_phase &&
+          memcmp(&state.working_segment.points[0], &equivalent_point,
+                 sizeof(equivalent_point)) == 0,
+          "TEACHING treats q and -q duplicate orientations as equivalent");
+
+    state.working_segment.points[0] = first_point;
+    state.working_segment.points[0].orientation_quat[0] =
+        -first_point.orientation_quat[1];
+    state.working_segment.points[0].orientation_quat[1] =
+        first_point.orientation_quat[0];
+    state.working_segment.points[0].orientation_quat[2] =
+        -first_point.orientation_quat[3];
+    state.working_segment.points[0].orientation_quat[3] =
+        first_point.orientation_quat[2];
+    const TaughtPoint orientation_only_point = state.working_segment.points[0];
+    CHECK(state_teaching_step(&state, &robot, &runtime, &port, scales,
+                              104U, TEACH_EVENT_RECORD_POINT, &output) ==
+              STATE_STEP_RUNNING &&
+          !state.last_event_accepted &&
+          state.error == TEACH_ERR_ORIENTATION_ONLY_POINT &&
+          state.status_message_id == TEACH_MSG_MOVE_TO_DISTINCT_POINT &&
+          state.captured_point_count == first_count &&
+          state.phase == first_phase &&
+          memcmp(&state.working_segment.points[0], &orientation_only_point,
+                 sizeof(orientation_only_point)) == 0,
+          "TEACHING rejects orientation-only duplicate without advancing stage");
+
+    state_teaching_enter(&state, &config, 15U);
+    (void)state_teaching_step(&state, &robot, &runtime, &port, scales,
+                             100U, TEACH_EVENT_SELECT_LINE, &output);
+    CHECK(fabsf(state.teaching_speed_mps - config.speed_medium_mps) < 1.0e-6F &&
+          fabsf(state.working_segment.speed_mps - config.speed_medium_mps) < 1.0e-6F,
+          "TEACHING starts on the Medium speed preset");
+    CHECK(state_teaching_step(&state, &robot, &runtime, &port, scales,
+                              101U, TEACH_EVENT_SPEED_HIGH, &output) ==
+              STATE_STEP_RUNNING &&
+          state.last_event_accepted &&
+          fabsf(state.teaching_speed_mps - config.speed_high_mps) < 1.0e-6F &&
+          fabsf(state.working_segment.speed_mps - config.speed_high_mps) < 1.0e-6F &&
+          fabsf(state.draft.global_speed_scale - 1.0F) < 1.0e-6F,
+          "TEACHING applies the High preset to the active segment");
+
+    state.draft.segment_count = 1U;
+    state.draft.segments[0].speed_mps = config.speed_high_mps;
+    state.draft.global_speed_scale = 0.5F;
+    CHECK(state_teaching_step(&state, &robot, &runtime, &port, scales,
+                              102U, TEACH_EVENT_SPEED_LOW, &output) ==
+              STATE_STEP_RUNNING &&
+          state.last_event_accepted &&
+          fabsf(state.draft.segments[0].speed_mps - config.speed_low_mps) < 1.0e-6F &&
+          fabsf(state.working_segment.speed_mps - config.speed_low_mps) < 1.0e-6F &&
+          fabsf(state.draft.global_speed_scale - 1.0F) < 1.0e-6F,
+          "TEACHING applies the Low preset to completed and active segments");
+    CHECK(state_teaching_step(&state, &robot, &runtime, &port, scales,
+                              103U, TEACH_EVENT_SELECT_ARC, &output) ==
+              STATE_STEP_RUNNING &&
+          state.last_event_accepted &&
+          fabsf(state.working_segment.speed_mps - config.speed_low_mps) < 1.0e-6F,
+          "TEACHING carries the selected preset into future segments");
 
     state_teaching_enter(&state, &config, 13U);
     (void)state_teaching_step(&state, &robot, &runtime, &port, scales,

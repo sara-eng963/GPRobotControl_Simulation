@@ -153,7 +153,7 @@ bool hmi_state_bridge_handle_event(
 
             return false;
 
-        case HMI_EVENT_SPEED_INCREASE:
+        case HMI_EVENT_SPEED_LOW:
             if (
                 machine->current_state !=
                 ROBOT_STATE_TEACHING
@@ -163,11 +163,11 @@ bool hmi_state_bridge_handle_event(
             }
 
             bridge->pending_teaching_event =
-                TEACH_EVENT_SPEED_INCREASE;
+                TEACH_EVENT_SPEED_LOW;
 
             return true;
 
-        case HMI_EVENT_SPEED_DECREASE:
+        case HMI_EVENT_SPEED_MEDIUM:
             if (
                 machine->current_state !=
                 ROBOT_STATE_TEACHING
@@ -177,11 +177,11 @@ bool hmi_state_bridge_handle_event(
             }
 
             bridge->pending_teaching_event =
-                TEACH_EVENT_SPEED_DECREASE;
+                TEACH_EVENT_SPEED_MEDIUM;
 
             return true;
 
-        case HMI_EVENT_SPEED_DEFAULT:
+        case HMI_EVENT_SPEED_HIGH:
             if (
                 machine->current_state !=
                 ROBOT_STATE_TEACHING
@@ -191,7 +191,7 @@ bool hmi_state_bridge_handle_event(
             }
 
             bridge->pending_teaching_event =
-                TEACH_EVENT_SPEED_DEFAULT;
+                TEACH_EVENT_SPEED_HIGH;
 
             return true;
 

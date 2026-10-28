@@ -96,6 +96,8 @@ typedef struct
 {
     uint32_t controlled_stop_timeout_ms;
     uint32_t clearance_stable_cycles;
+    /* Zero retains the 20-ms default; host simulation may override it. */
+    uint32_t feedback_max_age_us;
 } PathExecutionConfig;
 
 typedef bool (*PathExecReadSampleFn)(

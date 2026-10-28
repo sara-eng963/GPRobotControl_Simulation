@@ -177,7 +177,9 @@ static bool feedback_watchdog(PathExecutionState *s, uint64_t now_us)
         if (now_us < reference) return false;
         s->feedback_age_us[axis] = now_us - reference;
         PATH_TIMING_FEEDBACK_AGE(axis, s->feedback_age_us[axis]);
-        if (s->feedback_age_us[axis] > PATH_EXEC_FEEDBACK_MAX_AGE_US)
+        const uint64_t max_age = s->config.feedback_max_age_us != 0U
+            ? s->config.feedback_max_age_us : PATH_EXEC_FEEDBACK_MAX_AGE_US;
+        if (s->feedback_age_us[axis] > max_age)
             return false;
     }
     return true;
