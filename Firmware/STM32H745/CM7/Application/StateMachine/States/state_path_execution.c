@@ -265,6 +265,8 @@ static StateStepResult begin_abort(
     state->wire_feed_commanded = false;
     state->abort_reason = reason;
     state->error = error;
+    /* Revoke a terminal completion latched before the abort request. */
+    state->result = PATH_EXEC_RESULT_RUNNING;
 
     enter_phase(
         state,
@@ -310,6 +312,13 @@ StateStepResult state_path_execution_step(
     if (inputs->protective_stop_active || inputs->external_fault_active)
     {
         return fail(state, PATH_EXEC_ERR_EXTERNAL_FAULT);
+    }
+
+    /* RESET upgrades a HOME stop without extending its deadline. */
+    if (inputs->reset_requested &&
+        state->phase == PATH_EXEC_PHASE_CONTROLLED_STOP) {
+        state->abort_reason = PATH_EXEC_ABORT_RESET;
+        state->error = PATH_EXEC_ERR_RESET_REQUESTED;
     }
 
     if (

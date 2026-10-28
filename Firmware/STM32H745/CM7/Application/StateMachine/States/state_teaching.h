@@ -23,6 +23,14 @@
 #define TEACHING_MAX_SEGMENTS        (32U)
 #define TEACHING_MAX_POINTS_PER_SEG  (3U)
 
+/*
+ * Placeholder operator TCP speed presets [m/s].
+ * Tune these values during robot commissioning before production use.
+ */
+#define TEACHING_SPEED_PRESET_LOW_MPS     (0.005F)
+#define TEACHING_SPEED_PRESET_MEDIUM_MPS  (0.010F)
+#define TEACHING_SPEED_PRESET_HIGH_MPS    (0.025F)
+
 
 /* ============================================================================
  * TEACHING TYPES
@@ -102,7 +110,8 @@ typedef enum
     TEACH_ERR_FRAME_CHANGED,
     TEACH_ERR_TOOL_CHANGED,
     TEACH_ERR_CALIBRATION_CHANGED,
-    TEACH_ERR_DRAFT_LOCKED
+    TEACH_ERR_DRAFT_LOCKED,
+    TEACH_ERR_ORIENTATION_ONLY_POINT
 
 } TeachingError;
 
@@ -115,7 +124,9 @@ typedef enum
     TEACH_MSG_SEGMENT_RECORDED,
     TEACH_MSG_DRAFT_RESET,
     TEACH_MSG_DRAFT_SUBMITTED,
-    TEACH_MSG_ACTION_REJECTED
+    TEACH_MSG_ACTION_REJECTED,
+    TEACH_MSG_POINT_ALREADY_RECORDED,
+    TEACH_MSG_MOVE_TO_DISTINCT_POINT
 
 } TeachingMessageId;
 
@@ -128,9 +139,9 @@ typedef enum
     TEACH_EVENT_SELECT_CIRCLE,
     TEACH_EVENT_RECORD_POINT,
     TEACH_EVENT_VALIDATE_PATH,
-    TEACH_EVENT_SPEED_INCREASE,
-    TEACH_EVENT_SPEED_DECREASE,
-    TEACH_EVENT_SPEED_DEFAULT,
+    TEACH_EVENT_SPEED_LOW,
+    TEACH_EVENT_SPEED_MEDIUM,
+    TEACH_EVENT_SPEED_HIGH,
     TEACH_EVENT_RESET
 
 } TeachingEvent;
@@ -292,7 +303,24 @@ typedef struct
     float default_speed_mps;
     float minimum_speed_mps;
     float maximum_speed_mps;
-    float speed_step_mps;
+
+    /*
+     * Operator TCP speed presets [m/s].
+     * These are placeholder commissioning values for the graduation robot
+     * and should be tuned on the real machine before production use.
+     */
+    float speed_low_mps;
+    float speed_medium_mps;
+    float speed_high_mps;
+
+    /*
+     * Duplicate-record tolerances.
+     *
+     * Position is measured in meters. Orientation is the shortest geometric
+     * rotation angle between two unit quaternions, in radians.
+     */
+    float duplicate_position_tolerance_m;
+    float duplicate_orientation_tolerance_rad;
 
     float minimum_point_separation_m;
     float collinearity_epsilon_m2;

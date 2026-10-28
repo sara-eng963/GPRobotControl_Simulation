@@ -8,6 +8,7 @@ on:
       - 'ControlCore/**'
       - 'ServoDrive/**'
       - 'HandGuiding/**'
+      - 'StateMachine/**'
       - '.github/workflows/stm32-firmware.yml'
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - 'ControlCore/**'
       - 'ServoDrive/**'
       - 'HandGuiding/**'
+      - 'StateMachine/**'
       - '.github/workflows/stm32-firmware.yml'
   workflow_dispatch:
 
@@ -33,9 +35,13 @@ jobs:
         run: |
           python3 Firmware/Tests/build_stm32.py --core CM7
           python3 Firmware/Tests/build_stm32.py --core CM4
+          python3 Firmware/Tests/build_stm32.py --core CM7 --config Release
+          python3 Firmware/Tests/build_stm32.py --core CM4 --config Release
       - name: Check ELFs, source graph and safety policy
         run: |
           python3 Firmware/Tests/check_firmware_integration.py
+          python3 Firmware/Tests/check_firmware_integration.py --build-root build/stm32/Release
+          python3 Firmware/Tests/run_state_machine_alignment_tests.py
           python3 Firmware/Tests/check_portable_protocol.py
           python3 Firmware/Tests/check_stage_a_configuration.py --self-test
           python3 Firmware/Tests/run_supervision_policy_tests.py

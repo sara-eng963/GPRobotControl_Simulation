@@ -116,6 +116,20 @@ static HomingError network_status_error(
         return HOMING_ERROR_DRIVE_NOT_ENABLED;
     }
 
+    /* A sequence received early in a long pause is not current feedback.
+     * Check every command-capable phase, including before the first sample
+     * and verification holds where no command acknowledgement is pending.
+     * Keep the existing 100-ms limit at this API's millisecond resolution. */
+    for (size_t i = 0U; i < ROBOT_DOF; ++i) {
+        JointDriveAxisFeedback feedback;
+        if (!joint_drive_port_read_axis(drive_port, i, &feedback) ||
+            !feedback.feedback_valid)
+            return HOMING_ERROR_POSITION_FEEDBACK;
+        /* Unsigned subtraction handles tick wrap and rejects future times. */
+        if ((uint32_t)(now_ms - (uint32_t)(feedback.timestamp_us / 1000U)) >=
+            HOMING_CYCLIC_FEEDBACK_TIMEOUT_MS)
+            return HOMING_ERROR_CYCLIC_FEEDBACK;
+    }
     return HOMING_ERROR_NONE;
 }
 

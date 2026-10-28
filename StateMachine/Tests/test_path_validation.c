@@ -481,6 +481,40 @@ int main(void)
     puts("[PASS] Same sample CRC and artifact CRC after M7/M4 queue pressure, "
          "with VALID gated by the M4 durable commit.");
 
+    /* Cancel a real numerical validation after samples have reached the M4
+     * backend. M7 requests cancellation; only M4 may abort its storage. */
+    state_path_validation_enter(
+        &state, &robot, scales, &config, &services, &workspace,
+        &async_storage, &artifact, &program,
+        program.draft_revision, program.draft_crc);
+    for (uint32_t i = 0U; i < 10000U &&
+         (!test_storage.writing || flash_worker.next_index == 0U); ++i)
+    {
+        (void)state_path_validation_step(&state, 1U, &outputs);
+        (void)validation_m4_step(&flash_worker);
+    }
+    if (state.result != PV_RESULT_RUNNING || !state.storage_open ||
+        flash_worker.next_index == 0U || !test_storage.writing)
+    {
+        puts("FAIL: cancellation fixture never reached active validation/storage.");
+        return 1;
+    }
+    state_path_validation_cancel(&state);
+    state_path_validation_get_outputs(&state, &outputs);
+    if (outputs.report.result != PV_RESULT_CANCELLED || outputs.trajectory_ready ||
+        client.active || validation_m4_idle(&async_shared) || !test_storage.writing)
+    {
+        puts("FAIL: M7 cancellation must revoke publication and await M4 abort.");
+        return 1;
+    }
+    (void)validation_m4_step(&flash_worker);
+    if (!validation_m4_idle(&async_shared) || test_storage.writing || test_storage.committed)
+    {
+        puts("FAIL: M4 did not acknowledge cancellation of active validation.");
+        return 1;
+    }
+    puts("[PASS] Real active numerical validation cancelled; only M4 aborts storage.");
+
     puts(
         "============================================================\n"
         " AVATAR PATH VALIDATION TEST PASSED\n"

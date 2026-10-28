@@ -475,6 +475,7 @@ static void clear_runtime_program_context(
     /* Only the validation worker may mutate its state. */
     if (!context->config.validation_run_in_worker)
     {
+        state_path_validation_cancel(&context->validation);
         memset(&context->validation, 0, sizeof(context->validation));
         memset(&context->validation_outputs, 0,
                sizeof(context->validation_outputs));
@@ -512,6 +513,52 @@ static SupervisorResult handle_policy_event(
     const SupervisorEvent *event
 )
 {
+    /* Result envelopes cannot substitute for the owning motion module's
+     * acknowledgement. A queued completion must not overtake an accepted
+     * RESET/HOME, even if COMPLETE was latched before this message batch. */
+    if (event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET ||
+        event->type == SUPERVISOR_EVENT_STATE_ABORTED_HOME ||
+        event->type == SUPERVISOR_EVENT_STATE_COMPLETE) {
+        const bool complete = event->type == SUPERVISOR_EVENT_STATE_COMPLETE;
+        const bool reset = event->type == SUPERVISOR_EVENT_STATE_ABORTED_RESET;
+        bool acknowledged = true;
+        if (context->machine.activeState == ROBOT_STATE_APPROACH)
+            acknowledged = complete
+                ? !context->approach_control.reset_requested &&
+                  !context->approach_control.home_requested &&
+                  context->approach.result == APPROACH_RESULT_COMPLETE
+                : (context->approach.result == APPROACH_RESULT_ABORTED &&
+                   context->approach.error == (reset ? APPROACH_ERR_RESET_REQUESTED
+                                                    : APPROACH_ERR_HOME_REQUESTED));
+        if (context->machine.activeState == ROBOT_STATE_PATH_EXECUTION)
+            acknowledged = complete
+                ? !context->path_execution_inputs.reset_requested &&
+                  !context->path_execution_inputs.home_requested &&
+                  context->path_execution.result == PATH_EXEC_RESULT_COMPLETE
+                : (context->path_execution.result == PATH_EXEC_RESULT_ABORTED &&
+                   context->path_execution.abort_reason == (reset ? PATH_EXEC_ABORT_RESET
+                                                                 : PATH_EXEC_ABORT_HOME));
+        if (!acknowledged) {
+            ++context->machine.rejectedEventCount;
+            return SUPERVISOR_RESULT_REJECTED;
+        }
+    }
+
+    if (event->type == SUPERVISOR_EVENT_PAUSE_RESUME &&
+        ((context->machine.activeState == ROBOT_STATE_PAUSED &&
+          !context->paused.hold_established) ||
+         (context->machine.activeState == ROBOT_STATE_APPROACH &&
+          (context->approach_control.reset_requested ||
+           context->approach_control.home_requested ||
+           context->approach.phase == APPROACH_PHASE_CONTROLLED_STOP)) ||
+         (context->machine.activeState == ROBOT_STATE_PATH_EXECUTION &&
+          (context->path_execution_inputs.reset_requested ||
+           context->path_execution_inputs.home_requested ||
+           context->path_execution.phase == PATH_EXEC_PHASE_CONTROLLED_STOP)))) {
+        ++context->machine.rejectedEventCount;
+        return SUPERVISOR_RESULT_REJECTED;
+    }
+
     /*
      * HOME/RESET during motion are requests to the active module first.
      * The global transition is performed only after that module confirms a
@@ -523,14 +570,14 @@ static SupervisorResult handle_policy_event(
         const bool reset = event->type == SUPERVISOR_EVENT_RESET;
         if (context->machine.activeState == ROBOT_STATE_APPROACH)
         {
-            context->approach_control.reset_requested = reset;
-            context->approach_control.home_requested = !reset;
+            context->approach_control.reset_requested |= reset;
+            context->approach_control.home_requested |= !reset;
             return SUPERVISOR_RESULT_HANDLED;
         }
         if (context->machine.activeState == ROBOT_STATE_PATH_EXECUTION)
         {
-            context->path_execution_inputs.reset_requested = reset;
-            context->path_execution_inputs.home_requested = !reset;
+            context->path_execution_inputs.reset_requested |= reset;
+            context->path_execution_inputs.home_requested |= !reset;
             return SUPERVISOR_RESULT_HANDLED;
         }
     }
@@ -601,11 +648,7 @@ static void handle_hmi_command(SupervisorTaskContext *context,
             break;
         case SUP_HMI_PAUSE_RESUME: policy = SUPERVISOR_EVENT_PAUSE_RESUME; break;
         case SUP_HMI_HOME: policy = SUPERVISOR_EVENT_HOME; break;
-        case SUP_HMI_RESET:
-            if (context->machine.activeState == ROBOT_STATE_TEACHING)
-                teaching = TEACH_EVENT_RESET;
-            else policy = SUPERVISOR_EVENT_RESET;
-            break;
+        case SUP_HMI_RESET: policy = SUPERVISOR_EVENT_RESET; break;
         default: return;
     }
     if (command == SUP_HMI_LINE || command == SUP_HMI_ARC ||
@@ -757,14 +800,24 @@ static void handle_message(
             break;
 
         case SUPERVISOR_MESSAGE_APPROACH_CONTROL:
-            context->approach_control =
-                message->data.approach_control;
+        {
+            const bool reset = context->approach_control.reset_requested;
+            const bool home = context->approach_control.home_requested;
+            context->approach_control = message->data.approach_control;
+            context->approach_control.reset_requested |= reset;
+            context->approach_control.home_requested |= home;
             break;
+        }
 
         case SUPERVISOR_MESSAGE_PATH_EXECUTION_INPUTS:
-            context->path_execution_inputs =
-                message->data.path_execution_inputs;
+        {
+            const bool reset = context->path_execution_inputs.reset_requested;
+            const bool home = context->path_execution_inputs.home_requested;
+            context->path_execution_inputs = message->data.path_execution_inputs;
+            context->path_execution_inputs.reset_requested |= reset;
+            context->path_execution_inputs.home_requested |= home;
             break;
+        }
 
         default:
             break;

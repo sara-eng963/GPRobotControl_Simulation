@@ -101,6 +101,65 @@ static float squared_distance3(
 }
 
 
+static Quat point_orientation_quat(
+    const float q[4]
+)
+{
+    const Quat result =
+    {
+        (real_t)q[0],
+        (real_t)q[1],
+        (real_t)q[2],
+        (real_t)q[3]
+    };
+
+    return
+        quat_normalize(
+            result
+        );
+}
+
+
+static float orientation_difference_rad(
+    const float a[4],
+    const float b[4]
+)
+{
+    const Quat qa =
+        point_orientation_quat(
+            a
+        );
+
+    const Quat qb =
+        point_orientation_quat(
+            b
+        );
+
+    real_t dot =
+        qa.w * qb.w +
+        qa.x * qb.x +
+        qa.y * qb.y +
+        qa.z * qb.z;
+
+    /* q and -q encode the same physical rotation. */
+    if (dot < 0.0)
+    {
+        dot =
+            -dot;
+    }
+
+    dot =
+        clamp_real(
+            dot,
+            0.0,
+            1.0
+        );
+
+    return
+        (float)(2.0 * acos(dot));
+}
+
+
 static float cross_squared(
     const float p1[3],
     const float p2[3],
@@ -305,6 +364,19 @@ static void set_error(
 }
 
 
+static void set_message(
+    TeachingState *state,
+    TeachingMessageId message
+)
+{
+    state->error =
+        TEACH_ERR_NONE;
+
+    state->status_message_id =
+        message;
+}
+
+
 static bool config_is_valid(
     const TeachingConfig *config
 )
@@ -319,7 +391,11 @@ static bool config_is_valid(
         isfinite(config->default_speed_mps) &&
         isfinite(config->minimum_speed_mps) &&
         isfinite(config->maximum_speed_mps) &&
-        isfinite(config->speed_step_mps) &&
+        isfinite(config->speed_low_mps) &&
+        isfinite(config->speed_medium_mps) &&
+        isfinite(config->speed_high_mps) &&
+        isfinite(config->duplicate_position_tolerance_m) &&
+        isfinite(config->duplicate_orientation_tolerance_rad) &&
         isfinite(config->minimum_point_separation_m) &&
         isfinite(config->collinearity_epsilon_m2) &&
 
@@ -334,7 +410,36 @@ static bool config_is_valid(
         (config->default_speed_mps <=
          config->maximum_speed_mps) &&
 
-        (config->speed_step_mps > 0.0F) &&
+        (config->speed_low_mps >=
+         config->minimum_speed_mps) &&
+
+        (config->speed_low_mps <=
+         config->maximum_speed_mps) &&
+
+        (config->speed_medium_mps >=
+         config->minimum_speed_mps) &&
+
+        (config->speed_medium_mps <=
+         config->maximum_speed_mps) &&
+
+        (config->speed_high_mps >=
+         config->minimum_speed_mps) &&
+
+        (config->speed_high_mps <=
+         config->maximum_speed_mps) &&
+
+        (config->speed_low_mps <=
+         config->speed_medium_mps) &&
+
+        (config->speed_medium_mps <=
+         config->speed_high_mps) &&
+
+        (config->duplicate_position_tolerance_m > 0.0F) &&
+
+        (config->duplicate_orientation_tolerance_rad > 0.0F) &&
+
+        (config->duplicate_position_tolerance_m <=
+         config->minimum_point_separation_m) &&
 
         (config->minimum_point_separation_m > 0.0F) &&
 
@@ -860,9 +965,9 @@ static bool record_point(
     const TeachingInputs *inputs
 )
 {
-    const float minDistanceSquared =
-        state->config.minimum_point_separation_m *
-        state->config.minimum_point_separation_m;
+    const float duplicatePositionSquared =
+        state->config.duplicate_position_tolerance_m *
+        state->config.duplicate_position_tolerance_m;
 
 
     if (
@@ -901,23 +1006,51 @@ static bool record_point(
     if (
         state->captured_point_count >
         0U
-        &&
-        squared_distance3(
-            inputs->actual_position_m,
-            state->working_segment.points[
-                state->captured_point_count - 1U
-            ].position_m
-        )
-        <
-        minDistanceSquared
     )
     {
-        set_error(
-            state,
-            TEACH_ERR_DUPLICATE_POINT
-        );
+        const TaughtPoint *lastPoint =
+            &state->working_segment.points[
+                state->captured_point_count - 1U
+            ];
 
-        return false;
+        const float positionDistanceSquared =
+            squared_distance3(
+                inputs->actual_position_m,
+                lastPoint->position_m
+            );
+
+        if (
+            positionDistanceSquared <=
+            duplicatePositionSquared
+        )
+        {
+            const float orientationDifference =
+                orientation_difference_rad(
+                    inputs->actual_orientation_quat,
+                    lastPoint->orientation_quat
+                );
+
+            if (
+                orientationDifference <=
+                state->config.duplicate_orientation_tolerance_rad
+            )
+            {
+                set_message(
+                    state,
+                    TEACH_MSG_POINT_ALREADY_RECORDED
+                );
+
+                return true;
+            }
+
+            state->error =
+                TEACH_ERR_ORIENTATION_ONLY_POINT;
+
+            state->status_message_id =
+                TEACH_MSG_MOVE_TO_DISTINCT_POINT;
+
+            return false;
+        }
     }
 
 
@@ -1738,38 +1871,36 @@ StateStepResult state_teaching_step(
         }
 
 
-        case TEACH_EVENT_SPEED_INCREASE:
+        case TEACH_EVENT_SPEED_LOW:
         {
             accepted =
                 change_speed(
                     state,
-                    state->teaching_speed_mps +
-                    state->config.speed_step_mps
+                    state->config.speed_low_mps
                 );
 
             break;
         }
 
 
-        case TEACH_EVENT_SPEED_DECREASE:
+        case TEACH_EVENT_SPEED_MEDIUM:
         {
             accepted =
                 change_speed(
                     state,
-                    state->teaching_speed_mps -
-                    state->config.speed_step_mps
+                    state->config.speed_medium_mps
                 );
 
             break;
         }
 
 
-        case TEACH_EVENT_SPEED_DEFAULT:
+        case TEACH_EVENT_SPEED_HIGH:
         {
             accepted =
                 change_speed(
                     state,
-                    state->config.default_speed_mps
+                    state->config.speed_high_mps
                 );
 
             break;
@@ -2021,6 +2152,9 @@ const char *state_teaching_error_name(
 
         case TEACH_ERR_DRAFT_LOCKED:
             return "DRAFT_LOCKED";
+
+        case TEACH_ERR_ORIENTATION_ONLY_POINT:
+            return "ORIENTATION_ONLY_POINT";
 
         default:
             return "UNKNOWN_ERROR";

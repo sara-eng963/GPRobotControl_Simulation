@@ -204,6 +204,10 @@ set_tests_properties(host_timing_trace_test PROPERTIES TIMEOUT 10)
 # summary reports the expected misses, not hardware timing measurements.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME stm32_state_machine_alignment
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/run_state_machine_alignment_tests.py")
+    set_tests_properties(stm32_state_machine_alignment PROPERTIES TIMEOUT 180)
     add_test(NAME stm32_portable_protocol_regressions
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/check_portable_protocol.py")

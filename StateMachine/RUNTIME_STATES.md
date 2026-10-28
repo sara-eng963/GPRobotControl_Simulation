@@ -32,6 +32,12 @@ wire feed OFF.
 
 ## Reset during motion
 
+HMI Reset in Teaching now follows the global policy: clear the volatile program
+context and return to Idle. During Approach or PathExecution, Reset waits for
+the motion module's controlled-stop acknowledgement. Approach requires an
+explicit nonblocking stop provider and nonzero timeout in `ApproachServices`.
+Pause cannot interrupt a pending abort, and resume waits for hold acknowledgement.
+
 ```mermaid
 flowchart TD
     R[Reset received] --> L[Latch abort request]

@@ -27,6 +27,10 @@ static bool read_sample(uint32_t index,PvExecutionSample *sample,void *ctx)
     *sample=target_sample;
     return true;
 }
+static bool stop_ack=true, stop_succeeds=true;
+static unsigned stop_calls;
+static bool stop(bool *stopped, void *ctx)
+{ (void)ctx; ++stop_calls; *stopped = stop_ack; return stop_succeeds; }
 static RobotConfig robot;
 static AvatarMPositionScale scales[JOINT_DRIVE_AXES];
 static ValidatedTrajectory trajectory;
@@ -65,7 +69,8 @@ static void setup_case(void)
         .maximum_verification_cycles=100,
         .validation_samples_per_step=64,.require_collision_check=false
     };
-    services=(ApproachServices){.read_validated_sample=read_sample};
+    services=(ApproachServices){.read_validated_sample=read_sample,
+        .controlled_stop=stop, .controlled_stop_timeout_ms=1000U};
     inputs=(ApproachControlInputs){.motion_permission=true};
 }
 static void enter(FakeDrive *f,JointDrivePort *port)
@@ -81,6 +86,58 @@ static void advance_to_read_start(void)
     (void)step(0); /* CHECK_REQUEST -> LOAD_TARGET */
     (void)step(1); /* LOAD_TARGET -> READ_START */
 }
+
+static void test_stop_deadline(void)
+{
+    /* Expiry is inclusive: only an acknowledgement observed strictly before
+     * start + timeout completes an abort. Test RESET and HOME across tick wrap. */
+    const uint32_t ages[]={19U, 20U, 21U};
+    const uint32_t starts[]={100U, UINT32_MAX-9U};
+    for (unsigned home=0U; home<2U; ++home)
+    for (unsigned start=0U; start<2U; ++start)
+    for (unsigned i=0U; i<3U; ++i) {
+        FakeDrive fake;
+        JointDrivePort port;
+        setup_case(); reset_fake(&fake);
+        services.controlled_stop_timeout_ms=20U;
+        enter(&fake, &port);
+        inputs.reset_requested=!home;
+        inputs.home_requested=home;
+        stop_calls=0U; stop_ack=true; stop_succeeds=true;
+        CHECK(step(starts[start])==STATE_STEP_RUNNING &&
+              state.phase==APPROACH_PHASE_CONTROLLED_STOP,
+              "HOME/RESET starts a bounded stop");
+        inputs.reset_requested=false; inputs.home_requested=false;
+        const StateStepResult result=step(starts[start]+ages[i]);
+        if (ages[i]<20U) {
+            CHECK(result==STATE_STEP_COMPLETE && state.result==APPROACH_RESULT_ABORTED &&
+                  stop_calls==1U && fake.commands==0U,
+                  "Stop acknowledgement before expiry completes HOME/RESET");
+        } else {
+            CHECK(result==STATE_STEP_FAILED && state.error==APPROACH_ERR_STOP_TIMEOUT &&
+                  stop_calls==0U && fake.commands==0U,
+                  "At/after expiry a first acknowledgement cannot complete HOME/RESET");
+            CHECK(step(starts[start]+ages[i]+1U)==STATE_STEP_FAILED && stop_calls==0U,
+                  "Expired stop stays failed without a late callback retry");
+        }
+    }
+    for (unsigned home=0U; home<2U; ++home) {
+        FakeDrive fake;
+        JointDrivePort port;
+        setup_case(); reset_fake(&fake);
+        services.controlled_stop_timeout_ms=20U;
+        enter(&fake, &port);
+        inputs.reset_requested=!home; inputs.home_requested=home;
+        CHECK(step(100U)==STATE_STEP_RUNNING, "Abort requested before callback failure");
+        inputs.reset_requested=false; inputs.home_requested=false;
+        stop_calls=0U; stop_succeeds=false; stop_ack=true;
+        CHECK(step(119U)==STATE_STEP_FAILED && state.error==APPROACH_ERR_COMMUNICATION &&
+              stop_calls==1U && fake.commands==0U,
+              "Failed callback cannot acknowledge HOME/RESET even if stopped is true");
+    }
+    stop_succeeds=true;
+}
+
 int main(void)
 {
     setup_case();
@@ -144,6 +201,8 @@ int main(void)
         if(fake.last_targets[i]!=target_sample.target_position_units[i])
             exact=false;
     CHECK(exact,"Final command retains exact validated sample-0 units");
+
+    test_stop_deadline();
 
     printf("\nAPPROACH port tests failed: %d\n",failures);
     return failures!=0;

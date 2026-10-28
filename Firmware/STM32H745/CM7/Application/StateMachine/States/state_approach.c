@@ -106,7 +106,8 @@ static StateStepResult approach_fail(
 
 static StateStepResult approach_abort(
     ApproachState *state,
-    ApproachError reason
+    ApproachError reason,
+    uint32_t now_ms
 )
 {
     if (state == NULL)
@@ -116,21 +117,20 @@ static StateStepResult approach_abort(
     }
 
 
-    state->error =
-        reason;
+    if (state->services.controlled_stop == NULL ||
+        state->services.controlled_stop_timeout_ms == 0U)
+        return approach_fail(state, APPROACH_ERR_INVALID_CONFIG, 0U);
 
-    state->failed_joint =
-        0U;
-
-    state->phase =
-        APPROACH_PHASE_ABORTED;
-
-    state->result =
-        APPROACH_RESULT_ABORTED;
-
-
-    return
-        STATE_STEP_COMPLETE;
+    if (state->phase != APPROACH_PHASE_CONTROLLED_STOP) {
+        state->stop_started_ms = now_ms;
+        state->error = reason;
+        state->failed_joint = 0U;
+        state->phase = APPROACH_PHASE_CONTROLLED_STOP;
+    } else if (reason == APPROACH_ERR_RESET_REQUESTED) {
+        /* RESET may upgrade HOME, but never restarts the stop deadline. */
+        state->error = reason;
+    }
+    return STATE_STEP_RUNNING;
 }
 
 
@@ -216,7 +216,9 @@ static bool services_valid(
 {
     if (
         services == NULL ||
-        services->read_validated_sample == NULL
+        services->read_validated_sample == NULL ||
+        services->controlled_stop == NULL ||
+        services->controlled_stop_timeout_ms == 0U
     )
     {
         return false;
@@ -1455,12 +1457,14 @@ StateStepResult state_approach_step(
     }
 
 
-    if (inputs->reset_requested)
+    if (inputs->reset_requested &&
+        state->phase != APPROACH_PHASE_CONTROLLED_STOP)
     {
         StateStepResult result =
             approach_abort(
                 state,
-                APPROACH_ERR_RESET_REQUESTED
+                APPROACH_ERR_RESET_REQUESTED,
+                now_ms
             );
 
 
@@ -1474,12 +1478,14 @@ StateStepResult state_approach_step(
     }
 
 
-    if (inputs->home_requested)
+    if (inputs->home_requested &&
+        state->phase != APPROACH_PHASE_CONTROLLED_STOP)
     {
         StateStepResult result =
             approach_abort(
                 state,
-                APPROACH_ERR_HOME_REQUESTED
+                APPROACH_ERR_HOME_REQUESTED,
+                now_ms
             );
 
 
@@ -1492,6 +1498,28 @@ StateStepResult state_approach_step(
         return result;
     }
 
+
+    if (state->phase == APPROACH_PHASE_CONTROLLED_STOP) {
+        if (inputs->reset_requested)
+            state->error = APPROACH_ERR_RESET_REQUESTED;
+        bool stopped = false;
+        StateStepResult result = STATE_STEP_RUNNING;
+        /* Expiry is inclusive. Do not let a first acknowledgement at or
+         * after the deadline complete RESET/HOME, or retry an expired stop. */
+        if ((uint32_t)(now_ms - state->stop_started_ms) >=
+            state->services.controlled_stop_timeout_ms)
+            result = approach_fail(state, APPROACH_ERR_STOP_TIMEOUT, 0U);
+        else if (!state->services.controlled_stop(
+                &stopped, state->services.stop_context))
+            result = approach_fail(state, APPROACH_ERR_COMMUNICATION, 0U);
+        else if (stopped) {
+            state->phase = APPROACH_PHASE_ABORTED;
+            state->result = APPROACH_RESULT_ABORTED;
+            result = STATE_STEP_COMPLETE;
+        }
+        state_approach_get_outputs(state, outputs);
+        return result;
+    }
 
     /*
      * Do not advance the motion sequence until every axis has returned a
@@ -2689,6 +2717,9 @@ const char *state_approach_error_name(
 
         case APPROACH_ERR_HOME_REQUESTED:
             return "HOME_REQUESTED";
+
+        case APPROACH_ERR_STOP_TIMEOUT:
+            return "STOP_TIMEOUT";
 
         default:
             return "UNKNOWN";

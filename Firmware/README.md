@@ -12,6 +12,9 @@ commissioning and hardware safety validation remain incomplete. No default
 board or storage supplier fabricates readiness.
 
 See [executed migration results](MIGRATION_STATUS.md) for build/test evidence.
+See [CM7/desktop behavior agreement](STATE_MACHINE_ALIGNMENT.md) for the current
+StateMachine/Teaching/HMI comparison, stop-service API, regression evidence and
+hardware verification limits.
 
 ## Authoritative structure
 

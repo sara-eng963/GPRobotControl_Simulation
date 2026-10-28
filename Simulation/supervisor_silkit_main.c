@@ -2060,6 +2060,8 @@ static bool start_system(void)
     c.canopen_master=&can_boot_master;c.avatar_position_scales=avatar_position_scales;c.robot=&robot;c.homing_config=&homing_config;c.teaching_config=&teaching_config;
     c.validation_config=&path_validation_config;c.validation_services=&path_validation_services;
     c.validation_workspace=&path_validation_workspace;c.validation_storage=&path_validation_storage;c.validated_trajectory=&validated_trajectory;
+    approach_services.controlled_stop=hold;
+    approach_services.controlled_stop_timeout_ms=1000U;
     c.approach_config=&approach_config;c.approach_services=&approach_services;
     c.path_execution_config=&execution_config;c.path_execution_services=&execution_services;
     c.paused_services=&paused_services;c.fault_services=&fault_services;c.emergency_stop_services=&emergency_services;

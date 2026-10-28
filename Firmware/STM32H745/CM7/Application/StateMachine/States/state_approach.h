@@ -68,7 +68,8 @@ typedef enum
 
     APPROACH_PHASE_COMPLETE,
     APPROACH_PHASE_ABORTED,
-    APPROACH_PHASE_FAILED
+    APPROACH_PHASE_FAILED,
+    APPROACH_PHASE_CONTROLLED_STOP
 
 } ApproachPhase;
 
@@ -111,7 +112,8 @@ typedef enum
     APPROACH_ERR_ESTOP,
 
     APPROACH_ERR_RESET_REQUESTED,
-    APPROACH_ERR_HOME_REQUESTED
+    APPROACH_ERR_HOME_REQUESTED,
+    APPROACH_ERR_STOP_TIMEOUT
 
 } ApproachError;
 
@@ -277,6 +279,12 @@ typedef struct
     ApproachCollisionFreeFn collision_free;
     void *collision_context;
 
+    /* Nonblocking installation stop, required for HOME/RESET aborts.
+     * Missing provider fails closed; true alone is not a stopped result. */
+    bool (*controlled_stop)(bool *stopped, void *context);
+    void *stop_context;
+    uint32_t controlled_stop_timeout_ms;
+
 } ApproachServices;
 
 
@@ -400,6 +408,7 @@ typedef struct
     uint32_t command_tpdo_count[ROBOT_DOF];
 
     bool paused_during_verification;
+    uint32_t stop_started_ms;
 
 } ApproachState;
 
