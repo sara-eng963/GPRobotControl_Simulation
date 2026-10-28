@@ -112,6 +112,8 @@ typedef struct
     uint64_t previous_timing_wake_us;
     bool last_timing_wake_available;
     bool previous_timing_wake_valid;
+    bool fault_response_step_ok;
+    SupervisionProgressSample progress;
 
     /* Only the validation worker mutates 'validation' or flash storage when
      * async mode is enabled. Supervisor reads exclusively a copied result.
@@ -960,6 +962,7 @@ static void run_active_state(SupervisorTaskContext *context)
                 !inputs.fault_cause_active &&
                 !context->machine.safety.estopActive;
             step = state_fault_step(&context->fault, &inputs);
+            context->fault_response_step_ok = (step != STATE_STEP_FAILED);
             (void)step;
             break;
         }
@@ -977,6 +980,7 @@ static void run_active_state(SupervisorTaskContext *context)
                 !context->machine.safety.globalFaultActive;
             step = state_emergency_stop_step(
                 &context->emergency_stop, &inputs);
+            context->fault_response_step_ok = (step != STATE_STEP_FAILED);
             (void)step;
             break;
         }
@@ -1076,12 +1080,15 @@ static void supervisor_task_entry(void *argument)
 
     for (;;)
     {
+        bool progress_cycle_ok = true;
+        context->fault_response_step_ok = false;
         if (hardware_timed) {
             /* TIM3 increments a counting task notification every 2 ms.
              * A queued count >1 or missing count is a failed deadline. */
             const uint32_t periods = context->config.timing.wait_next(
                 context->config.timing.context, pdMS_TO_TICKS(6U));
             if (periods != 1U) {
+                progress_cycle_ok = false;
                 if (periods == 0U) {
                     if (context->timer_timeouts < UINT32_MAX)
                         ++context->timer_timeouts;
@@ -1184,6 +1191,7 @@ static void supervisor_task_entry(void *argument)
             if (sampled > context->timer_max_cycle_us)
                 context->timer_max_cycle_us = sampled;
             if (elapsed >= UINT64_C(2000)) {
+                progress_cycle_ok = false;
                 if (context->timer_overruns < UINT32_MAX)
                     ++context->timer_overruns;
                 if (context->machine.activeState != ROBOT_STATE_FAULT &&
@@ -1191,12 +1199,15 @@ static void supervisor_task_entry(void *argument)
                         ROBOT_STATE_EMERGENCY_STOP)
                     emit_step_failure(context, 0xE004U);
             }
+            if (!context->last_timing_wake_available)
+                progress_cycle_ok = false;
             if (context->last_timing_wake_available) {
                 const SupervisorTimingAssessment a = supervisor_timing_assess(
                     &context->last_timing_wake, completion_us,
                     context->previous_timing_wake_valid,
                     context->previous_timing_wake_us);
                 if (!a.valid) {
+                    progress_cycle_ok = false;
                     if (context->timer_invalid_timestamps < UINT32_MAX)
                         ++context->timer_invalid_timestamps;
                 } else {
@@ -1226,6 +1237,9 @@ static void supervisor_task_entry(void *argument)
                      * ISR-to-completion >=2 ms violates even the post-ISR
                      * deadline bound (E004). Smaller service gaps are only
                      * diagnostic warnings, not inferred missed updates. */
+                    if (a.service_gap_severe || a.wake_gap_severe ||
+                        a.late_completion)
+                        progress_cycle_ok = false;
                     if ((a.service_gap_severe || a.wake_gap_severe) &&
                         context->machine.activeState != ROBOT_STATE_FAULT &&
                         context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
@@ -1239,6 +1253,19 @@ static void supervisor_task_entry(void *argument)
         } else {
             vTaskDelayUntil(&last_wake, context->config.period_ticks);
         }
+        /* Only the actual task's finished cycle can publish. No timer ISR,
+         * defaultTask or validation worker may synthesize this checkpoint. */
+        const bool in_fault =
+            context->machine.activeState == ROBOT_STATE_FAULT ||
+            context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP;
+        const SupervisionProgressMode mode =
+            context->machine.activeState == ROBOT_STATE_BOOT ?
+            SUP_PROGRESS_STARTUP : (in_fault ? SUP_PROGRESS_FAULT : SUP_PROGRESS_ACTIVE);
+        taskENTER_CRITICAL();
+        supervision_record_completion(&context->progress, 1U,
+            (uint32_t)xTaskGetTickCount(), mode, progress_cycle_ok,
+            !in_fault || context->fault_response_step_ok);
+        taskEXIT_CRITICAL();
     }
 }
 
@@ -1432,6 +1459,16 @@ bool supervisor_task_post_hmi(SupervisorHmiCommand command, TickType_t wait_tick
 TaskHandle_t supervisor_task_handle(void)
 {
     return g_task;
+}
+
+/* A separate low-priority CM7 task reads a snapshot, never live fields. */
+bool supervisor_task_get_progress(SupervisionProgressSample *out)
+{
+    if (out == NULL || !g_supervisor.initialized) return false;
+    taskENTER_CRITICAL();
+    *out = g_supervisor.progress;
+    taskEXIT_CRITICAL();
+    return out->valid;
 }
 
 /* Only safe for same-scheduler readers. M4 must use shared IPC. */

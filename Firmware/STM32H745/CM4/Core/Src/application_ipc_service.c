@@ -37,9 +37,18 @@ static StaticQueue_t status_queue_control;
 static uint8_t status_queue_storage[sizeof(StatusSnapshot)];
 static QueueHandle_t status_queue;
 
+/* Independent, low-priority CM4 observer; never refreshes hardware. */
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+static StaticTask_t progress_monitor_control;
+static StackType_t progress_monitor_stack[256U];
+#endif
+static TaskHandle_t progress_monitor_handle;
+static volatile bool cm4_refresh_candidate_eligible;
+
 static IpcShared *shared_ipc;
 static uint32_t last_status_sequence;
 static uint32_t next_command_sequence;
+static SupervisionProgressSample ipc_progress;
 
 static TickType_t age_ticks(uint32_t max_age_ms)
 {
@@ -49,6 +58,21 @@ static TickType_t age_ticks(uint32_t max_age_ms)
         ((uint64_t)max_age_ms * (uint64_t)configTICK_RATE_HZ + 999ULL) / 1000ULL;
     return (TickType_t)((ticks > (uint64_t)portMAX_DELAY)
                             ? (uint64_t)portMAX_DELAY : ticks);
+}
+
+static void progress_monitor_task(void *unused)
+{
+    (void)unused;
+    SupervisionProgressPolicy policy = { .expected_session = 1U };
+    SupervisionProgressSample observed = {0};
+    for (;;) {
+        const bool have_progress = application_ipc_service_get_progress(&observed);
+        /* Provisional: 10 ms monitor cadence + 20 ms scheduling margin. */
+        cm4_refresh_candidate_eligible = have_progress &&
+            supervision_progress_eligible(&policy, &observed,
+                                         (uint32_t)xTaskGetTickCount(), 30U);
+        vTaskDelay(pdMS_TO_TICKS(10U));
+    }
 }
 
 bool application_ipc_service_initialize(void)
@@ -72,7 +96,25 @@ bool application_ipc_service_initialize(void)
     command_queue = commands;
     status_queue = status;
     shared_ipc = ipc;
-    return true;
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+    progress_monitor_handle = xTaskCreateStatic(
+        progress_monitor_task, "M4Progress", 256U, NULL, 8U,
+        progress_monitor_stack, &progress_monitor_control);
+#else
+    if (xTaskCreate(progress_monitor_task, "M4Progress", 256U,
+                    NULL, 8U, &progress_monitor_handle) != pdPASS)
+        progress_monitor_handle = NULL;
+#endif
+    return progress_monitor_handle != NULL;
+}
+
+bool application_ipc_service_get_progress(SupervisionProgressSample *out)
+{
+    if (out == NULL || shared_ipc == NULL) return false;
+    taskENTER_CRITICAL();
+    *out = ipc_progress;
+    taskEXIT_CRITICAL();
+    return out->valid;
 }
 
 bool application_ipc_service_read_status(
@@ -186,6 +228,13 @@ void application_ipc_service_run(void)
                  * retry next cycle while status remains fresh. */
             }
         }
+        /* Actual end of IPC-service work, not scheduler or timer activity.
+         * A future independent CM4 observer must inspect this sample before
+         * any real watchdog refresh. No peer message introduced in C2A. */
+        taskENTER_CRITICAL();
+        supervision_record_completion(&ipc_progress, 1U,
+            (uint32_t)xTaskGetTickCount(), SUP_PROGRESS_SERVICE, true, true);
+        taskEXIT_CRITICAL();
         vTaskDelayUntil(&last_wake, APPLICATION_IPC_PERIOD_TICKS);
     }
 }

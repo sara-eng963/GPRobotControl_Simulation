@@ -23,6 +23,7 @@
 #include "States/state_teaching.h"
 
 #include "ipc_mailbox.h"
+#include "../../../Common/Inc/supervision_progress.h"
 _Static_assert(IPC_ABI_VERSION == 2U, "Incorrect STM32 IPC ABI");
 
 #include "FreeRTOS.h"
@@ -179,6 +180,8 @@ typedef struct {
     uint32_t guidance_dry_run_rejected_cycles;
 } SupervisorDiagnostics;
 bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out);
+/* Same-core, task-context snapshot; no remote or ISR access. */
+bool supervisor_task_get_progress(SupervisionProgressSample *out);
 
 bool supervisor_task_init(const SupervisorTaskConfig *config);
 bool supervisor_task_start(UBaseType_t priority);

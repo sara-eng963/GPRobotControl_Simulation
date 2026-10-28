@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "supervisor_hmi.h"
 #include "hmi_lifecycle.h"
+#include "../../../Common/Inc/supervision_progress.h"
 
 /* CM4-local view of the M7 supervisor's existing seven status data fields.
  * last_hmi_received_sequence acknowledges IPC receipt, NOT command acceptance.
@@ -18,6 +19,8 @@ bool application_ipc_service_initialize(void);
 /* Sole consumer/producer of the two shared message-buffer directions on M4.
  * Runs inside the existing generated CM4 default task; never returns. */
 void application_ipc_service_run(void);
+/* Reports completed local CM4 IPC work; not a peer heartbeat or feed API. */
+bool application_ipc_service_get_progress(SupervisionProgressSample *out);
 
 /* Task-context, same-M4-kernel APIs. No ISR or cross-core FreeRTOS handles.
  * Failure means invalid command, unavailable/stale M7 status or full queue.

@@ -93,13 +93,17 @@ static bool fake_observe(void *unused, uint32_t periods, SupervisorTimingWake *o
 static void supervisor_wait_block(SupervisorTaskContext *context)
 {
     const bool hardware_timed = true;
+    bool progress_cycle_ok = true;
     /* PRODUCTION_WAIT_BLOCK */
+    (void)progress_cycle_ok; /* Stage B extraction also checks C2A validity. */
 }
 static void supervisor_elapsed_block(SupervisorTaskContext *context,
                                      uint64_t cycle_start_us)
 {
     const bool hardware_timed = true;
+    bool progress_cycle_ok = true;
     /* PRODUCTION_ELAPSED_BLOCK */
+    (void)progress_cycle_ok;
 }
 static void reset(void)
 {

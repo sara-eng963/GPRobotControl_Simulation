@@ -572,6 +572,11 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN 5 */
 
   (void)argument;
+  /* Software-only C2A observer. Not connected to IWDG or any motor output.
+   * Provisional 30 ms freshness: 10 ms observer cadence + scheduler margin;
+   * NOT an approved hardware watchdog timeout. Session 1 is LOCAL ONLY. */
+  SupervisionProgressPolicy progress_policy = { .expected_session = 1U };
+  SupervisionProgressSample last_progress = {0};
 
   /* Persistent configuration; avoid a large task-stack allocation. */
   static SupervisorTaskConfig board_config;
@@ -587,6 +592,12 @@ void StartDefaultTask(void *argument)
 
   for (;;)
   {
+    if (supervisor_task_get_progress(&last_progress)) {
+      /* Evaluate progress without refreshing a hardware watchdog. */
+      (void)supervision_progress_eligible(&progress_policy, &last_progress,
+                                          (uint32_t)xTaskGetTickCount(), 30U);
+    }
+    /* No HAL_IWDG_Refresh or hardware side effects in Stage C2A. */
     osDelay(10);
   }
   /* USER CODE END 5 */
