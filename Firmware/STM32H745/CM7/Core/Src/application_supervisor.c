@@ -320,7 +320,7 @@ bool application_supervisor_start(const SupervisorTaskConfig *board)
     config.validation_run_in_worker = true;
     config.validation_enter_ready = validation_enter_ready;
     config.validation_enter_context = NULL;
-    if (!supervisor_task_init(&config) || !supervisor_task_start(4U))
+    if (!supervisor_task_init(&config) || !supervisor_task_start(9U))
     {
         revoke_unstarted_board(board);
         return false;

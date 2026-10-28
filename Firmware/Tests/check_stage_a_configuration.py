@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Static Stage A gate: generated CM7/CM4 configuration, not hardware proof.
+
+Checks the *generated* HAL fields against the saved CubeMX .ioc, the
+CAN backend's minimum FIFO capacity, both nominal bit rates using the
+shared PLL2 clock, HAL message-RAM layout, and the CM7 bootstrap priority.
+"""
+import argparse
+import re
+from pathlib import Path
+
+FILES = {
+    'ioc': 'Firmware/STM32H745/STM32H745ZIT6_BoardConfig.ioc',
+    'm7': 'Firmware/STM32H745/CM7/Core/Src/main.c',
+    'm4': 'Firmware/STM32H745/CM4/Core/Src/main.c',
+    'app': 'Firmware/STM32H745/CM7/Core/Src/application_supervisor.c',
+    'backend': 'Firmware/STM32H745/CM7/Board/Src/fdcan_classic_backend.c',
+    'hal_c': 'Firmware/STM32H745/Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c',
+    'hal_h': 'Firmware/STM32H745/Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_fdcan.h',
+    'm7_conf': 'Firmware/STM32H745/CM7/Core/Inc/stm32h7xx_hal_conf.h',
+    'm4_conf': 'Firmware/STM32H745/CM4/Core/Inc/stm32h7xx_hal_conf.h',
+}
+
+
+def load(root):
+    return {key: (root / relative).read_text(encoding='utf-8')
+            for key, relative in FILES.items()}
+
+
+def extract(text, pattern, label):
+    match = re.search(pattern, text, re.MULTILINE)
+    if match is None:
+        raise ValueError('Missing ' + label)
+    return match.group(1)
+
+
+def c_field(text, number, field):
+    return int(extract(text,
+        rf'\bhfdcan{number}\.Init\.{re.escape(field)}\s*=\s*(\d+)\s*;',
+        f'FDCAN{number}.{field}'))
+
+
+def c_clock(text, field):
+    return int(extract(text,
+        rf'\bPeriphClkInitStruct\.PLL2\.PLL2{field}\s*=\s*(\d+)\s*;',
+        f'PLL2{field}'))
+
+
+def ioc_entries(text):
+    return dict(line.split('=', 1) for line in text.splitlines()
+                if '=' in line and not line.startswith('#'))
+
+
+def verify(src):
+    failures = []
+
+    def require(condition, reason):
+        if not condition:
+            failures.append(reason)
+
+    def check():
+        ioc = ioc_entries(src['ioc'])
+        m7, m4, app = src['m7'], src['m4'], src['app']
+        # Supervisor outranks the CMSIS low-priority bootstrap; validation stays below.
+        require('supervisor_task_start(9U)' in app,
+                'Supervisor task priority changed; separate review required')
+        require('config.validation_worker_priority >= 4U' in app,
+                'Validation worker priority constraint changed')
+        require(bool(re.search(r'\.priority\s*=\s*\(osPriority_t\)\s*osPriorityLow\s*,', m7)),
+                'CM7 bootstrap defaultTask must have priority 8 (osPriorityLow)')
+        require(ioc.get('FREERTOS_M7.Tasks01', '').split(',')[1:2] == ['8'],
+                'CM7 CubeMX defaultTask must persist priority 8')
+        require(bool(re.search(r'\.priority\s*=\s*\(osPriority_t\)\s*osPriorityNormal\s*,', m4)),
+                'CM4 task priority unexpectedly changed')
+        require(ioc.get('FREERTOS_M4.Tasks01', '').split(',')[1:2] == ['24'],
+                'CM4 CubeMX task priority unexpectedly changed')
+        match = re.search(r'defaultTaskHandle\s*=\s*osThreadNew\s*\([^;]+\);', m7)
+        require(match is not None, 'CM7 defaultTask creation missing')
+        if match:
+            end = m7.find('osKernelStart()', match.end())
+            tail = m7[match.end():end] if end != -1 else ''
+            require(bool(re.search(r'if\s*\(\s*defaultTaskHandle\s*==\s*NULL\s*\)\s*\{\s*Error_Handler\s*\(\s*\)\s*;\s*\}', tail)),
+                    'CM7 task creation failure not handled before kernel start')
+        require('FDCAN1_STB' in m7, 'CM7 FDCAN1 board wiring unexpectedly changed')
+
+        # Both cores must use the SAME FDCAN clock; do not change PLL2 to
+        # repair only one controller's bit timing.
+        hse = [int(extract(src[f'{core}_conf'],
+                        r'#define\s+HSE_VALUE\s+\(?\s*(\d+)UL',
+                        core + ' HSE_VALUE')) for core in ('m7', 'm4')]
+        require(hse[0] == hse[1] == 25_000_000,
+                'M7/M4 HSE_VALUE differ from the verified 25 MHz configuration')
+        pll7 = tuple(c_clock(m7, k) for k in ('M', 'N', 'Q'))
+        pll4 = tuple(c_clock(m4, k) for k in ('M', 'N', 'Q'))
+        require(pll7 == pll4 == (5, 80, 10),
+                'Shared PLL2 M/N/Q mismatch or unexpected clock-tree change')
+        require('RCC_FDCANCLKSOURCE_PLL2' in m7 and
+                'RCC_FDCANCLKSOURCE_PLL2' in m4,
+                'FDCAN must retain the shared PLL2 clock source')
+        kernel = hse[0] * pll7[1] // (pll7[0] * pll7[2])
+        require(hse[0] * pll7[1] % (pll7[0] * pll7[2]) == 0,
+                'FDCAN kernel clock computation not integral')
+        require(kernel == 40_000_000, 'FDCAN kernel is not 40 MHz')
+
+        hal_words = int(extract(src['hal_h'],
+            r'#define\s+FDCAN_DATA_BYTES_8\s+\(\(uint32_t\)0x([0-9a-fA-F]+)U\)',
+            'HAL 8-byte message element encoding'), 16)
+        require(hal_words == 4, 'HAL 8-byte element layout changed')
+        ram_bytes = int(extract(src['hal_c'],
+            r'#define\s+FDCAN_MESSAGE_RAM_SIZE\s+0x([0-9a-fA-F]+)U',
+            'HAL message RAM size'), 16)
+        require(ram_bytes % 4 == 0, 'Message RAM is not word aligned')
+
+        configs = []
+        for n, text, target, expected in (
+            (1, m7, 1_000_000, (1, 31, 8, 8)),
+            (2, m4, 500_000, (2, 31, 8, 8))):
+            pref = f'FDCAN{n}.'
+            params = ('NominalPrescaler', 'NominalTimeSeg1',
+                      'NominalTimeSeg2', 'NominalSyncJumpWidth')
+            values = tuple(c_field(text, n, k) for k in params)
+            require(values == expected, f'FDCAN{n} nominal timing changed: {values}')
+            for field, actual in zip(params, values):
+                # FDCAN2 .ioc already records these settings. Stage A records
+                # FDCAN1 explicitly as well so regeneration preserves them.
+                require(ioc.get(pref + field) == str(actual),
+                        f'{pref + field} mismatches generated HAL initializer')
+                require(field in ioc.get(pref + 'IPParameters', '').split(','),
+                        f'{pref + field} not persisted in CubeMX IPParameters')
+            prescaler, seg1, seg2, sjw = values
+            require(sjw <= seg2 and seg1 >= 1 and seg2 >= 1 and prescaler >= 1,
+                    f'FDCAN{n} invalid nominal timing segment/SJW')
+            divisor = prescaler * (1 + seg1 + seg2)
+            require(kernel == target * divisor,
+                    f'FDCAN{n} expected {target} bit/s; derived {kernel / divisor:g}')
+            require((1 + seg1) * 5 == (1 + seg1 + seg2) * 4,
+                    f'FDCAN{n} intended 80% sample point changed')
+            require(ioc.get(pref + 'CalculateBaudRateNominal') == str(target),
+                    f'FDCAN{n} CubeMX displayed bitrate inconsistent')
+            require(ioc.get(pref + 'CalculateTimeBitNominal') == str(1_000_000_000 // target),
+                    f'FDCAN{n} CubeMX bit-time calculation inconsistent')
+            tq = float(ioc.get(pref + 'CalculateTimeQuantumNominal', '-1'))
+            require(abs(tq - 1e9 * prescaler / kernel) < 1e-6,
+                    f'FDCAN{n} CubeMX time quantum inconsistent')
+
+            attrs = {k: c_field(text, n, k) for k in (
+                'MessageRAMOffset', 'StdFiltersNbr', 'ExtFiltersNbr',
+                'RxFifo0ElmtsNbr', 'RxFifo1ElmtsNbr', 'RxBuffersNbr',
+                'TxEventsNbr', 'TxBuffersNbr', 'TxFifoQueueElmtsNbr')}
+            require(ioc.get(pref + 'MessageRAMOffset', '0') == str(attrs['MessageRAMOffset']),
+                    f'FDCAN{n} CubeMX MessageRAMOffset mismatch')
+            for field in ('RxFifo0ElmtsNbr', 'TxFifoQueueElmtsNbr'):
+                require(ioc.get(pref + field, '0') == str(attrs[field]),
+                        f'FDCAN{n} CubeMX {field} mismatch')
+            # Enforce the unchanged 8-byte classic CAN element contract.
+            for field in ('RxFifo0ElmtSize','RxFifo1ElmtSize',
+                          'RxBufferSize','TxElmtSize'):
+                require(bool(re.search(
+                    rf'\bhfdcan{n}\.Init\.{field}\s*=\s*FDCAN_DATA_BYTES_8\s*;', text)),
+                    f'FDCAN{n} unexpected element size: {field}')
+            words = (attrs['StdFiltersNbr'] + 2 * attrs['ExtFiltersNbr'] +
+                     hal_words * (attrs['RxFifo0ElmtsNbr'] +
+                                  attrs['RxFifo1ElmtsNbr'] +
+                                  attrs['RxBuffersNbr'] +
+                                  attrs['TxBuffersNbr'] +
+                                  attrs['TxFifoQueueElmtsNbr']) +
+                     2 * attrs['TxEventsNbr'])
+            configs.append((attrs['MessageRAMOffset'], attrs['MessageRAMOffset'] + words))
+
+        # Compare to the min FIFO requirement in the *actual* adapter.
+        for field in ('TxFifoQueueElmtsNbr','RxFifo0ElmtsNbr'):
+            minimum = int(extract(src['backend'],
+                rf'fdcan->Init\.{field}\s*<\s*(\d+)U',
+                'backend minimum ' + field))
+            require(c_field(m7, 1, field) >= minimum,
+                    'FDCAN1 has insufficient ' + field)
+        require(configs == [(0, 128), (256, 320)],
+                f'Unexpected FDCAN allocations: {configs}')
+        require(configs[0][1] <= configs[1][0],
+                'FDCAN1 and FDCAN2 Message RAM overlap')
+        require(configs[1][1] * 4 <= ram_bytes,
+                'FDCAN Message RAM exceeds physical capacity')
+
+    try:
+        check()
+    except (ValueError, KeyError, ZeroDivisionError) as exc:
+        failures.append(str(exc))
+    return failures
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument('--self-test', action='store_true',
+                        help='Also verify intentional regressions are detected')
+    args = parser.parse_args()
+    sources = load(args.root)
+    errors = verify(sources)
+    for error in errors:
+        print('FAIL:', error)
+    if errors:
+        raise SystemExit(1)
+    print('PASS: CM7 bootstrap creation/priority and FDCAN1/FDCAN2 source/CubeMX/Message RAM contracts')
+    if args.self_test:
+        mutations = [
+            ('CM7 task creation', 'm7',
+             'if (defaultTaskHandle == NULL)', 'if (defaultTaskHandle != NULL)'),
+            ('M7 priority', 'm7', 'osPriorityLow', 'osPriorityNormal'),
+            ('FDCAN1 FIFO', 'm7', 'hfdcan1.Init.RxFifo0ElmtsNbr = 16;',
+             'hfdcan1.Init.RxFifo0ElmtsNbr = 0;'),
+            ('FDCAN1 bit rate', 'm7', 'hfdcan1.Init.NominalPrescaler = 1;',
+             'hfdcan1.Init.NominalPrescaler = 16;'),
+            ('FDCAN2 RAM offset', 'm4', 'hfdcan2.Init.MessageRAMOffset = 256;',
+             'hfdcan2.Init.MessageRAMOffset = 0;'),
+            ('CubeMX synchronization', 'ioc', 'FDCAN1.NominalTimeSeg1=31',
+             'FDCAN1.NominalTimeSeg1=30'),
+        ]
+        for name, file, old, new in mutations:
+            if sources[file].count(old) != 1:
+                raise SystemExit('FAIL: self-test mutation target not unique: ' + name)
+            changed = dict(sources)
+            changed[file] = sources[file].replace(old, new, 1)
+            if not verify(changed):
+                raise SystemExit('FAIL: failed to detect injected regression: ' + name)
+            print('PASS: detects injected ' + name + ' regression')
+
+
+if __name__ == '__main__':
+    main()

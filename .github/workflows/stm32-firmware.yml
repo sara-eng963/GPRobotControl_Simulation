@@ -35,6 +35,7 @@ jobs:
         run: |
           python3 Firmware/Tests/check_firmware_integration.py
           python3 Firmware/Tests/check_portable_protocol.py
+          python3 Firmware/Tests/check_stage_a_configuration.py --self-test
           bash Firmware/Tests/check_shared_layout.sh
           bash Firmware/Tests/check_sram4_linkers.sh
           bash Firmware/Tests/check_intercore_startup_compile.sh
