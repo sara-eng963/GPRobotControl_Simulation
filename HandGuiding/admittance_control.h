@@ -21,6 +21,7 @@ typedef struct {
 
 typedef struct {
     double velocity[ADMITTANCE_AXES];
+    double previous_wrench[ADMITTANCE_AXES]; /* Tustin input memory */
     bool enabled;
 } AdmittanceState;
 
@@ -35,9 +36,10 @@ void admittance_disable(AdmittanceState *state);
  * independently from fresh measured drive positions. */
 bool admittance_enable(AdmittanceState *state, const AdmittanceParams *params);
 
-/* Backward-Euler mass-damper update, followed by per-axis bounded change
- * in velocity and velocity saturation. Acceleration limits and saturation
- * modify the ideal admittance dynamics; no interaction-passivity guarantee.
+/* Tustin (trapezoidal) mass-damper update using current and previous wrench,
+ * followed by per-axis acceleration and speed bounds. Enable/reset clears
+ * previous wrench, so the first step assumes a zero previous input.
+ * Bounds modify the ideal admittance dynamics; no passivity guarantee.
  * Returns false and disables/clears the controller on invalid data, timing
  * faults or while disabled. Output is zeroed on failure when non-NULL.
  * Zero output is NOT a physical safe-stop command or sensor fault policy.
