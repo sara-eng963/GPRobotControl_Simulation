@@ -96,8 +96,22 @@ typedef struct
     uint32_t timer_timeouts;
     uint32_t timer_overruns;
     uint32_t timer_max_cycle_us;
+    uint32_t timer_service_gap_warnings;
+    uint32_t timer_service_gap_severe;
+    uint32_t timer_wake_gap_warnings;
+    uint32_t timer_wake_gap_severe;
+    uint32_t timer_late_wakeups;
+    uint32_t timer_deadline_misses;
+    uint32_t timer_invalid_timestamps;
+    uint32_t timer_max_isr_to_wake_us;
+    uint32_t timer_max_isr_to_completion_us;
+    uint32_t timer_max_wake_gap_us;
     uint32_t guidance_dry_run_ok_cycles;
     uint32_t guidance_dry_run_rejected_cycles;
+    SupervisorTimingWake last_timing_wake;
+    uint64_t previous_timing_wake_us;
+    bool last_timing_wake_available;
+    bool previous_timing_wake_valid;
 
     /* Only the validation worker mutates 'validation' or flash storage when
      * async mode is enabled. Supervisor reads exclusively a copied result.
@@ -1083,6 +1097,12 @@ static void supervisor_task_entry(void *argument)
                         ROBOT_STATE_EMERGENCY_STOP)
                     emit_step_failure(context, 0xE003U);
             }
+            context->last_timing_wake_available = false;
+            if (context->config.timing.observe_wake != NULL)
+                context->last_timing_wake_available =
+                    context->config.timing.observe_wake(
+                        context->config.timing.context, periods,
+                        &context->last_timing_wake);
         }
         const uint64_t cycle_start_us =
             hardware_timed ? supervisor_now_us() : UINT64_C(0);
@@ -1157,7 +1177,8 @@ static void supervisor_task_entry(void *argument)
         }
         TRACE_END(TIMING_SUPERVISOR, true);
         if (hardware_timed) {
-            const uint64_t elapsed = supervisor_now_us() - cycle_start_us;
+            const uint64_t completion_us = supervisor_now_us();
+            const uint64_t elapsed = completion_us - cycle_start_us;
             const uint32_t sampled = elapsed > UINT32_MAX
                 ? UINT32_MAX : (uint32_t)elapsed;
             if (sampled > context->timer_max_cycle_us)
@@ -1169,6 +1190,51 @@ static void supervisor_task_entry(void *argument)
                     context->machine.activeState !=
                         ROBOT_STATE_EMERGENCY_STOP)
                     emit_step_failure(context, 0xE004U);
+            }
+            if (context->last_timing_wake_available) {
+                const SupervisorTimingAssessment a = supervisor_timing_assess(
+                    &context->last_timing_wake, completion_us,
+                    context->previous_timing_wake_valid,
+                    context->previous_timing_wake_us);
+                if (!a.valid) {
+                    if (context->timer_invalid_timestamps < UINT32_MAX)
+                        ++context->timer_invalid_timestamps;
+                } else {
+                    /* Every count saturates; never let long deployments wrap. */
+#define TIMING_INC_SAT(name, condition) do { \
+    if ((condition) && context->name < UINT32_MAX) ++context->name; \
+} while (0)
+                    TIMING_INC_SAT(timer_service_gap_warnings, a.service_gap_warning);
+                    TIMING_INC_SAT(timer_service_gap_severe, a.service_gap_severe);
+                    TIMING_INC_SAT(timer_wake_gap_warnings, a.wake_gap_warning);
+                    TIMING_INC_SAT(timer_wake_gap_severe, a.wake_gap_severe);
+                    TIMING_INC_SAT(timer_late_wakeups, a.late_wakeup);
+                    TIMING_INC_SAT(timer_deadline_misses, a.late_completion);
+#undef TIMING_INC_SAT
+                    if (a.isr_to_wake_us > context->timer_max_isr_to_wake_us)
+                        context->timer_max_isr_to_wake_us = a.isr_to_wake_us;
+                    if (a.isr_to_completion_us > context->timer_max_isr_to_completion_us)
+                        context->timer_max_isr_to_completion_us = a.isr_to_completion_us;
+                    if (a.wake_gap_us > context->timer_max_wake_gap_us)
+                        context->timer_max_wake_gap_us = a.wake_gap_us;
+                    context->previous_timing_wake_us =
+                        context->last_timing_wake.wake_sample_us;
+                    context->previous_timing_wake_valid = true;
+                    /* No new fault codes or state transitions. At >=4 ms
+                     * without serviced IRQ / task wake the periodic release
+                     * requirement has been violated (E003). An observed
+                     * ISR-to-completion >=2 ms violates even the post-ISR
+                     * deadline bound (E004). Smaller service gaps are only
+                     * diagnostic warnings, not inferred missed updates. */
+                    if ((a.service_gap_severe || a.wake_gap_severe) &&
+                        context->machine.activeState != ROBOT_STATE_FAULT &&
+                        context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+                        emit_step_failure(context, 0xE003U);
+                    if (a.late_completion &&
+                        context->machine.activeState != ROBOT_STATE_FAULT &&
+                        context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+                        emit_step_failure(context, 0xE004U);
+                }
             }
         } else {
             vTaskDelayUntil(&last_wake, context->config.period_ticks);
@@ -1389,6 +1455,17 @@ bool supervisor_task_get_diagnostics(SupervisorDiagnostics *out)
     out->timer_timeouts = g_supervisor.timer_timeouts;
     out->timer_overruns = g_supervisor.timer_overruns;
     out->timer_max_cycle_us = g_supervisor.timer_max_cycle_us;
+    out->timer_service_gap_warnings = g_supervisor.timer_service_gap_warnings;
+    out->timer_service_gap_severe = g_supervisor.timer_service_gap_severe;
+    out->timer_wake_gap_warnings = g_supervisor.timer_wake_gap_warnings;
+    out->timer_wake_gap_severe = g_supervisor.timer_wake_gap_severe;
+    out->timer_late_wakeups = g_supervisor.timer_late_wakeups;
+    out->timer_deadline_misses = g_supervisor.timer_deadline_misses;
+    out->timer_invalid_timestamps = g_supervisor.timer_invalid_timestamps;
+    out->timer_max_isr_to_wake_us = g_supervisor.timer_max_isr_to_wake_us;
+    out->timer_max_isr_to_completion_us =
+        g_supervisor.timer_max_isr_to_completion_us;
+    out->timer_max_wake_gap_us = g_supervisor.timer_max_wake_gap_us;
     out->guidance_dry_run_ok_cycles =
         g_supervisor.guidance_dry_run_ok_cycles;
     out->guidance_dry_run_rejected_cycles =

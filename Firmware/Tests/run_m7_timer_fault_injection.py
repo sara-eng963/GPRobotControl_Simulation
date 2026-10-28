@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Host fault injection of selected real M7 timer and Supervisor C code.
+"""Compile real STM32 TIM2/TIM3 routines and Supervisor wait/elapsed blocks.
 
-Compile extracts from production sources with mocked HAL/FreeRTOS calls.
-This cannot prove physical interrupt timing, WCET, CAN load or robot safety.
+These host mocks exercise production C; they cannot model TIM3 UIF coalescing,
+physical interrupt latency, hardware WCET, CAN load or robot safety.
 """
 from pathlib import Path
 import subprocess
@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "Firmware/STM32H745/CM7/Core/Src/application_supervisor.c"
 SUP = ROOT / "Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c"
 TEMPLATE = Path(__file__).with_name("m7_timer_fault_host.c")
+INCLUDE = ROOT / "Firmware/STM32H745/CM7/Application/StateMachine"
 
 
 def extract(text, marker):
@@ -35,12 +36,12 @@ def extract(text, marker):
 
 def main():
     app, sup = APP.read_text(), SUP.read_text()
-    functions = "\n\n".join(extract(app, marker) for marker in (
-        "static uint64_t time_now_us(void *unused)",
-        "static bool timer_start(void *unused)",
-        "static uint32_t timer_wait(",
-        "void application_supervisor_timer_period_elapsed_isr(",
-    ))
+    start_marker = "/* TIM2 overflows are extended by TIM2 ISR."
+    end_marker = "/* An UNDEFINED weak function reference"
+    if app.count(start_marker) != 1 or app.count(end_marker) != 1:
+        raise ValueError("Expected exact production timer block delimiters")
+    functions = app.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    functions = start_marker + functions
     task = sup.split("static void supervisor_task_entry(void *argument)", 1)[1]
     wait_part = extract(
         task.split("const uint64_t cycle_start_us", 1)[0],
@@ -65,11 +66,11 @@ def main():
         test_c.write_text(source)
         subprocess.run(
             ["cc", "-std=c11", "-O0", "-Wall", "-Wextra", "-Werror",
-             str(test_c), "-o", str(exe)], check=True
+             "-I", str(INCLUDE), str(test_c), "-o", str(exe)], check=True
         )
         subprocess.run([str(exe)], check=True)
-    print("PASS: production-C timing blocks passed host fault injection")
-    print("NOTE: hardware jitter and safety are NOT verified")
+    print("PASS: production-C TIM2/TIM3 and Supervisor timing fault injection")
+    print("NOTE: TIM3 hardware pending-flag coalescing and physical WCET unverified")
 
 
 if __name__ == "__main__":

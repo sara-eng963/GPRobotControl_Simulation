@@ -28,6 +28,7 @@ _Static_assert(IPC_ABI_VERSION == 2U, "Incorrect STM32 IPC ABI");
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "task.h"
+#include "supervisor_timing_quality.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -80,6 +81,10 @@ typedef struct {
     bool (*start)(void *context);
     /* Counting notification: 0 = timeout; >1 = periods missed. */
     uint32_t (*wait_next)(void *context, TickType_t timeout_ticks);
+    /* Optional task-context observation; delivered is the notification count.
+     * Return false if no timestamp observation can be provided. */
+    bool (*observe_wake)(void *context, uint32_t delivered,
+                         SupervisorTimingWake *out);
     void *context;
 } SupervisorTimingPort;
 
@@ -160,6 +165,16 @@ typedef struct {
     uint32_t timer_timeouts;
     uint32_t timer_overruns;
     uint32_t timer_max_cycle_us;
+    uint32_t timer_service_gap_warnings;
+    uint32_t timer_service_gap_severe;
+    uint32_t timer_wake_gap_warnings;
+    uint32_t timer_wake_gap_severe;
+    uint32_t timer_late_wakeups;
+    uint32_t timer_deadline_misses;
+    uint32_t timer_invalid_timestamps;
+    uint32_t timer_max_isr_to_wake_us;
+    uint32_t timer_max_isr_to_completion_us;
+    uint32_t timer_max_wake_gap_us;
     uint32_t guidance_dry_run_ok_cycles;
     uint32_t guidance_dry_run_rejected_cycles;
 } SupervisorDiagnostics;

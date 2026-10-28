@@ -1,11 +1,12 @@
-/* Host HAL/FreeRTOS stubs; selected functions are inserted unmodified from
- * the real repository at runtime by run_m7_timer_fault_injection.py. */
+/* Host HAL/FreeRTOS stubs. The timing implementation, including its ISR,
+ * is extracted directly from production sources at run time. */
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <assert.h>
 #include <stdio.h>
 #include <limits.h>
+#include "supervisor_timing_quality.h"
 
 #define TIM2 ((void *)(uintptr_t)2)
 #define TIM3 ((void *)(uintptr_t)3)
@@ -27,8 +28,6 @@ typedef struct {
 } TIM_HandleTypeDef;
 typedef struct { uint32_t APB1CLKDivider; } RCC_ClkInitTypeDef;
 static TIM_HandleTypeDef htim2, htim3;
-static volatile uint32_t g_tim2_wraps;
-static volatile bool g_timing_running;
 static unsigned critical_depth, notifications, starts, tim2_stops, yields;
 static uint32_t pclk = 100000000U;
 static int fail_tim3;
@@ -53,7 +52,8 @@ static void vTaskNotifyGiveFromISR(TaskHandle_t owner, BaseType_t *w)
 static uint32_t ulTaskNotifyTake(int clear, TickType_t ticks)
 { assert(clear == pdTRUE); (void)ticks; uint32_t x = notifications; notifications = 0; return x; }
 
-/* Minimal Supervisor context used by the exact extracted wait/overrun blocks. */
+/* Production Supervisor has further application/state fields not needed for
+ * the extracted wait/elapsed logic. All timing fields are represented. */
 #define ROBOT_STATE_FAULT 50
 #define ROBOT_STATE_EMERGENCY_STOP 51
 #define ROBOT_STATE_PATH_EXECUTION 42
@@ -61,10 +61,19 @@ typedef struct {
     struct { int activeState; } machine;
     struct { struct {
         uint32_t (*wait_next)(void *, TickType_t);
+        bool (*observe_wake)(void *, uint32_t, SupervisorTimingWake *);
         void *context;
     } timing; TickType_t period_ticks; } config;
     uint32_t timer_missed_periods, timer_timeouts;
     uint32_t timer_overruns, timer_max_cycle_us;
+    uint32_t timer_service_gap_warnings, timer_service_gap_severe;
+    uint32_t timer_wake_gap_warnings, timer_wake_gap_severe;
+    uint32_t timer_late_wakeups, timer_deadline_misses;
+    uint32_t timer_invalid_timestamps, timer_max_isr_to_wake_us;
+    uint32_t timer_max_isr_to_completion_us, timer_max_wake_gap_us;
+    SupervisorTimingWake last_timing_wake;
+    uint64_t previous_timing_wake_us;
+    bool last_timing_wake_available, previous_timing_wake_valid;
 } SupervisorTaskContext;
 static unsigned faults;
 static uint32_t last_fault;
@@ -75,6 +84,9 @@ static uint64_t supervisor_now_us(void) { return now_us; }
 static uint32_t delivered;
 static uint32_t fake_wait(void *unused, TickType_t timeout)
 { (void)unused; assert(timeout == 6); return delivered; }
+static SupervisorTimingWake injected_wake;
+static bool fake_observe(void *unused, uint32_t periods, SupervisorTimingWake *out)
+{ (void)unused; (void)periods; *out = injected_wake; return true; }
 
 /* PRODUCTION_TIMER_FUNCTIONS */
 
@@ -97,6 +109,8 @@ static void reset(void)
     g_tim2_wraps=0; g_timing_running=false; critical_depth=0;
     notifications=0; starts=0; tim2_stops=0; yields=0; fail_tim3=0;
     pclk=100000000U; supervisor=(void *)(uintptr_t)1;
+    faults=0; last_fault=0; delivered=0; now_us=0;
+    injected_wake=(SupervisorTimingWake){0};
 }
 static SupervisorTaskContext new_context(void)
 {
@@ -131,10 +145,18 @@ static void test_notifications(void)
     reset(); application_supervisor_timer_period_elapsed_isr(&htim3);
     assert(notifications==0);
     assert(timer_start(NULL));
-    for(int i=0;i<3;i++) application_supervisor_timer_period_elapsed_isr(&htim3);
+    for(int i=0;i<3;i++) {
+        htim2.Counter=(uint32_t)(2000*(i+1));
+        application_supervisor_timer_period_elapsed_isr(&htim3);
+    }
     assert(notifications==3 && yields==3);
     assert(timer_wait(NULL,6)==3 && timer_wait(NULL,6)==0);
-    puts("PASS: TIM3 ISR counting notifications and drain");
+    SupervisorTimingWake w={0};
+    htim2.Counter=6050;
+    assert(timer_observe_wake(NULL,3,&w));
+    assert(w.timestamp_valid && w.isr_gap_valid && w.isr_service_gap_us==2000);
+    assert(w.isr_service_us==6000 && w.wake_sample_us==6050);
+    puts("PASS: TIM3 counted notifications and sequence-matched sample");
 }
 static void test_missed_cycles(void)
 {
@@ -150,7 +172,7 @@ static void test_missed_cycles(void)
     c.timer_missed_periods=UINT32_MAX-1U; delivered=5;
     supervisor_wait_block(&c);
     assert(c.timer_missed_periods==UINT32_MAX);
-    puts("PASS: missing/coalesced periods fault and counter saturation");
+    puts("PASS: missing/coalesced notifications and counter saturation");
 }
 static void test_overrun(void)
 {
@@ -161,7 +183,158 @@ static void test_overrun(void)
     assert(faults==1 && last_fault==0xE004U && c.timer_overruns==1);
     now_us=10000; supervisor_elapsed_block(&c,0);
     assert(faults==1 && c.timer_overruns==2 && c.timer_max_cycle_us==10000);
-    puts("PASS: 2 ms Supervisor cycle overrun triggers fault");
+    puts("PASS: original 2 ms execution overrun behavior remains");
+}
+static SupervisorTimingWake sample(uint64_t isr,uint64_t wake,uint32_t gap)
+{
+    SupervisorTimingWake s={0};
+    s.timestamp_valid=true; s.isr_service_us=isr;
+    s.wake_sample_us=wake; s.isr_service_gap_us=gap;
+    s.isr_gap_valid=gap!=0; return s;
+}
+static void test_nominal(void)
+{
+    reset(); SupervisorTaskContext c=new_context();
+    c.config.timing.observe_wake=fake_observe; injected_wake=sample(2000,2020,0);
+    delivered=1; supervisor_wait_block(&c);
+    now_us=2400; supervisor_elapsed_block(&c,2020);
+    assert(faults==0 && c.timer_max_isr_to_wake_us==20);
+    assert(c.timer_max_isr_to_completion_us==400 && c.timer_deadline_misses==0);
+    injected_wake=sample(4000,4020,2000); supervisor_wait_block(&c);
+    now_us=4400; supervisor_elapsed_block(&c,4020);
+    assert(faults==0 && c.timer_max_wake_gap_us==2000);
+    puts("PASS: 500 Hz serviced ISR, wake and completion path");
+}
+static void test_late_wakeup(void)
+{
+    reset(); SupervisorTaskContext c=new_context();
+    c.config.timing.observe_wake=fake_observe;
+    injected_wake=sample(2000,3850,0); delivered=1;
+    supervisor_wait_block(&c); assert(faults==0);
+    now_us=4100; supervisor_elapsed_block(&c,3850);
+    assert(c.timer_late_wakeups==0 && c.timer_deadline_misses==1);
+    assert(c.timer_overruns==0 && faults==1 && last_fault==0xE004U);
+    puts("PASS: one notification + delayed wake + short execution still faults on completion");
+}
+static void test_delayed_isr_one_notification(void)
+{
+    reset(); assert(timer_start(NULL));
+    htim2.Counter=2000; application_supervisor_timer_period_elapsed_isr(&htim3);
+    assert(timer_wait(NULL,6)==1);
+    SupervisorTimingWake w={0}; htim2.Counter=2020;
+    assert(timer_observe_wake(NULL,1,&w) && w.timestamp_valid);
+    htim2.Counter=6500; application_supervisor_timer_period_elapsed_isr(&htim3);
+    assert(timer_wait(NULL,6)==1);
+    htim2.Counter=6510; assert(timer_observe_wake(NULL,1,&w));
+    assert(w.isr_gap_valid && w.isr_service_gap_us==4500);
+    SupervisorTimingAssessment a=supervisor_timing_assess(&w,6700,false,0);
+    assert(a.valid && a.service_gap_severe);
+    SupervisorTaskContext c=new_context();
+    c.config.timing.observe_wake=fake_observe; injected_wake=w;
+    delivered=1; supervisor_wait_block(&c);
+    now_us=6700; supervisor_elapsed_block(&c,6510);
+    assert(faults==1 && last_fault==0xE003U && c.timer_service_gap_severe==1);
+    puts("PASS: delayed ISR service interval with one delivered notification");
+}
+static void test_warning_only_gap(void)
+{
+    reset(); SupervisorTaskContext c=new_context();
+    c.config.timing.observe_wake=fake_observe;
+    injected_wake=sample(4200,4210,2200); delivered=1;
+    supervisor_wait_block(&c); now_us=4400;
+    supervisor_elapsed_block(&c,4210);
+    assert(faults==0 && c.timer_service_gap_warnings==1);
+    assert(c.timer_service_gap_severe==0);
+    puts("PASS: >2 ms ISR service jitter is a warning, not automatically a missed update");
+}
+static void test_matching_during_next_irq(void)
+{
+    reset(); assert(timer_start(NULL));
+    htim2.Counter=2000; application_supervisor_timer_period_elapsed_isr(&htim3);
+    assert(timer_wait(NULL,6)==1);
+    htim2.Counter=4000; application_supervisor_timer_period_elapsed_isr(&htim3);
+    SupervisorTimingWake w={0}; htim2.Counter=4001;
+    assert(timer_observe_wake(NULL,1,&w));
+    assert(w.timestamp_valid && w.isr_service_us==2000);
+    assert(timer_wait(NULL,6)==1);
+    assert(timer_observe_wake(NULL,1,&w) && w.isr_service_us==4000);
+    puts("PASS: IRQ arriving between notify drain and timestamp read does not mispair");
+}
+static void test_stale_and_ordering(void)
+{
+    reset(); assert(timer_start(NULL));
+    htim2.Counter=2000; application_supervisor_timer_period_elapsed_isr(&htim3);
+    assert(timer_wait(NULL,6)==1);
+    for (unsigned i=0;i<8;i++) {
+        htim2.Counter=4000U+i*2000U;
+        application_supervisor_timer_period_elapsed_isr(&htim3);
+    }
+    SupervisorTimingWake w={0}; htim2.Counter=18100;
+    assert(timer_observe_wake(NULL,1,&w) && !w.timestamp_valid);
+    reset(); SupervisorTaskContext c=new_context();
+    c.config.timing.observe_wake=fake_observe; delivered=1;
+    injected_wake=sample(5000,4500,0);
+    supervisor_wait_block(&c); now_us=5500;
+    supervisor_elapsed_block(&c,4500);
+    assert(c.timer_invalid_timestamps==1 && faults==0);
+    reset(); c=new_context(); c.config.timing.observe_wake=fake_observe;
+    injected_wake=sample(1000,1200,0); delivered=1;
+    supervisor_wait_block(&c); now_us=1199;
+    supervisor_elapsed_block(&c,1199);
+    assert(c.timer_invalid_timestamps==1 && faults==0);
+    reset(); assert(timer_start(NULL));
+    htim2.Counter=4000; application_supervisor_timer_period_elapsed_isr(&htim3);
+    assert(timer_wait(NULL,6)==1);
+    htim2.Counter=4010; assert(timer_observe_wake(NULL,1,&w));
+    htim2.Counter=3900; application_supervisor_timer_period_elapsed_isr(&htim3);
+    assert(timer_wait(NULL,6)==1);
+    htim2.Counter=3910; assert(timer_observe_wake(NULL,1,&w));
+    assert(!w.timestamp_valid);  /* TIM2 moved backward across ISR services. */
+    puts("PASS: stale sequence and invalid timestamp ordering reject misleading latency");
+}
+static void test_task_wake_gap(void)
+{
+    reset(); SupervisorTaskContext c=new_context();
+    c.config.timing.observe_wake=fake_observe; delivered=1;
+    injected_wake=sample(2000,2010,0);
+    supervisor_wait_block(&c); now_us=2200;
+    supervisor_elapsed_block(&c,2010);
+    assert(faults==0);
+    /* Task has received one notification but wakes more than two periods
+     * after the prior wake. The mocked time is not a hardware UIF model. */
+    injected_wake=sample(4000,6110,2000);
+    supervisor_wait_block(&c); now_us=6300;
+    supervisor_elapsed_block(&c,6110);
+    assert(faults==1 && last_fault==0xE003U);
+    assert(c.timer_wake_gap_severe==1 && c.timer_max_wake_gap_us==4100);
+    puts("PASS: two-period task wake gap triggers existing E003 fault");
+}
+static void test_isr_pending_tim2_wrap(void)
+{
+    reset(); assert(timer_start(NULL));
+    htim2.Counter=1U; htim2.UIF=1;
+    application_supervisor_timer_period_elapsed_isr(&htim3);
+    assert(timer_wait(NULL,6)==1);
+    htim2.Counter=5U;
+    SupervisorTimingWake w={0};
+    assert(timer_observe_wake(NULL,1,&w));
+    assert(w.timestamp_valid && w.isr_service_us==UINT64_C(4294967297));
+    assert(w.wake_sample_us==UINT64_C(4294967301));
+    application_supervisor_timer_period_elapsed_isr(&htim2);
+    htim2.UIF=0;
+    assert(time_now_us(NULL)==UINT64_C(4294967301));
+    puts("PASS: TIM3 ISR timestamps correct pending TIM2 overflow");
+}
+static void test_saturating_new_counters(void)
+{
+    reset(); SupervisorTaskContext c=new_context();
+    c.config.timing.observe_wake=fake_observe; delivered=1;
+    c.timer_deadline_misses=UINT32_MAX;
+    injected_wake=sample(2000,2100,0);
+    supervisor_wait_block(&c); now_us=4100;
+    supervisor_elapsed_block(&c,2100);
+    assert(c.timer_deadline_misses==UINT32_MAX && faults==1);
+    puts("PASS: new long-running counters saturate");
 }
 int main(void)
 {
@@ -170,6 +343,15 @@ int main(void)
     test_notifications();
     test_missed_cycles();
     test_overrun();
-    puts("PASS: real C timing blocks compiled and exercised with host mocks");
+    test_nominal();
+    test_late_wakeup();
+    test_delayed_isr_one_notification();
+    test_warning_only_gap();
+    test_matching_during_next_irq();
+    test_stale_and_ordering();
+    test_task_wake_gap();
+    test_isr_pending_tim2_wrap();
+    test_saturating_new_counters();
+    puts("PASS: extracted production timer/diagnostic C exercised with host mocks");
     return 0;
 }
