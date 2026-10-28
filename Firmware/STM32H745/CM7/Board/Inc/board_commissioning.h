@@ -26,6 +26,9 @@ typedef struct {
      * real commissioned board. NULL disables this callback entirely.
      * It does not grant motion authority or supply synthetic sensors. */
     const HandGuidingDryRunConfig *guidance_dry_run_config;
+    /* Opt in explicitly to the MATLAB reference M,D; never approved safety
+     * limits or a default motor-motion configuration. */
+    bool guidance_use_matlab_reference_md;
     /* Explicit interlock integration must exist in the physical board port. */
     bool (*hardware_interlocks_verified)(void *context);
     void *hardware_interlock_context;
