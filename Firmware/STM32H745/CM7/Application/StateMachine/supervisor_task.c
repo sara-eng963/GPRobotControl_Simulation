@@ -1031,7 +1031,7 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
             ++context->guidance_dry_run_rejected_cycles;
     }
     /* Candidate references remain exclusively in the observer state.
-     * NO take_candidate(), NO send_targets(), NO safety authority. */
+     * No candidate extraction, motor dispatch or safety authority. */
 }
 
 static void supervisor_task_entry(void *argument)
