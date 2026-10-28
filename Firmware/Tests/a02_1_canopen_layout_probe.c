@@ -17,8 +17,8 @@ int main(void)
            _Alignof(CanopenMaster), offsetof(CanopenMaster, sdo),
            offsetof(CanopenMaster, initialized),
            offsetof(CanopenMaster, owner_check));
-#if defined(A02_PROBE_FIRMWARE)
-    printf("LAYOUT variant=firmware permission=%zu\n",
+#if defined(A02_PROBE_ROOT) || defined(A02_PROBE_FIRMWARE)
+    printf("LAYOUT variant=%s permission=%zu\n", HEADER_VARIANT,
            offsetof(CanopenMaster, drive_command_permission));
 #endif
     return 0;

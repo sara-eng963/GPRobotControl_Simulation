@@ -1,4 +1,4 @@
-/* A02.1 -- intentionally failing integration regression on d8924d3.
+/* A02.1/A02.2 -- strict real production-composition ABI regression.
  * This TU sees the production CanopenMaster. Both actual adapters are built
  * separately and retain their relative includes of the root declaration.
  * Do not replace either adapter with a mock and do not link root master.c.
@@ -85,9 +85,9 @@ int main(void)
            (int)init_when_denied, (int)commissioning_configured_when_denied,
            (int)configured_when_denied);
     fflush(stdout);
-    EXPECT(init_when_denied);                   /* expected FAIL on baseline */
-    EXPECT(configured_when_denied);             /* expected FAIL on baseline */
-    EXPECT(commissioning_configured_when_denied); /* expected FAIL on baseline */
+    EXPECT(init_when_denied);
+    EXPECT(configured_when_denied);
+    EXPECT(commissioning_configured_when_denied);
 
     int32_t targets[JOINT_DRIVE_AXES] = {0};
     EXPECT(!canopen_master_begin_write_controlword(&master, 0U, 0x000FU, 1U));
@@ -118,15 +118,15 @@ int main(void)
     printf("A02.1 revoked: commissioning_initialized=%d joint_configured=%d\n",
            (int)init_after_revoke, (int)configured_after_revoke);
     fflush(stdout);
-    EXPECT(init_after_revoke);                  /* expected FAIL on baseline */
-    EXPECT(configured_after_revoke);            /* expected FAIL on baseline */
+    EXPECT(init_after_revoke);
+    EXPECT(configured_after_revoke);
     EXPECT(init_when_denied == init_when_granted);
     EXPECT(configured_when_denied == configured_when_granted);
     EXPECT(bus.transmissions == 0U);
 
     canopen_master_close(&master);
     if (failures != 0U) {
-        fprintf(stderr, "A02.1: %u violated assertions (expected baseline defect).\n",
+        fprintf(stderr, "A02.2: %u adapter contract assertions failed.\n",
                 failures);
         return 1;
     }

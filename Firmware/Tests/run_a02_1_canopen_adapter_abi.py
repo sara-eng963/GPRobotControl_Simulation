@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""A02.1: compile real STM32 master + real root adapters. TEST ONLY.
+"""A02.2: strict production-master / shared-adapter ABI regression.
 
 Run from any working directory. No files are written to the repository.
-Default exits nonzero if production behavior fails. Optionally use
---expect-baseline-failure for a local reproduction that exits zero ONLY when
-layout differs and the observed behavior test fails (never use as a CI gate).
+Strict mode is required for CI and exits nonzero on any ABI/layout mismatch
+or behavioral failure. Reproduction of the original known defect remains
+available by checking out the previous A02.1 commit (5e74a693).
 """
-import argparse
 import os
 from pathlib import Path
 import re
@@ -52,20 +51,21 @@ def layout(cmd, workdir, variant):
     if m is None:
         raise RuntimeError("Layout probe produced no initialized offset")
     permission = re.search(r"permission=(\d+)", r.stdout)
-    return int(m.group(1)), (int(permission.group(1)) if permission else None)
+    size = re.search(r"sizeof=(\d+)", r.stdout)
+    align = re.search(r"align=(\d+)", r.stdout)
+    sdo = re.search(r"sdo=(\d+)", r.stdout)
+    owner = re.search(r"owner_check=(\d+)", r.stdout)
+    if not all((permission, size, align, sdo, owner)):
+        raise RuntimeError("Incomplete canonical CANopen layout probe: " + r.stdout)
+    return {"initialized": int(m.group(1)), "permission": int(permission.group(1)),
+            "sizeof": int(size.group(1)), "align": int(align.group(1)),
+            "sdo": int(sdo.group(1)), "owner_check": int(owner.group(1))}
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--expect-baseline-failure", action="store_true",
-                        help="local evidence mode; not a required-passing CI check")
-    args = parser.parse_args()
-    expected_sha = "d8924d3acb4ec39e31462c49c680ccfb12f53316"
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
                           capture_output=True, text=True, check=True).stdout.strip()
     print("REPOSITORY_HEAD:", head)
-    if head != expected_sha:
-        raise RuntimeError("Expected exact A02.1 baseline; no branch switching performed")
     paths = [*MASTER_SOURCES, *ADAPTERS, *REAL_DRIVE_DEPS,
              TESTS / "a02_1_canopen_layout_probe.c",
              TESTS / "test_a02_1_canopen_adapter_abi.c"]
@@ -78,14 +78,16 @@ def main():
     with tempfile.TemporaryDirectory(prefix="a02_1_canopen_abi_") as tmp:
         workdir = Path(tmp)
         print("=== Headers: separate real compilation units ===")
-        fw_offset, permission_offset = layout(base, workdir, "firmware")
-        root_offset, _ = layout(base, workdir, "root")
-        print(f"OFFSETS firmware_initialized={fw_offset} "
-              f"firmware_permission={permission_offset} root_initialized={root_offset}")
-        if fw_offset == root_offset or permission_offset != root_offset:
-            raise RuntimeError("Expected offset substitution not demonstrated")
+        fw_layout = layout(base, workdir, "firmware")
+        root_layout = layout(base, workdir, "root")
+        print("FIRMWARE_LAYOUT:", fw_layout)
+        print("ROOT_LAYOUT:", root_layout)
+        if fw_layout != root_layout:
+            raise RuntimeError("CANopen type ABI mismatch: " +
+                               f"firmware={fw_layout}, root={root_layout}")
 
         print("=== Header include tracing: real production and root translation units ===")
+        canonical_header = ROOT_CAN / "canopen_master_types.h"
         for src, required_header in [
             (MASTER_SOURCES[0], FW / "canopen_master.h"),
             *[(src, ROOT_CAN / "canopen_master.h") for src in ADAPTERS],
@@ -98,12 +100,14 @@ def main():
                 raise RuntimeError("Compiler header tracing failed for " + str(src))
             header_paths = []
             for line in result.stderr.splitlines():
-                match = re.match(r"^\.+\s+(.+canopen_master\.h)$", line.strip())
+                match = re.match(r"^\.+\s+(.+canopen_master(?:_types)?\.h)$", line.strip())
                 if match:
                     header_paths.append(Path(match.group(1)).resolve())
             print("HEADER_TRACE", src.name, "=>", *header_paths)
             if required_header.resolve() not in header_paths:
                 raise RuntimeError("Unexpected CanopenMaster header in " + str(src))
+            if canonical_header.resolve() not in header_paths:
+                raise RuntimeError("Canonical CANopen type header missing from " + str(src))
 
         print("=== Production master with both genuine root adapters ===")
         exe = workdir / "adapter_abi_test"
@@ -112,35 +116,9 @@ def main():
                        *map(str, REAL_DRIVE_DEPS), "-lm", "-o", str(exe)]
         run(compilation)
         test = run([str(exe)], allow_failure=True)
-        if args.expect_baseline_failure:
-            if test.returncode == 0:
-                raise RuntimeError("Expected baseline failure absent")
-            expected_output = [
-                "production_initialized=1 permission=0 commissioning_initialized=0",
-                "commissioning_configured=0 joint_configured=0",
-                "A02.1 granted: commissioning_initialized=1 joint_configured=1",
-                "A02.1 revoked: commissioning_initialized=0 joint_configured=0",
-            ]
-            output = test.stdout + test.stderr
-            if not all(needle in output for needle in expected_output):
-                raise RuntimeError("Baseline output did not isolate the expected ABI mismatch")
-            expected_failures = {
-                "init_when_denied", "configured_when_denied",
-                "commissioning_configured_when_denied", "init_after_revoke",
-                "configured_after_revoke", "init_when_denied == init_when_granted",
-                "configured_when_denied == configured_when_granted",
-            }
-            actual_failures = re.findall(r"^FAIL A02\.1:\d+: (.+)$",
-                                         test.stderr, flags=re.MULTILINE)
-            if len(actual_failures) != len(expected_failures) or \
-                    set(actual_failures) != expected_failures:
-                raise RuntimeError("Unexpected failing assertion(s): " +
-                                   repr(actual_failures))
-            print("REPRODUCED ARCH-001: only expected adapter ABI assertions failed")
-            return 0
         if test.returncode:
             raise RuntimeError("ARCH-001 reproduced: required adapter contract failed")
-        print("PASS: production adapter ABI conformance")
+        print("PASS: canonical CANopen layout, real adapters, and authorization vetoes")
     return 0
 
 
