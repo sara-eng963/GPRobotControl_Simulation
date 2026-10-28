@@ -1,4 +1,5 @@
 #include "../admittance_control.h"
+#include "../admittance_matlab_reference.h"
 
 #include <assert.h>
 #include <math.h>
@@ -69,17 +70,22 @@ static void verify_matlab_optimized_reference(void)
                 -0.002362626804278767, -0.005462836783766367,
                 -0.004734880986731036, -0.003650976853760065}}
     };
-    AdmittanceParams p = fixture();
+    AdmittanceParams p = {0};
     AdmittanceState s = {0};
     double wrench[ADMITTANCE_AXES] = {0};
     double twist[ADMITTANCE_AXES] = {0};
     size_t point = 0U;
+    assert(!admittance_matlab_reference_md(NULL));
+    assert(admittance_matlab_reference_md(&p));
+    /* A tuning reference is NOT a complete, motion-authorized configuration. */
+    assert(!admittance_params_valid(&p));
     for (size_t i = 0U; i < ADMITTANCE_AXES; ++i) {
-        p.virtual_mass[i] = mass[i];
-        p.damping[i] = damping[i];
-        p.speed_limit[i] = 2.0;
+        close_to(p.virtual_mass[i], mass[i]);
+        close_to(p.damping[i], damping[i]);
+        p.speed_limit[i] = 2.0; /* synthetic test bounds only */
         p.acceleration_limit[i] = 100.0;
     }
+    p.maximum_step_s = 0.004; /* synthetic test bound only */
     assert(admittance_enable(&s, &p));
     for (unsigned k = 1U; k <= 600U; ++k) {
         for (size_t i = 0U; i < ADMITTANCE_AXES; ++i) {
