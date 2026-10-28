@@ -30,6 +30,7 @@ void admittance_reset(AdmittanceState *state)
     if (state == NULL) return;
     for (size_t i = 0U; i < ADMITTANCE_AXES; ++i) {
         state->velocity[i] = 0.0;
+        state->previous_wrench[i] = 0.0;
     }
     state->enabled = false;
 }
@@ -70,6 +71,7 @@ bool admittance_step(
     for (size_t i = 0U; i < ADMITTANCE_AXES; ++i) {
         const double previous = state->velocity[i];
         if (!isfinite(previous) || !isfinite(wrench[i]) ||
+            !isfinite(state->previous_wrench[i]) ||
             fabs(previous) > params->speed_limit[i]) {
             admittance_reset(state);
             return false;
@@ -77,8 +79,10 @@ bool admittance_step(
 
         const double mass = params->virtual_mass[i];
         const double damping = params->damping[i];
-        const double denominator = mass + period_s * damping;
-        const double numerator = mass * previous + period_s * wrench[i];
+        /* Tustin: (2M - D*dt)*v_prev + dt*(w_prev + w_now). */
+        const double denominator = 2.0 * mass + period_s * damping;
+        const double numerator = (2.0 * mass - period_s * damping) * previous +
+                                 period_s * (state->previous_wrench[i] + wrench[i]);
         const double dv_max = period_s * params->acceleration_limit[i];
         if (!isfinite(denominator) || denominator <= 0.0 ||
             !isfinite(numerator) || !isfinite(dv_max) || dv_max <= 0.0) {
@@ -115,6 +119,7 @@ bool admittance_step(
     /* No axis can modify the controller state before all six have passed. */
     for (size_t i = 0U; i < ADMITTANCE_AXES; ++i) {
         state->velocity[i] = next[i];
+        state->previous_wrench[i] = wrench[i];
         twist_out[i] = next[i];
     }
     return true;
