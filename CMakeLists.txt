@@ -208,6 +208,10 @@ if(Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/run_state_machine_alignment_tests.py")
     set_tests_properties(stm32_state_machine_alignment PROPERTIES TIMEOUT 180)
+    add_test(NAME p04_integrated_production_scenarios
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/run_p04_integrated.py")
+    set_tests_properties(p04_integrated_production_scenarios PROPERTIES TIMEOUT 180)
     add_test(NAME stm32_portable_protocol_regressions
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/check_portable_protocol.py")

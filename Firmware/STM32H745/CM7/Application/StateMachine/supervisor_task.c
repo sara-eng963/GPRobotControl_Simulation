@@ -1509,6 +1509,32 @@ static void supervisor_pre_dispatch_cycle(SupervisorTaskContext *context)
     (void)supervisor_motion_containment_check(context, supervisor_now_ms(), false);
 }
 
+/* P04: validate the source-owned TIM3 observation before entering a motion
+ * state. Completion overruns remain post-execution (cannot be predicted);
+ * no motion is executed after an already-observable late/invalid wake.
+ * TIM3 service times and TIM2 wake sample share the CM7 clock domain. */
+static bool supervisor_timing_pre_dispatch_check(
+    SupervisorTaskContext *context, uint64_t task_now_us)
+{
+    const SupervisorTimingAssessment a = context->last_timing_wake_available
+        ? supervisor_timing_assess(&context->last_timing_wake, task_now_us,
+              context->previous_timing_wake_valid,
+              context->previous_timing_wake_us)
+        : (SupervisorTimingAssessment){0};
+    uint32_t detail = 0U;
+    if (!a.valid)
+        detail = 0xE019U; /* invalid or missing CM7 timing evidence */
+    else if (a.service_gap_severe || a.wake_gap_severe)
+        detail = 0xE003U; /* serviced interrupt / wake cadence violated */
+    else if (a.late_completion)
+        detail = 0xE004U; /* task already >=2 ms from serviced IRQ */
+    if (detail == 0U) return true;
+    if (context->machine.activeState != ROBOT_STATE_FAULT &&
+        context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+        emit_step_failure(context, detail);
+    return false;
+}
+
 static void supervisor_task_entry(void *argument)
 {
     SupervisorTaskContext *context = argument;
@@ -1569,6 +1595,11 @@ static void supervisor_task_entry(void *argument)
         }
         const uint64_t cycle_start_us =
             hardware_timed ? supervisor_now_us() : UINT64_C(0);
+        /* Reject known missed/invalid TIM3 timing before motor-state
+         * dispatch; completion overruns are evaluated after work. */
+        if (hardware_timed &&
+            !supervisor_timing_pre_dispatch_check(context, cycle_start_us))
+            progress_cycle_ok = false;
         TRACE_BEGIN(TIMING_SUPERVISOR);
         /* P03: actual production pre-dispatch cycle; tests call the same function. */
         supervisor_pre_dispatch_cycle(context);
@@ -1627,6 +1658,14 @@ static void supervisor_task_entry(void *argument)
             context->machine.activeState != ROBOT_STATE_FAULT &&
             context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
             emit_step_failure(context, 0xE0B1U);
+        /* Work after the initial wake check (queue, IPC, heartbeat and
+         * authorization) can consume the remaining deadline. Recheck the
+         * CM7-local TIM2 clock immediately before state dispatch. This
+         * cannot predict duration of the subsequent state step. FAULT and
+         * EMERGENCY_STOP service must still run after a timing fault. */
+        if (hardware_timed &&
+            !supervisor_timing_pre_dispatch_check(context, supervisor_now_us()))
+            progress_cycle_ok = false;
         /* Complete, intentional Teaching break, or overload->FAULT: never
          * suspend state/fault stepping merely because messages arrived. */
         if (controller_hb_ok ||

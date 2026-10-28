@@ -113,7 +113,13 @@ def main():
         execute(fixture, "production CM4 HMI lifecycle", overrides={cm4: cm4_obj})
 
         wrapper = TESTS / "test_production_supervisor.c"
+        if os.environ.get("P04_FAST_ONLY") == "1":
+            execute(TESTS / "test_p04_integrated.c",
+                    "P04 integrated production scenarios", wrapper=True)
+            return
         execute(wrapper, "production Supervisor wrapper", wrapper=True)
+        execute(TESTS / "test_p04_integrated.c",
+                "P04 integrated production scenarios", wrapper=True)
 
         # Reuse the same scheduling seam against the actual desktop wrapper
         # and its state/CANopen units. Target-only restart assertions remain
