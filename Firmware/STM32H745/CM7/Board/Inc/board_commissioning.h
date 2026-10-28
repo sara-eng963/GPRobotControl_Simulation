@@ -2,6 +2,7 @@
 #define BOARD_COMMISSIONING_H
 
 #include "../../Application/StateMachine/supervisor_task.h"
+#include "../../../../../HandGuiding/supervisor_dry_run_adapter.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -21,6 +22,10 @@ typedef struct {
     uint8_t node_count;
     uint32_t heartbeat_timeout_ms;
     uint32_t sdo_timeout_ms;
+    /* Optional observation-only F/T pipeline configuration supplied by a
+     * real commissioned board. NULL disables this callback entirely.
+     * It does not grant motion authority or supply synthetic sensors. */
+    const HandGuidingDryRunConfig *guidance_dry_run_config;
     /* Explicit interlock integration must exist in the physical board port. */
     bool (*hardware_interlocks_verified)(void *context);
     void *hardware_interlock_context;
