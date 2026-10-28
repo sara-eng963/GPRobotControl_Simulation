@@ -84,6 +84,7 @@ def main():
             for symbol in (
                 "hand_guiding_dry_run_init", "hand_guiding_dry_run_tick",
                 "hand_guiding_pipeline_step", "admittance_step",
+                "admittance_matlab_reference_md",
                 "cartesian_joint_mapper_step"
             ):
                 assert re.search(r"^[0-9a-f]+ [0-9a-f]+ [TW] " +
@@ -105,6 +106,7 @@ def main():
     assert "board_supply_commissioned_config == NULL" in app7
     assert "hand_guiding_dry_run_init(&g_guidance_observer" in app7
     assert "hand_guiding_dry_run_port(&g_guidance_observer)" in app7
+    assert "admittance_matlab_reference_md(" in app7
     print("PASS: M7 hand-guiding dry-run observer linked; no candidate dispatch")
     main7 = (FW / "CM7/Core/Src/main.c").read_text()
     mpu = main7[main7.index("void MPU_Config(void)\n{"):]
