@@ -9,6 +9,7 @@ add_library(hand_guiding STATIC
     ft_sensor.c
     sensor_config.c
     admittance_control.c
+    admittance_matlab_reference.c
     cartesian_joint_mapper.c
     wrench_frame.c
     hand_guiding_pipeline.c
