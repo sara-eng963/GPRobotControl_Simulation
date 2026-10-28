@@ -580,16 +580,11 @@ StateStepResult state_boot_step(
             {
                 boot_advance(
                     boot,
-                    BOOT_PHASE_ENABLE_DRIVES,
+                    BOOT_PHASE_PRE_ENABLE_STATUS,
                     now_ms
                 );
-
-                boot->enable_stage =
-                    BOOT_ENABLE_READ_STATUS;
-
-                boot->drive_enable_attempts =
-                    0U;
-
+                boot->preenable_status_checked = false;
+                boot->drive_enable_authorized = false;
                 return STATE_STEP_RUNNING;
             }
 
@@ -605,8 +600,66 @@ StateStepResult state_boot_step(
             return STATE_STEP_RUNNING;
         }
 
+        /* Read the actual 6041h statusword for EVERY axis before the operator
+         * approval window opens. An already-enabled axis after MCU reset is
+         * a commissioning fault, not evidence of safe readiness. */
+        case BOOT_PHASE_PRE_ENABLE_STATUS:
+        {
+            if (boot->axis_index >= JOINT_DRIVE_AXES)
+            {
+                boot->preenable_status_checked = true;
+                boot_advance(boot, BOOT_PHASE_WAIT_AUTHORIZATION, now_ms);
+                return STATE_STEP_RUNNING;
+            }
+            if (!boot->transaction_started)
+            {
+                if (!drive_commissioning_port_begin(commissioning,
+                    DRIVE_COMMISSION_READ_STATUSWORD, boot->axis_index, 0U,
+                    now_ms))
+                    return boot_fail(boot, BOOT_ERROR_DRIVE_STATE,
+                                     (int)boot->axis_index + 1);
+                boot->transaction_started = true;
+                return STATE_STEP_RUNNING;
+            }
+            uint32_t raw_statusword = 0U;
+            const BootSdoPollResult result = collect_sdo(
+                boot, commissioning, true, 2U, &raw_statusword);
+            if (result == BOOT_SDO_WAITING) return STATE_STEP_RUNNING;
+            if (result != BOOT_SDO_DONE)
+                return boot_fail(boot, BOOT_ERROR_DRIVE_STATE,
+                                 (int)boot->axis_index + 1);
+            const uint16_t drive_state = cia402_get_state(
+                (uint16_t)raw_statusword);
+            if (cia402_is_fault(drive_state) ||
+                cia402_is_quick_stop(drive_state) ||
+                drive_state == CIA402_STATE_OPERATION_ENABLED)
+                return boot_fail(boot, BOOT_ERROR_DRIVE_STATE,
+                                 (int)boot->axis_index + 1);
+            boot->axis_index++;
+            return STATE_STEP_RUNNING;
+        }
+
+        /* Intentional non-timed wait: time passing never grants authorization.
+         * Safety/board evidence is observed every Supervisor cycle. */
+        case BOOT_PHASE_WAIT_AUTHORIZATION:
+        {
+            if (!boot->preenable_status_checked)
+                return boot_fail(boot, BOOT_ERROR_SAFETY, 0);
+            if (!drive_commissioning_port_all_heartbeat_state(
+                    commissioning, DRIVE_NODE_OPERATIONAL))
+                return boot_fail(boot, BOOT_ERROR_HEARTBEAT_TIMEOUT, 0);
+            if (!boot->drive_enable_authorized)
+                return STATE_STEP_RUNNING;
+            boot_advance(boot, BOOT_PHASE_ENABLE_DRIVES, now_ms);
+            boot->enable_stage = BOOT_ENABLE_READ_STATUS;
+            boot->drive_enable_attempts = 0U;
+            return STATE_STEP_RUNNING;
+        }
+
         case BOOT_PHASE_ENABLE_DRIVES:
         {
+            if (!boot->drive_enable_authorized)
+                return boot_fail(boot, BOOT_ERROR_SAFETY, 0);
             if (boot->axis_index >= JOINT_DRIVE_AXES)
             {
                 boot_advance(
@@ -710,6 +763,9 @@ StateStepResult state_boot_step(
 
             if (!boot->transaction_started)
             {
+                /* Recheck immediately before the hazardous SDO submission. */
+                if (!boot->drive_enable_authorized)
+                    return boot_fail(boot, BOOT_ERROR_SAFETY, 0);
                 if (!drive_commissioning_port_begin(commissioning,
                         DRIVE_COMMISSION_WRITE_CONTROLWORD, boot->axis_index, boot->pending_controlword, now_ms))
                 {

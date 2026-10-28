@@ -10,6 +10,9 @@
 bool application_supervisor_board_configure(SupervisorTaskConfig *config);
 /* Target-specific composition of the existing supervisor, not a new RTOS. */
 bool application_supervisor_start(const SupervisorTaskConfig *config);
+/* CM7 startup owns the capture and stores evidence before clearing RCC flags. */
+const ResetDiagnostics *application_supervisor_reset_info(void);
+
 /* Called from CubeMX HAL_TIM_PeriodElapsedCallback; ignores TIM6. */
 void application_supervisor_timer_period_elapsed_isr(
     TIM_HandleTypeDef *timer);

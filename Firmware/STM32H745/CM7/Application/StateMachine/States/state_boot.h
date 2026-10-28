@@ -20,6 +20,8 @@ typedef enum
     BOOT_PHASE_VERIFY_INTERPOLATION_MODE,
     BOOT_PHASE_REQUEST_OPERATIONAL,
     BOOT_PHASE_WAIT_OPERATIONAL_HEARTBEAT,
+    BOOT_PHASE_PRE_ENABLE_STATUS,
+    BOOT_PHASE_WAIT_AUTHORIZATION,
     BOOT_PHASE_ENABLE_DRIVES,
     BOOT_PHASE_READ_POSITION_FEEDBACK,
     BOOT_PHASE_INITIAL_PDO_EXCHANGE,
@@ -71,6 +73,8 @@ typedef struct
     BootEnableStage enable_stage;
     uint16_t pending_controlword;
     uint32_t drive_enable_attempts;
+    bool preenable_status_checked;
+    bool drive_enable_authorized;
 
     int32_t hold_position[JOINT_DRIVE_AXES];
 

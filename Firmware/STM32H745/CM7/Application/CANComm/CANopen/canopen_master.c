@@ -182,6 +182,7 @@ void canopen_master_clear_runtime(
 )
 {
     if (!owner_access_allowed(master)) return;
+    canopen_master_set_drive_permission(master, false);
     if (
         master == NULL ||
         !master->initialized
@@ -214,6 +215,26 @@ void canopen_master_clear_runtime(
     canopen_master_sdo_clear(
         master
     );
+}
+
+void canopen_master_set_drive_permission(CanopenMaster *master,
+                                         bool permitted)
+{
+    /* No permission may be established before the Supervisor task binds
+     * its runtime owner. Foreign task calls cannot modify the gate. */
+    if (master == NULL || master->owner_check == NULL ||
+        !owner_access_allowed(master))
+        return;
+    /* An SDO write already transmitted to the drive cannot be recalled.
+     * Prevent a late 6040h acknowledgement from being reported as a
+     * successful in-flight enable after permission was withdrawn. */
+    if (!permitted && master->sdo.state == CANOPEN_MASTER_SDO_PENDING &&
+        !master->sdo.expects_read && master->sdo.index == 0x6040U)
+    {
+        memset(&master->sdo.response, 0, sizeof(master->sdo.response));
+        master->sdo.state = CANOPEN_MASTER_SDO_TRANSPORT_ERROR;
+    }
+    master->drive_command_permission = master->initialized && permitted;
 }
 
 void canopen_master_set_heartbeat_timeout(
@@ -527,6 +548,10 @@ bool canopen_master_send_nmt_all(
 )
 {
     if (!owner_access_allowed(master)) return false;
+    if (master != NULL &&
+        (command == CANOPEN_NMT_RESET_COMMUNICATION ||
+         command == CANOPEN_NMT_RESET_APPLICATION))
+        canopen_master_set_drive_permission(master, false);
     if (
         master == NULL ||
         !master->initialized
@@ -559,6 +584,7 @@ bool canopen_master_send_sync(
     if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
+        !master->drive_command_permission ||
         !master->initialized
     )
     {
@@ -595,6 +621,7 @@ bool canopen_master_send_target_cycle(
     if (!owner_access_allowed(master)) return false;
     if (
         master == NULL ||
+        !master->drive_command_permission ||
         !master->initialized ||
         target_positions == NULL ||
         target_count != master->node_count
@@ -1169,6 +1196,13 @@ bool canopen_master_begin_write_controlword(
 )
 {
     if (!owner_access_allowed(master)) return false;
+    /* Permit attempts to disable voltage / quick-stop without approval;
+     * these commands are not a substitute for a physical STO channel.
+     * Every other controlword is denied before building/sending an SDO. */
+    if (master == NULL ||
+        (!master->drive_command_permission &&
+         controlword != 0x0000U && controlword != 0x0002U))
+        return false;
     if (
         master == NULL ||
         node_index >= master->node_count

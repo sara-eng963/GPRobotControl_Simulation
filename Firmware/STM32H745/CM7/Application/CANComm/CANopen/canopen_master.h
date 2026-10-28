@@ -101,6 +101,9 @@ typedef struct
 
     CanopenMasterSdoTransaction sdo;
 
+    /* Software veto only. Cleared at init and every new NMT reset cycle. */
+    bool drive_command_permission;
+
     bool initialized;
 
     /* Bound once by the controller task after initialization and before use. */
@@ -115,6 +118,10 @@ typedef struct
 bool canopen_master_bind_runtime_owner(CanopenMaster *master,
                                        CanopenMasterOwnerCheck check,
                                        void *context);
+
+/* Single-owner explicit gate; never accepts a permission from an RX frame. */
+void canopen_master_set_drive_permission(CanopenMaster *master,
+                                         bool permitted);
 
 /*
  * Initialize the six-axis CANopen coordinator around an already-created

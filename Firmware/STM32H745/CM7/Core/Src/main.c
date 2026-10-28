@@ -75,6 +75,7 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityLow,
 };
 /* USER CODE BEGIN PV */
+static ResetDiagnostics g_cm7_reset_evidence;
 
 /* USER CODE END PV */
 
@@ -96,6 +97,10 @@ void StartDefaultTask(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+const ResetDiagnostics *application_supervisor_reset_info(void)
+{
+  return &g_cm7_reset_evidence;
+}
 
 /* USER CODE END 0 */
 
@@ -107,6 +112,11 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  /* CM7 owns RCC reset evidence. Capture BEFORE HAL/clock startup and BEFORE
+   * CM7 releases CM4 through HSEM. Do not read cleared flags on CM4. */
+  const uint32_t raw_reset = RCC->RSR;
+  g_cm7_reset_evidence = reset_diagnostics_from_raw(raw_reset);
+  __HAL_RCC_CLEAR_RESET_FLAGS();
 
   /* USER CODE END 1 */
 /* USER CODE BEGIN Boot_Mode_Sequence_0 */

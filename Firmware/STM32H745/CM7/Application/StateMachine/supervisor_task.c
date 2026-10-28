@@ -114,6 +114,7 @@ typedef struct
     bool previous_timing_wake_valid;
     bool fault_response_step_ok;
     SupervisionProgressSample progress;
+    DriveRestartGate restart_gate;
 
     /* Only the validation worker mutates 'validation' or flash storage when
      * async mode is enabled. Supervisor reads exclusively a copied result.
@@ -478,6 +479,28 @@ static void handle_policy_event(
         }
     }
 
+    if (event->type == SUPERVISOR_EVENT_RESET &&
+        (context->machine.activeState == ROBOT_STATE_FAULT ||
+         context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP) &&
+        !context->restart_gate.authorized)
+    {
+        /* A state-machine RESET cannot clear a revoked boot authorization. */
+        return;
+    }
+
+    /* Revoke synchronously, before a later RESET/HMI queue message can
+     * restore a motion state in this same 500 Hz Supervisor cycle. */
+    if (event->type == SUPERVISOR_EVENT_PROTECTIVE_STOP_ASSERTED ||
+        event->type == SUPERVISOR_EVENT_ESTOP_ASSERTED ||
+        event->type == SUPERVISOR_EVENT_FAULT_DETECTED ||
+        event->type == SUPERVISOR_EVENT_STATE_FAILED)
+    {
+        drive_restart_gate_inhibit(&context->restart_gate);
+        context->boot.drive_enable_authorized = false;
+        canopen_master_set_drive_permission(context->config.canopen_master,
+                                            false);
+    }
+
     RobotStateId before = context->machine.activeState;
     SupervisorResult result =
         state_machine_handle_event(&context->machine, event);
@@ -644,6 +667,7 @@ static void handle_message(
             /* NEVER let an external producer call the CANopen coordinator.
              * Apply only in TEACHING with fresh motion authorization. */
             if (context->machine.activeState == ROBOT_STATE_TEACHING &&
+                context->restart_gate.authorized &&
                 context->machine.safety.statusValid &&
                 context->machine.safety.motionPermitted &&
                 canopen_master_ready_for_motion(context->config.canopen_master,
@@ -661,6 +685,18 @@ static void handle_message(
                 &context->machine,
                 &message->data.safety
             );
+            /* A bad safety update is revocation now, not at the next tick:
+             * another queued command in this cycle must not bypass it. */
+            if (context->restart_gate.authorized &&
+                (!context->machine.safety.statusValid ||
+                 context->machine.safety.estopActive ||
+                 context->machine.safety.protectiveStopActive ||
+                 context->machine.safety.globalFaultActive)) {
+                drive_restart_gate_inhibit(&context->restart_gate);
+                context->boot.drive_enable_authorized = false;
+                canopen_master_set_drive_permission(
+                    context->config.canopen_master, false);
+            }
             break;
 
         case SUPERVISOR_MESSAGE_TEACHING_EVENT:
@@ -1164,6 +1200,52 @@ static void supervisor_task_entry(void *argument)
         /* Retries a deferred validation entry without waiting or sleeping.
          * No-op in an already entered state. */
         enter_active_state(context);
+        const bool was_authorized = context->restart_gate.authorized;
+        /* A CANopen NMT reset can revoke permission inside the coordinator.
+         * Never silently regrant the old session on the next 2 ms cycle. */
+        if (was_authorized &&
+            !context->config.canopen_master->drive_command_permission)
+            drive_restart_gate_inhibit(&context->restart_gate);
+        bool drive_permission = false;
+        if (context->machine.activeState == ROBOT_STATE_FAULT ||
+            context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)
+        {
+            drive_restart_gate_inhibit(&context->restart_gate);
+        }
+        else if (context->restart_gate.authorized ||
+            (context->machine.activeState == ROBOT_STATE_BOOT &&
+             context->boot.phase == BOOT_PHASE_WAIT_AUTHORIZATION))
+        {
+            /* Safety snapshot must be independently produced and current.
+             * Board provider is responsible for live input freshness. */
+            const RobotSafetySnapshot *s = &context->machine.safety;
+            const DriveRestartSystemSample input = {
+                .communication_ready = canopen_master_all_heartbeats_operational(
+                    context->config.canopen_master),
+                .state_ready = context->machine.initialized &&
+                    context->machine.activeState != ROBOT_STATE_FAULT &&
+                    context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP &&
+                    context->machine.faultSeverity ==
+                        ROBOT_FAULT_SEVERITY_NONE,
+                .safety_valid = s->statusValid,
+                .estop_clear = !s->estopActive,
+                .protective_stop_clear = !s->protectiveStopActive,
+                .fault_clear = !s->globalFaultActive,
+                .ipc_valid = context->config.ipc != NULL &&
+                             ipc_valid(context->config.ipc),
+                .preenable_status_checked = context->boot.preenable_status_checked
+            };
+            drive_permission = drive_restart_gate_tick(
+                &context->restart_gate, &context->config.reset_diagnostics,
+                &context->config.drive_restart_board, &input);
+        }
+        context->boot.drive_enable_authorized = drive_permission;
+        canopen_master_set_drive_permission(context->config.canopen_master,
+                                           drive_permission);
+        if (was_authorized && !drive_permission &&
+            context->machine.activeState != ROBOT_STATE_FAULT &&
+            context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+            emit_step_failure(context, 0xE0B1U);
         if (controller_hb_ok ||
             context->machine.activeState == ROBOT_STATE_FAULT ||
             context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)
@@ -1306,6 +1388,7 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
     }
 
     memset(&g_supervisor, 0, sizeof(g_supervisor));
+    drive_restart_gate_init(&g_supervisor.restart_gate);
     g_supervisor.config = *config;
     g_timing = config->timing;
     g_supervisor.next_program_id = config->first_program_id;

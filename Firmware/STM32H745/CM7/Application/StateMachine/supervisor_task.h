@@ -24,6 +24,7 @@
 
 #include "ipc_mailbox.h"
 #include "../../../Common/Inc/supervision_progress.h"
+#include "../../../Common/Inc/drive_restart_gate.h"
 _Static_assert(IPC_ABI_VERSION == 2U, "Incorrect STM32 IPC ABI");
 
 #include "FreeRTOS.h"
@@ -146,6 +147,10 @@ typedef struct
     /* Optional board adapter; NULL callbacks allow incremental integration. */
     SupervisorIoServices io;
     SupervisorTimingPort timing;
+    /* Explicit, live physical-board source; NULL always denies enablement.
+     * NOT part of IPC ABI; independent of HMI commands. */
+    DriveRestartBoardPort drive_restart_board;
+    ResetDiagnostics reset_diagnostics;
 } SupervisorTaskConfig;
 
 /* Read-only diagnostics; state contexts remain owned by SupervisorTask. */

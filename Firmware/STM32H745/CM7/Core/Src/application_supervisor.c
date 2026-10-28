@@ -296,6 +296,9 @@ bool application_supervisor_board_configure(SupervisorTaskConfig *config)
     }
 
     *config = board->supervisor;
+    /* Board cannot forge the captured reset evidence. CM7 is the only owner. */
+    config->reset_diagnostics = *application_supervisor_reset_info();
+
     /* Replace any board-supplied observer function pointers with the
      * reviewed, observation-only adapter or a disabled null port. */
     config->guidance_dry_run = (SupervisorGuidanceDryRunPort){0};
