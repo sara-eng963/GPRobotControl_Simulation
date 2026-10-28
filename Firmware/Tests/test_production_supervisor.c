@@ -10,6 +10,7 @@
 #endif
 #include ALIGNMENT_SUPERVISOR_SOURCE
 #include "fake_joint_drive.h"
+#include "../../ServoDrive/CiA402/cia402.h"
 #include <setjmp.h>
 #include <stdlib.h>
 
@@ -598,6 +599,421 @@ static void test_completion_and_feedback(void)
     puts("PASS: production path completion returns Idle; 21-ms stale feedback faults");
 }
 
+#ifndef ALIGNMENT_DESKTOP
+/* Real production queue-drain function with a finite FIFO scheduling seam. */
+static SupervisorMessage p02_inbox[SUPERVISOR_MAX_MESSAGES_CYCLE * 8U];
+static unsigned p02_read, p02_written;
+BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t ticks)
+{
+    (void)ticks;
+    CHECK(q == (QueueHandle_t)&ctx);
+    if (p02_read == p02_written) return 0;
+    *(SupervisorMessage *)item = p02_inbox[p02_read++];
+    return pdPASS;
+}
+UBaseType_t uxQueueMessagesWaiting(QueueHandle_t q)
+{
+    CHECK(q == (QueueHandle_t)&ctx);
+    return (UBaseType_t)(p02_written - p02_read);
+}
+static void p02_enqueue(SupervisorMessage msg)
+{
+    CHECK(p02_written < sizeof(p02_inbox)/sizeof(p02_inbox[0]));
+    p02_inbox[p02_written++] = msg;
+}
+static void p02_queue_reset(void)
+{
+    g_queue = (QueueHandle_t)&ctx;
+    p02_read = p02_written = 0U;
+}
+static void p02_motion_ready_master(uint32_t now_ms)
+{
+    master.initialized = true;
+    master.node_count = JOINT_DRIVE_AXES;
+    master.heartbeat_timeout_ms = 300U;
+    for (size_t i = 0U; i < JOINT_DRIVE_AXES; ++i) {
+        master.drives[i].heartbeat_seen = true;
+        master.drives[i].heartbeat_state =
+            AVATAR_M_HEARTBEAT_STATE_OPERATIONAL;
+        master.drives[i].feedback_valid = true;
+        master.drives[i].cia402_state = CIA402_STATE_OPERATION_ENABLED;
+        master.last_heartbeat_ms[i] = now_ms;
+        master.heartbeat_timestamp_valid[i] = true;
+    }
+}
+static bool p02_authorization_press;
+static bool p02_board_read(void *unused, DriveRestartBoardSample *out)
+{
+    (void)unused;
+    *out = (DriveRestartBoardSample){
+        .valid = true, .board_ready = true, .reset_reviewed = true,
+        .ipc_session_fresh = true, .old_commands_discarded = true,
+        .feedback_revalidated = true,
+        .operator_pressed = p02_authorization_press
+    };
+    return true;
+}
+static void p02_startup_setup(void)
+{
+    setup(ROBOT_STATE_BOOT);
+    ctx.restart_gate = (DriveRestartGate){0};
+    ctx.boot.phase = BOOT_PHASE_WAIT_AUTHORIZATION;
+    ctx.boot.preenable_status_checked = true;
+    ctx.config.ipc = (IpcShared *)&ctx; /* ipc_valid test seam */
+    ctx.config.reset_diagnostics.captured = true;
+    ctx.config.reset_diagnostics.cause = RESET_CAUSE_POWER_ON;
+    ctx.config.drive_restart_board.read = p02_board_read;
+    ctx.config.drive_restart_board.context = NULL;
+    p02_authorization_press = false;
+    p02_motion_ready_master(400U);
+    master.drive_command_permission = false;
+}
+static bool p02_invalid_board_read(void *unused, SupervisorInputSnapshot *out)
+{
+    (void)unused;
+    out->valid = true;
+    return false; /* acquisition return wins over stale out contents */
+}
+static bool p02_invalid_snapshot_read(void *unused, SupervisorInputSnapshot *out)
+{
+    (void)unused;
+    out->valid = false;
+    return true; /* transport success must not override invalid snapshot */
+}
+static void test_p02_authorization(void)
+{
+    p02_startup_setup();
+    /* BOOT must not demand drivesReady before CiA-402 enables. */
+    ctx.machine.safety.drivesReady = false;
+    DriveRestartSystemSample sample = supervisor_restart_system_sample(&ctx,400U);
+    CHECK(sample.communication_ready && sample.state_ready && sample.safety_valid);
+    CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
+        &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
+    p02_authorization_press = true;
+    CHECK(drive_restart_gate_tick(&ctx.restart_gate,
+        &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
+    CHECK(ctx.restart_gate.authorized);
+    /* An authorized BOOT must tolerate not-yet-enabled drive readiness.
+     * A fresh safety snapshot with drivesReady=false cannot force FAULT. */
+    master.drive_command_permission = true;
+    SupervisorMessage boot_safety = {0};
+    boot_safety.type = SUPERVISOR_MESSAGE_SAFETY;
+    boot_safety.data.safety = ctx.machine.safety;
+    handle_message(&ctx, &boot_safety);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_BOOT);
+    CHECK(ctx.restart_gate.authorized && master.drive_command_permission);
+    /* Once BOOT ends, disabled/unready drives must NOT authorize motion. */
+    ctx.machine.activeState = ROBOT_STATE_HOMING;
+    sample = supervisor_restart_system_sample(&ctx,400U);
+    CHECK(!sample.state_ready);
+    CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
+        &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
+    CHECK(ctx.restart_gate.inhibited);
+
+    for (unsigned field = 0U; field < 4U; ++field) {
+        p02_startup_setup();
+        switch (field) {
+            case 0U: ctx.machine.safety.motionPermitted = false; break;
+            case 1U: ctx.machine.safety.communicationHealthy = false; break;
+            case 2U: ctx.machine.safety.statusValid = false; break;
+            default: master.last_heartbeat_ms[3] = 99U; break;
+        }
+        sample = supervisor_restart_system_sample(&ctx,400U);
+        CHECK(!sample.safety_valid || !sample.communication_ready);
+        CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
+            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
+        p02_authorization_press = true;
+        CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
+            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
+        CHECK(!ctx.restart_gate.authorized);
+        CHECK(!master.drive_command_permission);
+        /* A previously held button cannot authorize on signal recovery. */
+        ctx.machine.safety = (RobotSafetySnapshot){.statusValid=true,
+            .motionPermitted=true, .drivesReady=false, .communicationHealthy=true};
+        master.last_heartbeat_ms[3] = 400U;
+        sample = supervisor_restart_system_sample(&ctx,400U);
+        CHECK(sample.communication_ready && sample.safety_valid);
+        CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
+            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
+        p02_authorization_press = false;
+        CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
+            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
+        p02_authorization_press = true;
+        CHECK(drive_restart_gate_tick(&ctx.restart_gate,
+            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
+    }
+    puts("PASS: P02 BOOT safety/heartbeat gate without drivesReady circularity");
+}
+static void test_p02_containment(void)
+{
+    setup(ROBOT_STATE_TEACHING);
+    SupervisorMessage msg = {0};
+    msg.type = SUPERVISOR_MESSAGE_SAFETY;
+    msg.data.safety = ctx.machine.safety;
+    msg.data.safety.communicationHealthy = false;
+    handle_message(&ctx, &msg);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+    CHECK(ctx.machine.activeFaultCode ==
+          state_error_code(ROBOT_STATE_TEACHING, 0xE013U));
+    check_revoked();
+    policy(SUPERVISOR_EVENT_RESET);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+
+    msg.data.safety.estopActive = true;
+    handle_message(&ctx, &msg);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_EMERGENCY_STOP);
+    CHECK(ctx.machine.faultSeverity == ROBOT_FAULT_SEVERITY_EMERGENCY);
+    check_revoked();
+
+    setup(ROBOT_STATE_PATH_EXECUTION);
+    now_tick = 20U;
+    CHECK(supervisor_motion_containment_check(&ctx, now_tick, false));
+    drive.axis[3].feedback_valid = false;
+    CHECK(!supervisor_motion_containment_check(&ctx, now_tick, false));
+    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+    CHECK(ctx.machine.activeFaultCode ==
+          state_error_code(ROBOT_STATE_PATH_EXECUTION, 0xE203U));
+    check_revoked();
+    drive.axis[3].feedback_valid = true;
+    policy(SUPERVISOR_EVENT_RESET);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+
+    /* 100 ms applies to active non-Path motion only. */
+    setup(ROBOT_STATE_TEACHING);
+    now_tick = 100U;
+    CHECK(supervisor_motion_containment_check(&ctx, now_tick, true));
+    now_tick = 101U;
+    CHECK(!supervisor_motion_containment_check(&ctx, now_tick, true));
+    CHECK(ctx.machine.activeFaultCode ==
+          state_error_code(ROBOT_STATE_TEACHING, 0xE200U));
+    check_revoked();
+
+    /* Healthy paused/validation periods without SYNC do not require fresh TPDO. */
+    for (unsigned i = 0U; i < 2U; ++i) {
+        setup(i == 0U ? ROBOT_STATE_PAUSED : ROBOT_STATE_PATH_VALIDATION);
+        now_tick = 501U;
+        CHECK(supervisor_motion_containment_check(&ctx, now_tick, false));
+        CHECK(ctx.machine.activeState != ROBOT_STATE_FAULT);
+        CHECK(drive.polls == 1U);
+    }
+    setup(ROBOT_STATE_TEACHING);
+    CHECK(supervisor_motion_containment_check(&ctx, 501U, false));
+    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
+    /* Modulo uint32 milliseconds across wraparound on active motion. */
+    setup(ROBOT_STATE_TEACHING);
+    for (unsigned i = 0U; i < JOINT_DRIVE_AXES; ++i)
+        drive.axis[i].timestamp_us =
+            (uint64_t)(UINT32_MAX - 5U) * UINT64_C(1000);
+    CHECK(supervisor_motion_containment_check(&ctx, 2U, true));
+
+    /* PathExecution's original 20-ms watchdog receives queued TPDO in its
+     * own poll, and still rejects 21-ms stale feedback afterward. */
+    setup(ROBOT_STATE_PATH_EXECUTION);
+    prepare_execution();
+    ctx.path_execution.feedback_watch_started = true;
+    ctx.path_execution.feedback_watch_started_us = 0U;
+    for (unsigned i = 0U; i < JOINT_DRIVE_AXES; ++i)
+        ctx.path_execution.initial_tpdo_count[i] = drive.sequence[i];
+    drive.auto_feedback = true;
+    drive.pending_feedback = true;
+    now_tick = 20U;
+    CHECK(supervisor_motion_containment_check(&ctx, now_tick, false));
+    CHECK(drive.axis[0].timestamp_us == UINT64_C(20000));
+    run_active_state(&ctx);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_PATH_EXECUTION);
+    CHECK(ctx.path_execution.error != PATH_EXEC_ERR_CYCLIC_FEEDBACK);
+    /* Suppress subsequent synthetic responses: retained TPDO is now stale. */
+    drive.auto_feedback = false;
+    stopped = true; /* Simulate successful controlled-stop acknowledgment. */
+    now_tick = 41U;
+    run_active_state(&ctx);
+    CHECK(ctx.path_execution.error == PATH_EXEC_ERR_CYCLIC_FEEDBACK);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+    check_revoked();
+
+    /* Physical hand-guiding has no commissioned target source. Even a
+     * fully ready synthetic motor, manual-guidance flag and homing state
+     * cannot grant access to an unauthenticated six-value envelope. */
+    setup(ROBOT_STATE_TEACHING);
+    p02_motion_ready_master(0U);
+    ctx.teaching_runtime.manual_guidance_active = true;
+    ctx.teaching_runtime.motion_permitted = true;
+    ctx.teaching_runtime.robot_homed = true;
+    ctx.teaching_runtime.timestamp_ms = 0U;
+    msg = (SupervisorMessage){0};
+    msg.type = SUPERVISOR_MESSAGE_GUIDED_TARGET;
+    const uint32_t rejected_before = ctx.machine.rejectedEventCount;
+    handle_message(&ctx, &msg);
+    CHECK(drive.commands == 0U);
+    CHECK(ctx.machine.rejectedEventCount == rejected_before + 1U);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
+    for (unsigned i = 0U; i < 5U; ++i) {
+        ctx.teaching_runtime.manual_guidance_active = true;
+        ctx.teaching_runtime.motion_permitted = true;
+        ctx.teaching_runtime.robot_homed = true;
+        ctx.teaching_runtime.timestamp_ms = 0U;
+        ctx.machine.activeState = ROBOT_STATE_TEACHING;
+        now_tick = 0U;
+        if (i == 0U) ctx.teaching_runtime.manual_guidance_active = false;
+        if (i == 1U) ctx.teaching_runtime.motion_permitted = false;
+        if (i == 2U) ctx.teaching_runtime.robot_homed = false;
+        if (i == 3U) now_tick = 1000U; /* stale runtime timestamp */
+        if (i == 4U) ctx.machine.activeState = ROBOT_STATE_IDLE;
+        handle_message(&ctx, &msg);
+        CHECK(drive.commands == 0U);
+    }
+
+    setup(ROBOT_STATE_HOMING);
+    drive.network_ok = false;
+    CHECK(!supervisor_motion_containment_check(&ctx, 1U, false));
+    CHECK(ctx.machine.activeFaultCode ==
+          state_error_code(ROBOT_STATE_HOMING, 0xE111U));
+    check_revoked();
+    puts("PASS: P02 motion feedback/poll/revocation and Path 20-ms boundary");
+}
+static void p02_enqueue_noop_batch(unsigned count)
+{
+    for (unsigned i = 0U; i < count; ++i) {
+        SupervisorMessage noop = {0};
+        noop.type = SUPERVISOR_MESSAGE_TEACHING_RUNTIME;
+        p02_enqueue(noop);
+    }
+}
+static void test_p02_queue_and_board_failure(void)
+{
+    setup(ROBOT_STATE_TEACHING);
+    p02_motion_ready_master(0U);
+    p02_queue_reset();
+    SupervisorMessage target = {0};
+    target.type = SUPERVISOR_MESSAGE_GUIDED_TARGET;
+    target.data.guided_target_units[0] = 42;
+    SupervisorMessage unsafe = {0};
+    unsafe.type = SUPERVISOR_MESSAGE_SAFETY;
+    unsafe.data.safety = ctx.machine.safety;
+    unsafe.data.safety.motionPermitted = false;
+    p02_enqueue(target);
+    p02_enqueue(unsafe);
+    supervisor_process_message_batch(&ctx);
+    CHECK(drive.commands == 0U);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+    check_revoked();
+
+    /* No active physical guidance: the drained, safe sole target is denied. */
+    setup(ROBOT_STATE_TEACHING);
+    p02_motion_ready_master(0U);
+    p02_queue_reset();
+    p02_enqueue(target);
+    supervisor_process_message_batch(&ctx);
+    CHECK(drive.commands == 0U);
+    CHECK(ctx.machine.rejectedEventCount == 1U);
+
+    /* Exactly a full 16-message batch with depth zero is NOT an overload. */
+    setup(ROBOT_STATE_IDLE);
+    p02_queue_reset();
+    p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE);
+    CHECK(supervisor_drain_messages(&ctx) == SUPERVISOR_DRAIN_COMPLETE);
+    CHECK(uxQueueMessagesWaiting(g_queue) == 0U);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_IDLE);
+
+    /* An unprocessed unsafe SAFETY entry behind a full batch never permits
+     * continued motion. Overload faults before another active-state step. */
+    setup(ROBOT_STATE_TEACHING);
+    p02_motion_ready_master(0U);
+    p02_queue_reset();
+    p02_enqueue(target);
+    p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE - 1U);
+    p02_enqueue(unsafe);
+    supervisor_process_message_batch(&ctx);
+    CHECK(drive.commands == 0U);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+    CHECK(ctx.machine.activeFaultCode ==
+          state_error_code(ROBOT_STATE_TEACHING, 0xE016U));
+    check_revoked();
+    run_active_state(&ctx);
+    CHECK(off_calls > 0U);
+
+    /* Sustained backlog while Approach/PathExecution have initiated their
+     * controlled-stop phases must NEVER suspend the supervisor in a motion
+     * state. The fail-closed response is FAULT and safe-output servicing,
+     * not continued target dispatch or fake stop acknowledgement. */
+    for (unsigned motion = 0U; motion < 2U; ++motion) {
+        const RobotStateId state = motion == 0U
+            ? ROBOT_STATE_APPROACH : ROBOT_STATE_PATH_EXECUTION;
+        setup(state);
+        if (motion == 0U) {
+            ctx.approach.phase = APPROACH_PHASE_CONTROLLED_STOP;
+            ctx.approach_control.reset_requested = true;
+        } else {
+            prepare_execution();
+            ctx.path_execution.phase = PATH_EXEC_PHASE_CONTROLLED_STOP;
+            ctx.path_execution_inputs.reset_requested = true;
+        }
+        p02_queue_reset();
+        p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE * 2U);
+        supervisor_process_message_batch(&ctx);
+        CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+        CHECK(ctx.machine.activeFaultCode == state_error_code(state, 0xE016U));
+        check_revoked();
+        const unsigned prior_commands = drive.commands;
+        run_active_state(&ctx);
+        CHECK(off_calls > 0U);
+        /* Fault servicing remains reachable with sustained queue overload. */
+        for (unsigned cycle = 0U; cycle < 3U; ++cycle) {
+            /* One batch arrives while another remains: sustained 32/32. */
+            p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE);
+            supervisor_process_message_batch(&ctx);
+            run_active_state(&ctx);
+            CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+            CHECK(drive.commands == prior_commands);
+            CHECK(!master.drive_command_permission);
+        }
+        policy(SUPERVISOR_EVENT_RESET);
+        CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+    }
+
+    /* Teaching Record is a purposeful early break: preserve the pending
+     * event and execute TEACHING before dequeuing a second Record. */
+    setup(ROBOT_STATE_TEACHING);
+    p02_queue_reset();
+    SupervisorMessage teach = {0};
+    teach.type = SUPERVISOR_MESSAGE_TEACHING_EVENT;
+    teach.data.teaching_event = TEACH_EVENT_RECORD_POINT;
+    p02_enqueue(teach);
+    p02_enqueue(teach);
+    CHECK(supervisor_drain_messages(&ctx) == SUPERVISOR_DRAIN_TEACHING_EVENT);
+    CHECK(uxQueueMessagesWaiting(g_queue) == 1U);
+    CHECK(ctx.pending_teaching_event == TEACH_EVENT_RECORD_POINT);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
+    /* Do not consume the next record until the state step clears the slot. */
+    run_active_state(&ctx); /* actual P01 Teaching handler consumes Record */
+    CHECK(ctx.pending_teaching_event == TEACH_EVENT_NONE);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
+    CHECK(supervisor_drain_messages(&ctx) == SUPERVISOR_DRAIN_TEACHING_EVENT);
+    CHECK(uxQueueMessagesWaiting(g_queue) == 0U);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
+
+    /* Raw board callback fails after authorization. The actual production
+     * acquisition function must fault and revoke; status cannot be reused. */
+    setup(ROBOT_STATE_TEACHING);
+    ctx.config.io.read_inputs = p02_invalid_board_read;
+    supervisor_sample_inputs(&ctx);
+    CHECK(!ctx.gpio_inputs.valid);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+    CHECK(ctx.machine.activeFaultCode ==
+          state_error_code(ROBOT_STATE_TEACHING, 0xE015U));
+    check_revoked();
+    setup(ROBOT_STATE_TEACHING);
+    ctx.config.io.read_inputs = p02_invalid_snapshot_read;
+    supervisor_sample_inputs(&ctx);
+    CHECK(!ctx.gpio_inputs.valid);
+    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
+    CHECK(ctx.machine.activeFaultCode ==
+          state_error_code(ROBOT_STATE_TEACHING, 0xE015U));
+    check_revoked();
+    puts("PASS: P02 adverse queued order, bounded overload, raw board failure");
+}
+#endif
+
 int main(void)
 {
     robot_config_init_ur5(&robot);
@@ -612,6 +1028,11 @@ int main(void)
     test_approach_reset();
     test_cancellation();
     test_completion_and_feedback();
+#ifndef ALIGNMENT_DESKTOP
+    test_p02_authorization();
+    test_p02_containment();
+    test_p02_queue_and_board_failure();
+#endif
     puts("PASS: exact production Supervisor behavioral regressions (mock scheduling)");
     return 0;
 }

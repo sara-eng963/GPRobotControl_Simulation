@@ -202,6 +202,24 @@ def main():
                 "case TEACH_EVENT_SPEED_HIGH:\n        {\n            accepted =\n                change_speed(\n                    state,\n                    state->config.speed_high_mps",
                 "case TEACH_EVENT_SPEED_HIGH:\n        {\n            accepted =\n                change_speed(\n                    state,\n                    state->config.default_speed_mps"),
         })
+        mutations.update({
+            "P02 stale axis watchdog bypassed": (
+                SM / "supervisor_task.c",
+                "                    100U)) {",
+                "                    10000U)) {"),
+            "P02 BOOT ignores motion permission": (
+                SM / "supervisor_task.c",
+                ".safety_valid = s->statusValid && s->motionPermitted,",
+                ".safety_valid = s->statusValid,"),
+            "P02 queue overload fault omitted": (
+                SM / "supervisor_task.c",
+                "        emit_step_failure(context, 0xE016U);",
+                "        (void)context;"),
+            "P02 unauthenticated guided target dispatched": (
+                SM / "supervisor_task.c",
+                "            (void)message->data.guided_target_units;",
+                "            (void)joint_drive_port_send_targets(&context->joint_drive, message->data.guided_target_units);"),
+        })
         for i, (label, (source, needle, replacement)) in enumerate(mutations.items()):
             original = source.read_text()
             assert original.count(needle) == 1, (label, original.count(needle))

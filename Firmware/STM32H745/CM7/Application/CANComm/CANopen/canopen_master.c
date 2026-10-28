@@ -640,6 +640,7 @@ bool canopen_master_send_target_cycle(
                 target_positions[i],
                 &frame))
         {
+            canopen_master_set_drive_permission(master, false);
             TRACE_CAN_END(false);
             return false;
         }
@@ -648,12 +649,16 @@ bool canopen_master_send_target_cycle(
                 master,
                 &frame))
         {
+            /* Some RPDOs may have been sent; do not send SYNC or allow
+             * further cycles until the supervisor's C2B recovery path. */
+            canopen_master_set_drive_permission(master, false);
             TRACE_CAN_END(false);
             return false;
         }
     }
 
     const bool success = canopen_master_send_sync(master);
+    if (!success) canopen_master_set_drive_permission(master, false);
     TRACE_CAN_END(success);
     return success;
 }

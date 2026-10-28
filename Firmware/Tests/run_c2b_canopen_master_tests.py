@@ -49,6 +49,17 @@ MUTANTS = {
         'return master == NULL || master->initialized;'),
 }
 
+MUTANTS.update({
+    'P02 partial RPDO fails without permission revocation': (
+        '             * further cycles until the supervisor\'s C2B recovery path. */\n'
+        '            canopen_master_set_drive_permission(master, false);',
+        '             * further cycles until the supervisor\'s C2B recovery path. */\n'
+        '            (void)master;'),
+    'P02 failed SYNC leaves permission granted': (
+        'if (!success) canopen_master_set_drive_permission(master, false);',
+        'if (!success) (void)master;'),
+})
+
 def compile_run(tmp: Path, source: Path, label: str):
     binary = tmp / 'bin'
     cmd = [os.environ.get('CC', 'cc'), '-std=c11', '-O1', '-g',
@@ -91,7 +102,7 @@ def main():
             if 'FAIL ' not in result.stderr:
                 raise RuntimeError(f'MUTATION ABNORMAL TERMINATION: {label}: {result.stderr}')
             print(f'PASS: mutation rejected at runtime: {label}')
-    print('PASS: 7/7 executable production-master mutations rejected')
+    print(f'PASS: {len(MUTANTS)}/{len(MUTANTS)} executable production-master mutations rejected')
 
 if __name__ == '__main__':
     try:

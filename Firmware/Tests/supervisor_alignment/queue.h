@@ -7,4 +7,5 @@ QueueHandle_t xQueueCreateStatic(UBaseType_t count, UBaseType_t size,
 BaseType_t xQueueSend(QueueHandle_t q, const void *item, TickType_t wait);
 BaseType_t xQueueSendFromISR(QueueHandle_t q, const void *item, BaseType_t *woken);
 BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t wait);
+UBaseType_t uxQueueMessagesWaiting(QueueHandle_t q);
 #endif

@@ -778,6 +778,175 @@ static void publish_m7_ipc_status(SupervisorTaskContext *context)
     context->m7_ipc_status_sent = true;
 }
 
+/* P02: monitor after bounded CAN reception, before any motion-state step.
+ * PathExecution owns the exact 20-ms/20,000-us cyclic watchdog. PAUSED and
+ * PATH_VALIDATION do not command cyclic motion: PDO age alone is not a fault
+ * while SYNC traffic is absent, but network/drive validity is still checked.
+ * Application-level containment does not prove that a drive has stopped. */
+static bool supervisor_motion_containment_check(
+    SupervisorTaskContext *context, uint32_t now_ms,
+    bool guided_dispatch)
+{
+    const RobotStateId state = context->machine.activeState;
+    if (state == ROBOT_STATE_BOOT || state == ROBOT_STATE_FAULT ||
+        state == ROBOT_STATE_EMERGENCY_STOP)
+        return true;
+    if (!context->restart_gate.authorized &&
+        !context->restart_gate.inhibited)
+        return true;
+
+    uint32_t detail = 0U;
+    if (!context->restart_gate.authorized ||
+        !context->config.canopen_master->drive_command_permission)
+        detail = 0xE0B1U;
+    else if (!state_machine_can_move(&context->machine))
+        detail = 0xE110U;
+    else if (!joint_drive_port_poll(&context->joint_drive, now_ms))
+        detail = 0xE113U;
+    else if (!joint_drive_port_healthy(&context->joint_drive, now_ms))
+        detail = 0xE111U;
+    else if (!joint_drive_port_ready(&context->joint_drive, now_ms))
+        detail = 0xE112U;
+    else {
+        const bool require_fresh_tpdo =
+            state == ROBOT_STATE_HOMING ||
+            (state == ROBOT_STATE_TEACHING && guided_dispatch) ||
+            state == ROBOT_STATE_APPROACH;
+        for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis) {
+            JointDriveAxisFeedback feedback = {0};
+            if (!joint_drive_port_read_axis(&context->joint_drive,
+                                            axis, &feedback) ||
+                !feedback.feedback_valid || !feedback.operation_enabled ||
+                (require_fresh_tpdo &&
+                 (uint32_t)(now_ms -
+                    (uint32_t)(feedback.timestamp_us / UINT64_C(1000))) >
+                    100U)) {
+                detail = 0xE200U + (uint32_t)axis;
+                break;
+            }
+        }
+    }
+    if (detail == 0U) return true;
+    const SupervisorEvent fault = make_result_event(
+        SUPERVISOR_EVENT_FAULT_DETECTED, state,
+        ROBOT_FAULT_SEVERITY_RECOVERABLE, state_error_code(state, detail));
+    handle_policy_event(context, &fault);
+    return false;
+}
+
+/* Forward declarations for helpers called by the bounded cycle path. */
+static void handle_message(SupervisorTaskContext *context,
+                           const SupervisorMessage *message);
+static void emit_step_failure(SupervisorTaskContext *context, uint32_t detail);
+
+/* Production cycle and host fixture share this actual acquisition path.
+ * A missing/failed board callback during an authorized session is a fault;
+ * this is still an observation channel, not a safety-rated E-stop input. */
+static void supervisor_sample_inputs(SupervisorTaskContext *context)
+{
+    SupervisorInputSnapshot sampled = {0};
+    if (context->config.io.read_inputs != NULL) {
+        const bool acquired = context->config.io.read_inputs(
+            context->config.io.context, &sampled);
+        sampled.valid = acquired && sampled.valid;
+    }
+    taskENTER_CRITICAL();
+    context->gpio_inputs = sampled;
+    taskEXIT_CRITICAL();
+    if (!sampled.valid && context->restart_gate.authorized &&
+        context->machine.activeState != ROBOT_STATE_FAULT &&
+        context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+        emit_step_failure(context, 0xE015U);
+}
+
+/* BOOT must not require drivesReady before enabling the drives: that is
+ * a circular prerequisite. Enforce the independent safety and communication
+ * fields before enable; require drivesReady after BOOT for any motion state.
+ * The existing C2B board release/press and pre-enable checks remain intact. */
+static DriveRestartSystemSample supervisor_restart_system_sample(
+    const SupervisorTaskContext *context, uint32_t now_ms)
+{
+    const RobotSafetySnapshot *s = &context->machine.safety;
+    const bool boot = context->machine.activeState == ROBOT_STATE_BOOT;
+    const DriveRestartSystemSample sample = {
+        .communication_ready =
+            canopen_master_healthy(context->config.canopen_master, now_ms) &&
+            s->communicationHealthy,
+        .state_ready = context->machine.initialized &&
+            context->machine.activeState != ROBOT_STATE_FAULT &&
+            context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP &&
+            context->machine.faultSeverity == ROBOT_FAULT_SEVERITY_NONE &&
+            (boot || s->drivesReady),
+        .safety_valid = s->statusValid && s->motionPermitted,
+        .estop_clear = !s->estopActive,
+        .protective_stop_clear = !s->protectiveStopActive,
+        .fault_clear = !s->globalFaultActive,
+        .ipc_valid = context->config.ipc != NULL &&
+                     ipc_valid(context->config.ipc),
+        .preenable_status_checked = context->boot.preenable_status_checked
+    };
+    return sample;
+}
+
+/* A complete drain is confirmed by a failed receive OR a zero-depth check
+ * after the exact 16-message boundary. This check is a bounded snapshot, not
+ * a concurrency barrier against future enqueues. Never dispatch queued motion
+ * targets. A Teaching event intentionally stops the drain to protect the
+ * existing single pending event slot; it is NOT queue overload. */
+typedef enum {
+    SUPERVISOR_DRAIN_COMPLETE = 0,
+    SUPERVISOR_DRAIN_TEACHING_EVENT,
+    SUPERVISOR_DRAIN_OVERLOAD
+} SupervisorDrainResult;
+
+static SupervisorDrainResult supervisor_drain_messages(
+    SupervisorTaskContext *context)
+{
+    SupervisorMessage message;
+    SupervisorMessage deferred_target = {0};
+    bool have_target = false;
+    for (uint32_t count = 0U; count < SUPERVISOR_MAX_MESSAGES_CYCLE;
+         ++count) {
+        if (xQueueReceive(g_queue, &message, 0U) != pdPASS) {
+            if (have_target) handle_message(context, &deferred_target);
+            return SUPERVISOR_DRAIN_COMPLETE;
+        }
+        if (message.type == SUPERVISOR_MESSAGE_GUIDED_TARGET) {
+            deferred_target = message;
+            have_target = true;
+        } else {
+            handle_message(context, &message);
+        }
+        if (context->pending_teaching_event != TEACH_EVENT_NONE) {
+            /* Preserve P01: let TEACHING consume Record before dequeuing
+             * another event. Any event in a motion state is not exempt. */
+            return context->machine.activeState == ROBOT_STATE_TEACHING
+                ? SUPERVISOR_DRAIN_TEACHING_EVENT
+                : SUPERVISOR_DRAIN_OVERLOAD;
+        }
+    }
+    /* Exactly 16 messages with no remainder is NOT an overload. Querying
+     * queue depth is O(1) and does not consume the next SAFETY snapshot. */
+    if (uxQueueMessagesWaiting(g_queue) == 0U) {
+        if (have_target) handle_message(context, &deferred_target);
+        return SUPERVISOR_DRAIN_COMPLETE;
+    }
+    return SUPERVISOR_DRAIN_OVERLOAD;
+}
+
+/* A saturated queue must not starve Approach/PathExecution stop services or
+ * the 500-Hz fault watchdog. Do not step a motion state while safety updates
+ * are unread: latch FAULT immediately and run its safe-output service in the
+ * same cycle. Physical stopping remains unverified. */
+static void supervisor_process_message_batch(SupervisorTaskContext *context)
+{
+    const SupervisorDrainResult result = supervisor_drain_messages(context);
+    if (result == SUPERVISOR_DRAIN_OVERLOAD &&
+        context->machine.activeState != ROBOT_STATE_FAULT &&
+        context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+        emit_step_failure(context, 0xE016U);
+}
+
 static void handle_message(
     SupervisorTaskContext *context,
     const SupervisorMessage *message
@@ -790,40 +959,60 @@ static void handle_message(
             break;
 
         case SUPERVISOR_MESSAGE_GUIDED_TARGET:
-            /* NEVER let an external producer call the CANopen coordinator.
-             * Apply only in TEACHING with fresh motion authorization. */
-            if (context->machine.activeState == ROBOT_STATE_TEACHING &&
-                context->restart_gate.authorized &&
-                context->machine.safety.statusValid &&
-                context->machine.safety.motionPermitted &&
-                canopen_master_ready_for_motion(context->config.canopen_master,
-                                                supervisor_now_ms())) {
-                (void)joint_drive_port_send_targets(
-                    &context->joint_drive, message->data.guided_target_units);
-            }
+            /* P02 default-deny: this envelope has only six position values.
+             * No trusted producer identity, freshness, homing evidence or
+             * teaching-runtime consent can be authenticated here. The board
+             * explicitly commissions hand-guiding in observation-only mode.
+             * Do not silently convert an HMI/IPC message into motor motion. */
+            (void)message->data.guided_target_units;
+            if (context->machine.rejectedEventCount != UINT32_MAX)
+                ++context->machine.rejectedEventCount;
             break;
         case SUPERVISOR_MESSAGE_EVENT:
             handle_policy_event(context, &message->data.event);
             break;
 
         case SUPERVISOR_MESSAGE_SAFETY:
-            state_machine_update_safety(
-                &context->machine,
-                &message->data.safety
-            );
-            /* A bad safety update is revocation now, not at the next tick:
-             * another queued command in this cycle must not bypass it. */
-            if (context->restart_gate.authorized &&
-                (!context->machine.safety.statusValid ||
-                 context->machine.safety.estopActive ||
-                 context->machine.safety.protectiveStopActive ||
-                 context->machine.safety.globalFaultActive)) {
-                drive_restart_gate_inhibit(&context->restart_gate);
-                context->boot.drive_enable_authorized = false;
-                canopen_master_set_drive_permission(
-                    context->config.canopen_master, false);
+        {
+            state_machine_update_safety(&context->machine,
+                                        &message->data.safety);
+            const RobotSafetySnapshot *s = &context->machine.safety;
+            const RobotStateId state = context->machine.activeState;
+            SupervisorEvent event = {0};
+            /* E-stop has highest priority; do not downgrade an existing
+             * emergency to an ordinary recoverable fault. Input snapshots
+             * are not hardware safety functions. */
+            if (s->estopActive && state != ROBOT_STATE_EMERGENCY_STOP) {
+                event = make_result_event(SUPERVISOR_EVENT_ESTOP_ASSERTED,
+                    state, ROBOT_FAULT_SEVERITY_EMERGENCY,
+                    ROBOT_FAULT_CODE_EMERGENCY_STOP);
+            } else if (state != ROBOT_STATE_EMERGENCY_STOP &&
+                       state != ROBOT_STATE_FAULT &&
+                       s->protectiveStopActive) {
+                event = make_result_event(
+                    SUPERVISOR_EVENT_PROTECTIVE_STOP_ASSERTED, state,
+                    ROBOT_FAULT_SEVERITY_PROTECTIVE_STOP,
+                    ROBOT_FAULT_CODE_PROTECTIVE_STOP);
+            } else if (state != ROBOT_STATE_EMERGENCY_STOP &&
+                       state != ROBOT_STATE_FAULT &&
+                       (state != ROBOT_STATE_BOOT ||
+                        context->restart_gate.authorized) &&
+                       (!s->statusValid || !s->motionPermitted ||
+                        (state != ROBOT_STATE_BOOT && !s->drivesReady) ||
+                        !s->communicationHealthy ||
+                        s->globalFaultActive)) {
+                const uint32_t detail = !s->statusValid ? 0xE010U :
+                    !s->motionPermitted ? 0xE011U :
+                    (state != ROBOT_STATE_BOOT && !s->drivesReady) ? 0xE012U :
+                    !s->communicationHealthy ? 0xE013U : 0xE014U;
+                event = make_result_event(SUPERVISOR_EVENT_FAULT_DETECTED,
+                    state, ROBOT_FAULT_SEVERITY_RECOVERABLE,
+                    state_error_code(state, detail));
             }
+            if (event.type != SUPERVISOR_EVENT_NONE)
+                handle_policy_event(context, &event);
             break;
+        }
 
         case SUPERVISOR_MESSAGE_TEACHING_EVENT:
             context->pending_teaching_event =
@@ -1228,7 +1417,6 @@ static void supervisor_task_entry(void *argument)
 {
     SupervisorTaskContext *context = argument;
     TickType_t last_wake = xTaskGetTickCount();
-    SupervisorMessage message;
     if (context->config.canopen_master->initialized) {
         /* Initialization is pre-scheduler; bind only from the true owner. */
         const bool owner_bound = canopen_master_bind_runtime_owner(
@@ -1286,32 +1474,15 @@ static void supervisor_task_entry(void *argument)
         const uint64_t cycle_start_us =
             hardware_timed ? supervisor_now_us() : UINT64_C(0);
         TRACE_BEGIN(TIMING_SUPERVISOR);
-        /* Acquisition only: raw inputs do not authorize motion or create HMI
-         * events until a separately tested input adapter is connected. */
-        SupervisorInputSnapshot sampled = {0};
-        if (context->config.io.read_inputs != NULL)
-        {
-            sampled.valid = context->config.io.read_inputs(
-                context->config.io.context, &sampled);
-        }
-        taskENTER_CRITICAL();
-        context->gpio_inputs = sampled;
-        taskEXIT_CRITICAL();
-        for (uint32_t count = 0U;
-             count < SUPERVISOR_MAX_MESSAGES_CYCLE;
-             ++count)
-        {
-            if (xQueueReceive(g_queue, &message, 0U) != pdPASS)
-            {
-                break;
-            }
-            handle_message(context, &message);
-            /* Consume Teaching commands before another can overwrite the
-             * single pending event slot (Record must never be coalesced). */
-            if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
-        }
+        /* Read and validate inputs before consuming queued motion messages. */
+        supervisor_sample_inputs(context);
+        supervisor_process_message_batch(context);
 
         consume_m4_ipc(context);
+        /* One bounded preflight per cycle: no state module may issue a new
+         * coordinated motion command after a monitored network/axis loss. */
+        (void)supervisor_motion_containment_check(
+            context, supervisor_now_ms(), false);
 
         /*
          * Keep producing Node 127's heartbeat even while PAUSED, FAULT,
@@ -1354,23 +1525,8 @@ static void supervisor_task_entry(void *argument)
         {
             /* Safety snapshot must be independently produced and current.
              * Board provider is responsible for live input freshness. */
-            const RobotSafetySnapshot *s = &context->machine.safety;
-            const DriveRestartSystemSample input = {
-                .communication_ready = canopen_master_all_heartbeats_operational(
-                    context->config.canopen_master),
-                .state_ready = context->machine.initialized &&
-                    context->machine.activeState != ROBOT_STATE_FAULT &&
-                    context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP &&
-                    context->machine.faultSeverity ==
-                        ROBOT_FAULT_SEVERITY_NONE,
-                .safety_valid = s->statusValid,
-                .estop_clear = !s->estopActive,
-                .protective_stop_clear = !s->protectiveStopActive,
-                .fault_clear = !s->globalFaultActive,
-                .ipc_valid = context->config.ipc != NULL &&
-                             ipc_valid(context->config.ipc),
-                .preenable_status_checked = context->boot.preenable_status_checked
-            };
+            const DriveRestartSystemSample input =
+                supervisor_restart_system_sample(context, supervisor_now_ms());
             drive_permission = drive_restart_gate_tick(
                 &context->restart_gate, &context->config.reset_diagnostics,
                 &context->config.drive_restart_board, &input);
@@ -1382,6 +1538,8 @@ static void supervisor_task_entry(void *argument)
             context->machine.activeState != ROBOT_STATE_FAULT &&
             context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
             emit_step_failure(context, 0xE0B1U);
+        /* Complete, intentional Teaching break, or overload->FAULT: never
+         * suspend state/fault stepping merely because messages arrived. */
         if (controller_hb_ok ||
             context->machine.activeState == ROBOT_STATE_FAULT ||
             context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)

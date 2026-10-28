@@ -19,6 +19,8 @@ typedef struct {
     CanFrame incoming[32];
     size_t sent_count, rx_head, rx_tail;
     bool fail_next_send;
+    bool fail_at_send_enabled;
+    size_t fail_at_send;
 } FakeBus;
 
 typedef struct {
@@ -31,6 +33,8 @@ typedef struct {
 static CanBackendResult fake_send(void *ctx, const CanFrame *frame)
 {
     FakeBus *b = (FakeBus *)ctx;
+    if (b->fail_at_send_enabled && b->sent_count == b->fail_at_send)
+        return CAN_BACKEND_ERROR;
     if (b->fail_next_send) {
         b->fail_next_send = false;
         return CAN_BACKEND_ERROR;
@@ -218,6 +222,39 @@ static void test_runtime_owner_enforcement(void)
     canopen_master_set_drive_permission(&f.master,false);
     CHECK(!f.master.drive_command_permission);
 }
+static void test_p02_target_cycle_partial_failure(void)
+{
+    int32_t q[JOINT_DRIVE_AXES];
+    targets(q);
+    Fixture partial;
+    fixture_init(&partial);
+    approved(&partial);
+    partial.bus.fail_at_send_enabled = true;
+    partial.bus.fail_at_send = 3U;
+    CHECK(!canopen_master_send_target_cycle(&partial.master, q,
+                                            JOINT_DRIVE_AXES));
+    CHECK(partial.bus.sent_count == 3U); /* no SYNC after partial RPDO */
+    CHECK(!partial.master.drive_command_permission);
+    partial.bus.fail_at_send_enabled = false; /* transport recovers */
+    CHECK(!canopen_master_send_target_cycle(&partial.master, q,
+                                            JOINT_DRIVE_AXES));
+    CHECK(!canopen_master_send_sync(&partial.master));
+    CHECK(partial.bus.sent_count == 3U); /* never silently re-enabled */
+
+    Fixture sync;
+    fixture_init(&sync);
+    approved(&sync);
+    sync.bus.fail_at_send_enabled = true;
+    sync.bus.fail_at_send = JOINT_DRIVE_AXES;
+    CHECK(!canopen_master_send_target_cycle(&sync.master, q,
+                                            JOINT_DRIVE_AXES));
+    CHECK(sync.bus.sent_count == JOINT_DRIVE_AXES);
+    CHECK(!sync.master.drive_command_permission);
+    sync.bus.fail_at_send_enabled = false;
+    CHECK(!canopen_master_send_sync(&sync.master));
+    puts("PASS: P02 partial-RPDO and failed-SYNC permission latches");
+}
+
 int main(void)
 {
     test_cold_and_prebind_denial();
@@ -225,6 +262,7 @@ int main(void)
     test_revocation_and_stale_sdo_ack();
     test_nmt_reset_revokes_and_cancels();
     test_runtime_owner_enforcement();
+    test_p02_target_cycle_partial_failure();
     puts("PASS: production STM32 CANopen master authorization, revocation, NMT, SDO and owner checks");
     return 0;
 }
