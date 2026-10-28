@@ -34,6 +34,17 @@ def main():
                 assert sum(p.name == name for p in sources.values()) == 1
             assert sum(p.name == "validation_storage_bridge.c" for p in sources.values()) == 1
             assert sum(p.name == "trajectory_storage_service.c" for p in sources.values()) == 1
+            # The M7 must compile the entire numerical observer chain; M4
+            # remains an IPC/storage owner, not a hand-guiding controller.
+            observer_sources = (
+                "ft_sensor.c", "sensor_config.c", "wrench_frame.c",
+                "admittance_control.c", "admittance_matlab_reference.c",
+                "cartesian_joint_mapper.c", "hand_guiding_pipeline.c",
+                "supervisor_dry_run_adapter.c"
+            )
+            for observer in observer_sources:
+                assert sum(p.name == observer for p in sources.values()) == (
+                    1 if core == "CM7" else 0), (core, observer)
         elf = args.build_root / core / ("STM32H745_" + core + ".elf")
         assert elf.is_file(), f"Build first: {elf}"
         nm = output("arm-none-eabi-nm", "-S", "--defined-only", str(elf))
@@ -68,9 +79,33 @@ def main():
             assert re.search(rf"^[0-9a-f]+ [0-9a-f]+ [TW] {name}$", nm, re.M), name
         if core == "CM7":
             assert not re.search(r" T (validation_m4_step|playback_m4_step)$", nm, re.M)
+            # These are linked, retained numerical functions, not simply
+            # compiled but discarded by --gc-sections.
+            for symbol in (
+                "hand_guiding_dry_run_init", "hand_guiding_dry_run_tick",
+                "hand_guiding_pipeline_step", "admittance_step",
+                "cartesian_joint_mapper_step"
+            ):
+                assert re.search(r"^[0-9a-f]+ [0-9a-f]+ [TW] " +
+                                 re.escape(symbol) + r"$", nm, re.M), symbol
         # Physical suppliers must remain undefined; no default success provider.
         assert not re.search(r" [TW] board_(m4_supply_|supply_commissioned_config)", nm)
         print(f"PASS: {core}: startup/application symbols and ownership")
+    supervisor7 = (FW / "CM7/Application/StateMachine/supervisor_task.c").read_text()
+    assert "service_guidance_dry_run(context);" in supervisor7
+    service = supervisor7.split("static void service_guidance_dry_run(", 1)[1].split(
+        "static void supervisor_task_entry(", 1)[0]
+    assert "port->tick(port->context, &cycle)" in service
+    assert "joint_drive_port_read_axis" in service
+    assert "take_candidate(" not in service
+    assert "joint_drive_port_send_targets(" not in service
+    assert "guidance_dry_run.take_candidate != NULL" in supervisor7
+    # The observer is opt-in and cannot supply a fake board provider.
+    app7 = (FW / "CM7/Core/Src/application_supervisor.c").read_text()
+    assert "board_supply_commissioned_config == NULL" in app7
+    assert "hand_guiding_dry_run_init(&g_guidance_observer" in app7
+    assert "hand_guiding_dry_run_port(&g_guidance_observer)" in app7
+    print("PASS: M7 hand-guiding dry-run observer linked; no candidate dispatch")
     main7 = (FW / "CM7/Core/Src/main.c").read_text()
     mpu = main7[main7.index("void MPU_Config(void)\n{"):]
     for token in ("0x38000000", "MPU_REGION_SIZE_32KB", "MPU_TEX_LEVEL1",
