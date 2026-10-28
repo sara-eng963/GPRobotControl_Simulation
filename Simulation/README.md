@@ -94,10 +94,10 @@ MATLAB UDP telemetry on port 5005. Keep
 `MATLAB/can_robot_visualizer.m` running in MATLAB on Windows.
 
 Press Ctrl-C in the launcher terminal to stop all processes. Runtime logs are
-written to `.simulation-logs/`.
+written to `build-can-silkit/logs/`.
 
 A human-readable debug timeline is written to
-`.simulation-logs/operator-events.txt`. Every received HMI button gets an
+`build-can-silkit/logs/operator-events.txt`. Every received HMI button gets an
 `EVENT` number and timestamp. Meaningful controller changes such as state
 transitions, recorded-point count, validation result, preview completion,
 rejections, E-stop state, wire feed, faults and teaching speed are written as
@@ -129,9 +129,9 @@ simulation, not a physical CAN arbitration/bit-timing model.
 The launcher writes:
 
 ```
-.simulation-logs/can-frames.csv
-.simulation-logs/can-metrics.csv
-.simulation-logs/can-monitor.log
+build-can-silkit/logs/can-frames.csv
+build-can-silkit/logs/can-metrics.csv
+build-can-silkit/logs/can-monitor.log
 ```
 
 `can-frames.csv` contains every observed CAN frame. `can-metrics.csv`
@@ -200,8 +200,9 @@ right/left arrows in the virtual-F/T GUI. MATLAB continues to receive
 virtual-motor feedback on port 5005 and must be opened separately on
 Windows. Ctrl-C shuts down all launched processes. If the F/T GUI is
 closed, the launcher also stops the simulation. Logs are isolated in
-`.simulation-logs/virtual-ft/`; the ordinary launcher uses its previous
-`.simulation-logs/` location and retains its original behavior.
+`build-can-silkit/logs/virtual-ft/`; the ordinary launcher uses
+`build-can-silkit/logs/`. Override the base log directory with `SIMULATION_LOG_DIR` (both modes use the selected build tree
+by default).
 
 Use `--virtual-ft --no-build` after a successful first build.
 `--virtual-ft --no-gui` is intentionally disallowed.

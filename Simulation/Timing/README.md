@@ -20,14 +20,14 @@ bash scripts/run_timing_benchmark.sh --flash-only --no-plots
 
 # Analyze a saved baseline without rerunning SIL Kit:
 python3 scripts/analyze_timing_csv.py \
-  .simulation-logs/timing-benchmark/baseline.csv --no-plots
+  build-can-silkit/timing-benchmark/baseline.csv --no-plots
 ```
 
 The script reconfigures/builds the binaries, checks the recorder and analyzer,
 then runs the existing full SIL Kit scenario and the flash scenario.
 Allow roughly 2-3 minutes for the two full-simulation runs.
 
-Results are under \`.simulation-logs/timing-benchmark/\`:
+Results are under \`build-can-silkit/timing-benchmark/\`:
 
 - \`baseline.csv\`, \`flash.csv\`: raw measured event timing, one row per event.
 - \`baseline-analysis/summary_metrics.csv\`, \`flash-analysis/summary_metrics.csv\`: per-source P50/P95/P99/observed max and misses.
@@ -38,7 +38,7 @@ Or collect manually while using the GUIs:
 
 ```bash
 bash scripts/run_full_can_silkit_simulation.sh
-python3 scripts/analyze_timing_csv.py .simulation-logs/timing-metrics.csv
+python3 scripts/analyze_timing_csv.py build-can-silkit/logs/timing-metrics.csv
 ```
 
 The launcher sets GP_TIMING_CSV automatically, and overwrites the previous
@@ -86,8 +86,8 @@ bash scripts/run_timing_benchmark.sh --path-only --no-plots
 ```
 
 Results:
-`.simulation-logs/timing-benchmark/path_diagnostics.csv` and
-`.simulation-logs/timing-benchmark/path_diagnostics-analysis/timing_report.md`.
+`build-can-silkit/timing-benchmark/path_diagnostics.csv` and
+`build-can-silkit/timing-benchmark/path_diagnostics-analysis/timing_report.md`.
 If `path_commands` has no samples, do not claim cadence was measured:
 verify that the scenario actually entered path-follow/preview execution.
 

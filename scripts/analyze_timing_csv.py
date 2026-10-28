@@ -4,7 +4,7 @@ matplotlib is optional for PNG plots.
 
 This script NEVER infers STM32H745 hard real-time guarantees from WSL/Linux.
 Usage:
-    python3 scripts/analyze_timing_csv.py .simulation-logs/timing-metrics.csv
+    python3 scripts/analyze_timing_csv.py build-can-silkit/logs/timing-metrics.csv
     python3 scripts/analyze_timing_csv.py timing.csv --output-dir results --no-plots
 """
 from __future__ import annotations

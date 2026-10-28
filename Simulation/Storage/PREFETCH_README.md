@@ -60,7 +60,8 @@ executions restart at sample zero; PAUSED resumes at the same index.
 
 ## Verification
 
-Scripts use fresh `/tmp` directories by default, preserving existing builds:
+Run commands from the repository root. Scripts use fresh `/tmp` directories
+by default, preserving existing builds:
 
 ```bash
 ./scripts/run_host_flash_tests.sh

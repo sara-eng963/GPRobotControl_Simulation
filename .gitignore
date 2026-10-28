@@ -13,10 +13,9 @@ compile_commands.json
 *.exe
 
 # Generated test output
-single_segment_line_c.csv
+/single_segment_line_c.csv
 
-# Vendor / teammate-shared EtherCAT ESI file
-# Keep this out of Git; setup_environment.sh copies it into KickCAT.
+# Vendor / teammate-shared EtherCAT ESI file (legacy local input)
 A6-EC.xml
 
 # Editor / OS junk
@@ -39,7 +38,22 @@ Firmware/STM32H745/**/*.cyclo
 Firmware/STM32H745/**/*.d
 Firmware/STM32H745/**/*.bak
 Firmware/STM32H745/**/.ipc_naming_backup/
-Firmware/Tests/__pycache__/
-scripts/__pycache__/
-/stm32_migration.py
-/restore_cm4_validation_candidate.py
+
+# Python bytecode caches; Python source and test fixtures remain visible.
+__pycache__/
+*.pyc
+
+# Generated CMake build variants
+/build-*/
+
+# Local simulation logs and generated evidence
+/.simulation-logs/
+
+# Windows downloaded-file metadata
+*:Zone.Identifier
+
+# Generated simulation and storage test data
+/external_flash.bin
+/external_stream_test.bin
+/simulation_trace.csv
+/trajectory_memory_log.csv

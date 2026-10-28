@@ -6,7 +6,7 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build-can-silkit}"
-LOG_DIR="${TIMING_RESULTS_DIR:-$ROOT/.simulation-logs/timing-benchmark}"
+LOG_DIR="${TIMING_RESULTS_DIR:-$BUILD_DIR/timing-benchmark}"
 mkdir -p "$LOG_DIR"
 
 # Resume a completed baseline without repeating the 66-second scenario.

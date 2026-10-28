@@ -57,7 +57,7 @@ Only one VFT1 sender may run at a time. Open
 `MATLAB/can_robot_visualizer.m` separately on Windows; it reads the original
 joint-feedback stream on UDP :5005, not GUI-provided poses. Test each of
 Fx/Fy/Fz/Tx/Ty/Tz, combinations, release, focus loss and Zero Wrench.
-Inspect `.simulation-logs/virtual-ft/guidance.csv` for accepted wrench,
+Inspect `build-can-silkit/logs/virtual-ft/guidance.csv` for accepted wrench,
 twist, `qref` and `actual_q`; consult `supervisor.log` for first faults.
 
 **Scope/limits:** local deterministic C unit tests check signs, every axis,
@@ -288,7 +288,7 @@ host IP for MATLAB UDP :5005 and cleans up its child processes on
 Ctrl-C or an interactive-GUI exit.
 
 The launcher keeps separate F/T logs under
-`.simulation-logs/virtual-ft/`, including `guidance.csv`,
+`build-can-silkit/logs/virtual-ft/`, including `guidance.csv`,
 `timing-metrics.csv`, `supervisor.log`, `can-frames.csv` and the GUI
 log. No separate set of terminals is necessary.
 
@@ -345,7 +345,7 @@ chains remain unverified.
 In interactive mode the canonical launcher now mirrors state changes and
 first-fault diagnostics to its **existing terminal**. No additional terminal
 or GUI is required. The full trace remains at
-`.simulation-logs/virtual-ft/supervisor.log`, and guidance samples in
+`build-can-silkit/logs/virtual-ft/supervisor.log`, and guidance samples in
 `guidance.csv`.
 
 The Supervisor reports its state/detail fault code, its last failed

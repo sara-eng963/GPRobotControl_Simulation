@@ -30,15 +30,13 @@ Those are the current HOST TEST FIXTURE thresholds as verified in
 
 ## Installation and execution (WSL)
 
-1. Extract the archive at the ROOT of `~/freertos-pc-test`, not under a new
-   nested directory. Confirm HEAD is `a902082a233a556c8a5c09a22088fecf7bcb5edf`.
-2. `python3 scripts/register_stage3b_tests.py` adds CMake registration once.
-3. Run:
+1. Stage 3B tests are already registered in `supervisor_silkit_sim.cmake`.
+   No installation helper or historical commit checkout is required.
+2. Run:
 
 ```sh
 cd ~/freertos-pc-test
 python3 Simulation/Tests/test_supervisor_silkit_virtual_ft_3b.py --selftest
-python3 scripts/register_stage3b_tests.py --selftest
 export SILKIT_ROOT="$HOME/silkit_test/SilKit-5.0.7-ubuntu-24.04-x86_64-gcc/SilKit"
 cmake -S . -B /tmp/gp-stage3b -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
 cmake --build /tmp/gp-stage3b --target supervisor_silkit_sim avatar_m_silkit_motor_bank -j2

@@ -38,6 +38,7 @@ Options:
 Environment overrides:
   SILKIT_ROOT          SIL Kit installation root.
   BUILD_DIR            CMake build directory.
+  SIMULATION_LOG_DIR   Log directory (default: $BUILD_DIR/logs).
   SILKIT_REGISTRY_URI  Registry URI (default silkit://localhost:8500).
   MATLAB_IP            Windows host IP for UDP telemetry.
 EOF
@@ -97,9 +98,13 @@ CAN_MONITOR_BIN="$BUILD_DIR/can_live_monitor"
 
 if ((VIRTUAL_FT)); then
     # Do not overwrite normal full-simulation operator/timing logs.
-    LOG_DIR="$REPO_ROOT/.simulation-logs/virtual-ft"
+    LOG_DIR="${SIMULATION_LOG_DIR:-$BUILD_DIR/logs}/virtual-ft"
 else
-    LOG_DIR="$REPO_ROOT/.simulation-logs"
+    LOG_DIR="${SIMULATION_LOG_DIR:-$BUILD_DIR/logs}"
+fi
+# Resolve relative overrides before the launcher changes to the repository root.
+if [[ "$LOG_DIR" != /* ]]; then
+    LOG_DIR="$REPO_ROOT/$LOG_DIR"
 fi
 mkdir -p "$LOG_DIR"
 

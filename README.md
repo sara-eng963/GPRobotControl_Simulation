@@ -39,4 +39,17 @@ Firmware/STM32H745. Host code does not depend on STM32 HAL headers.
   and [W25Q FIFO notes](Firmware/History/README_w25q_fifo_fix.md):
   preserved reference material; current build instructions are above.
 
-Unrelated local archives, patches, logs and test helpers are preserved.
+Historical archives are kept outside the repository in `~/GP_Workspace_Archive/`.
+Current builds use the checked-in source tree without patch installers.
+
+## Generated outputs
+
+Use an out-of-tree CMake build, or an ignored `build/` or root `build-*`
+directory. CTest writes storage images and CSVs in the build tree. The full
+simulation launcher writes logs to `$BUILD_DIR/logs` (override with
+`SIMULATION_LOG_DIR`); timing benchmarks use `$BUILD_DIR/timing-benchmark`
+(override with `TIMING_RESULTS_DIR`). Run standalone test executables from a
+build or temporary directory because some use relative output filenames.
+
+See [prefetch ownership and tests](Simulation/Storage/PREFETCH_README.md) and
+[W25Q512JV storage tests](Simulation/Renode/Storage/W25Q512JV_README.md).

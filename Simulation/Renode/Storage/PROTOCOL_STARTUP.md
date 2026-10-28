@@ -109,7 +109,7 @@ checks establish compatibility only. Physical voltage/timing/FIFO validation,
 per-read integrity after verification, and dual-core ownership remain open.
 
 The potentially blocking Supervisor quiescence wait and the absence of verified
-actuator stopping after storage fault remain documented in PREFETCH_README.md.
+actuator stopping after storage fault remain documented in [the prefetch ownership guide](../../Storage/PREFETCH_README.md).
 No drive safety policy or flash-backed CANopen integration is added in this batch.
 
 ## Supplied datasheet references

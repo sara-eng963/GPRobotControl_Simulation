@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 KERNEL="${FREERTOS_KERNEL_ROOT:-$ROOT/../FreeRTOS-Kernel}"
-BUILD="${GP_IPC_RUNTIME_BUILD_DIR:-$ROOT/build-intercore-ipc-posix}"
+BUILD="${GP_IPC_RUNTIME_BUILD_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gp-ipc-posix.XXXXXX")}"
 if [[ ! -f "$KERNEL/include/FreeRTOS.h" ]]; then
     echo "FAIL: FreeRTOS kernel not found at $KERNEL" >&2
     exit 1

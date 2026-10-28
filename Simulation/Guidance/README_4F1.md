@@ -59,13 +59,13 @@ cmake --build /tmp/gp-stage4-f1-silkit \
     --target supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
 
 # Preserve the raw CSV and generated reports; otherwise tests use temp files.
-export GP_4F1_OUTPUT_DIR="$PWD/.simulation-logs/stage4f1"
+export GP_4F1_OUTPUT_DIR="$PWD/build-can-silkit/logs/stage4f1"
 ctest --test-dir /tmp/gp-stage4-f1-silkit \
     -R '^(guidance_4f1_analyzer_fixture|supervisor_silkit_guidance_4f1_sustained)$' \
     --output-on-failure
 ```
 
-Read `.simulation-logs/stage4f1/analysis/REPORT.md`, the CSV data
+Read `build-can-silkit/logs/stage4f1/analysis/REPORT.md`, the CSV data
 `guidance.csv` / `timing.csv`, and optional comparison plots. If
 matplotlib is not installed, numerical reports are still produced.
 
@@ -73,9 +73,9 @@ To rerun a report on an existing CSV pair without starting the simulator:
 
 ```bash
 python3 scripts/analyze_guidance_4f1.py \
-  --guidance .simulation-logs/stage4f1/guidance.csv \
-  --timing .simulation-logs/stage4f1/timing.csv \
-  --output-dir .simulation-logs/stage4f1/analysis
+  --guidance build-can-silkit/logs/stage4f1/guidance.csv \
+  --timing build-can-silkit/logs/stage4f1/timing.csv \
+  --output-dir build-can-silkit/logs/stage4f1/analysis
 ```
 
 ## Acceptance / interpretation
