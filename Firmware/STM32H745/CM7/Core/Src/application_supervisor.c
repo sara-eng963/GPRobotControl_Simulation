@@ -112,6 +112,9 @@ static FdcanClassicBackend g_fdcan_state;
 static CanBackend g_can_backend;
 static CanopenMaster g_canopen_master;
 static bool g_board_prepared;
+/* Controller history and sample freshness state outlive Supervisor cycles.
+ * No motor command path exists through this object. */
+static HandGuidingDryRunState g_guidance_observer;
 /* Stream consumer and wrapper must outlive every Supervisor state transition. */
 static TrajectoryExecutionBinding g_motion_binding;
 /* Persistent M7-side async validation client; no flash peripheral access.
@@ -165,6 +168,13 @@ bool application_supervisor_board_configure(SupervisorTaskConfig *config)
         inputs.asserted[SUP_IO_PROTECTIVE_STOP])
         return false;
 
+    /* Explicit opt-in only; no F/T sample generator or permissive fallback.
+     * An invalid adapter config prevents board startup. */
+    if (board->guidance_dry_run_config != NULL &&
+        !hand_guiding_dry_run_init(&g_guidance_observer,
+                                   board->guidance_dry_run_config))
+        return false;
+
     /* No made-up motor node IDs: the coordinator checks uniqueness and
      * allowed CANopen IDs using the supplied physical drive configuration. */
     memset(&g_fdcan_state, 0, sizeof(g_fdcan_state));
@@ -188,6 +198,12 @@ bool application_supervisor_board_configure(SupervisorTaskConfig *config)
     }
 
     *config = board->supervisor;
+    /* Replace any board-supplied observer function pointers with the
+     * reviewed, observation-only adapter or a disabled null port. */
+    config->guidance_dry_run = (SupervisorGuidanceDryRunPort){0};
+    if (board->guidance_dry_run_config != NULL)
+        config->guidance_dry_run =
+            hand_guiding_dry_run_port(&g_guidance_observer);
     config->canopen_master = &g_canopen_master;
     g_board_prepared = true;
     return true;
