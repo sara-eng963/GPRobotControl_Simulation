@@ -325,6 +325,36 @@
 			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/admittance_matlab_reference.c</locationURI>
 		</link>
 		<link>
+			<name>Application/HandGuiding/ft_sensor.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/ft_sensor.c</locationURI>
+		</link>
+		<link>
+			<name>Application/HandGuiding/sensor_config.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/sensor_config.c</locationURI>
+		</link>
+		<link>
+			<name>Application/HandGuiding/wrench_frame.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/wrench_frame.c</locationURI>
+		</link>
+		<link>
+			<name>Application/HandGuiding/cartesian_joint_mapper.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/cartesian_joint_mapper.c</locationURI>
+		</link>
+		<link>
+			<name>Application/HandGuiding/hand_guiding_pipeline.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/hand_guiding_pipeline.c</locationURI>
+		</link>
+		<link>
+			<name>Application/HandGuiding/supervisor_dry_run_adapter.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/supervisor_dry_run_adapter.c</locationURI>
+		</link>
+		<link>
 			<name>Application/HandGuiding/guidance_command_gate.c</name>
 			<type>1</type>
 			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/guidance_command_gate.c</locationURI>
