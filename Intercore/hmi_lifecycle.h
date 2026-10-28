@@ -1,5 +1,5 @@
-#ifndef GP_HMI_LIFECYCLE_H
-#define GP_HMI_LIFECYCLE_H
+#ifndef HMI_LIFECYCLE_H
+#define HMI_LIFECYCLE_H
 
 #include "ipc_mailbox.h"
 #include "../StateMachine/state_machine_types.h"
@@ -19,24 +19,24 @@ typedef struct {
     bool estop_active;
     uint32_t last_hmi_received_sequence;
     uint32_t rejected_event_count;
-} GpHmiControllerStatus;
+} HmiControllerStatus;
 
 /* Validates the existing seven-word M7 status ABI; rejects invalid and
  * out-of-order frames. No new message type or memory layout is introduced. */
-bool gp_hmi_status_decode(const GpIpcMessage *msg, uint32_t last_sequence,
-                          GpHmiControllerStatus *out);
+bool hmi_status_decode(const IpcMessage *msg, uint32_t last_sequence,
+                          HmiControllerStatus *out);
 
 /* Called at the M4 UI submission boundary AND just before IPC send.
  * max_age_ticks=0 means no extra expiry check (diagnostic access only);
  * commands must always supply a nonzero limit. */
-bool gp_hmi_status_is_fresh(uint32_t local_now, uint32_t receipt_tick,
+bool hmi_status_is_fresh(uint32_t local_now, uint32_t receipt_tick,
                             uint32_t max_age_ticks);
-bool gp_hmi_command_allowed(const GpHmiControllerStatus *status,
+bool hmi_command_allowed(const HmiControllerStatus *status,
                             SupervisorHmiCommand command);
 
 /* A changed controller state or unsafe new status discards queued UI events.
  * This does not replace physical protective stop or M7 Supervisor gating. */
-bool gp_hmi_should_drop_pending(const GpHmiControllerStatus *old_status,
-                                const GpHmiControllerStatus *new_status);
+bool hmi_should_drop_pending(const HmiControllerStatus *old_status,
+                                const HmiControllerStatus *new_status);
 
 #endif

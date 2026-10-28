@@ -3,7 +3,7 @@ title: "STM32H745 Robot Controller — Hardware Arrival & Verification Plan"
 date: 2026-10-14
 status: "PRE-HARDWARE PLAN — no physical tests executed"
 branch: "sara/can-replacement"
-tags: [graduation-project, stm32h745, hardware-bringup, canopen, safety, verification]
+tags: [robotics-firmware, stm32h745, hardware-bringup, canopen, safety, verification]
 ---
 
 # Hardware Arrival & Verification Plan
@@ -180,7 +180,7 @@ The current **simulation/Renode W25Q512JV code is not a production HAL board por
 - [ ] Verify actual QSPI/OSPI pins, memory supply, reset/hold/wp, flash command set, quad-enable, JEDEC ID, erase/program/read status, address mode, page/sector sizes, timeouts and wear.
 - [ ] Test read-after-write, erase-before-write, CRC, boundary/alignment, page crossing, end-of-device access, failed/time-out operation and unexpected power loss using a safely designed test fixture **without energizing actuators**.
 - [ ] Check **two-slot atomic commit/recovery semantics** with a variety of power-interruption points, corrupt data/header, incomplete commit and reboot; select only a completely validated program.
-- [ ] Implement/verify M4 worker ownership, **GpValidationShared** ABI/slot/linker/MPU allocation, cancellation acknowledgment and persistent artifact identity. **Do not assume the reserved 12 KiB SRAM4 slot fits the validation queue** until sizes and linker map are checked.
+- [ ] Implement/verify M4 worker ownership, **ValidationShared** ABI/slot/linker/MPU allocation, cancellation acknowledgment and persistent artifact identity. **Do not assume the reserved 12 KiB SRAM4 slot fits the validation queue** until sizes and linker map are checked.
 - [ ] Verify 49,312-sample-style long streams and other realistic workloads. Test M4 **256-sample prefetch batch** feeding a **512-sample shared trajectory ring**; log minimum fill, refill latency, underruns, cancellation, epoch reuse, no old-trajectory replay and CRC checks.
 - [ ] Simultaneously stress M7 CAN/IPC during M4 flash erase/program/reader operations, including reset and flash busy time.
 - [ ] Power-cycle and reboot between interrupted writes; make sure FLASH_COMMITTED status is not signaled before durable verify. Distinguish CRC-proven artifact from stale cache or uncommitted write.
@@ -224,7 +224,7 @@ The current **simulation/Renode W25Q512JV code is not a production HAL board por
 4. Verify quick stop, protective stop, actual E-stop torque removal, power loss and restored power restart in a safe, supervised test. Never trigger hazardous fault tests on a freely moving robot.
 5. Integrate additional axes gradually with fixture protection and collision-aware limits; verify all six motors track intended commands and watchdog faults cause the documented safe response.
 6. Validate line/arc trajectories, path preview, singularity/limit rejection, interpolation and 500 Hz freshness under slow, supervised motion. A path that is mathematically valid still needs physical speed/force/stop checks.
-7. Measure **repeatability** separately from **absolute accuracy**; use a calibrated external measurement method and documented pose/loading/temperature protocol. Compare against the graduation-project's defined requirements rather than a commercial reference robot datasheet.
+7. Measure **repeatability** separately from **absolute accuracy**; use a calibrated external measurement method and documented pose/loading/temperature protocol. Compare against the system's defined requirements rather than a commercial reference robot datasheet.
 
 ### H10 — integration and worst-case robustness
 
@@ -362,7 +362,7 @@ Approved by / date:
 - [CiA SYNC mechanism](https://www.can-cia.org/can-knowledge/special-function-protocols)
 - [CANopenNode project (mature open implementation to benchmark against)](https://github.com/CANopenNode/CANopenNode)
 
-**Machine safety:** Use the *applicable current editions* of **ISO 10218 (industrial robot safety)**, **ISO 13849 (safety-related control systems)**, **IEC 60204-1 (electrical equipment of machines)** and **IEC 61800-5-2 (functional safety of drives)** as determined by the machine safety review. These are **not** compliance certificates for the graduation project. Welding/industrial electrical safety and the exact stop architecture must be reviewed with responsible professionals.
+**Machine safety:** Use the *applicable current editions* of **ISO 10218 (industrial robot safety)**, **ISO 13849 (safety-related control systems)**, **IEC 60204-1 (electrical equipment of machines)** and **IEC 61800-5-2 (functional safety of drives)** as determined by the machine safety review. These are **not** compliance certificates for this system. Welding/industrial electrical safety and the exact stop architecture must be reviewed with responsible professionals.
 
 ---
 

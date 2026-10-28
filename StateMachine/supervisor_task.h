@@ -127,7 +127,7 @@ typedef struct
     TickType_t period_ticks;
     /* Optional cross-core mailbox: M4 never touches this task's private
      * FreeRTOS objects. NULL keeps the existing PC runtime unchanged. */
-    GpIpcShared *ipc;
+    IpcShared *ipc;
 
     /* Optional 4E2A dry-run monitor. Both callbacks must be configured
      * together. No FT adapter is supplied by default; never sends targets. */

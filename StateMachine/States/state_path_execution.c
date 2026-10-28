@@ -3,17 +3,17 @@
 #include <stddef.h>
 #include <string.h>
 
-#if defined(GP_HOST_TIMING)
+#if defined(HOST_TIMING_TRACE_ENABLED)
 #include "../../Simulation/Timing/host_timing_trace.h"
 #define PATH_TIMING_EVENT(source) do { \
-    gp_timing_begin(source); \
-    gp_timing_end(source, true); \
+    timing_begin(source); \
+    timing_end(source, true); \
 } while (0)
-#define PATH_TIMING_BEGIN(source) gp_timing_begin(source)
-#define PATH_TIMING_END(source, ok) gp_timing_end(source, ok)
-#define PATH_TIMING_SKIP(n) gp_timing_value(GP_TIMING_PATH_SAMPLES_SKIPPED, (n))
-#define PATH_TIMING_FEEDBACK_AGE(axis, age) gp_timing_value( \
-    (GpTimingSource)(GP_TIMING_PATH_FEEDBACK_AGE_AXIS_1 + (axis)), (age))
+#define PATH_TIMING_BEGIN(source) timing_begin(source)
+#define PATH_TIMING_END(source, ok) timing_end(source, ok)
+#define PATH_TIMING_SKIP(n) timing_value(TIMING_PATH_SAMPLES_SKIPPED, (n))
+#define PATH_TIMING_FEEDBACK_AGE(axis, age) timing_value( \
+    (TimingSource)(TIMING_PATH_FEEDBACK_AGE_AXIS_1 + (axis)), (age))
 #else
 #define PATH_TIMING_EVENT(source) ((void)0)
 #define PATH_TIMING_BEGIN(source) ((void)0)
@@ -522,7 +522,7 @@ StateStepResult state_path_execution_step(
             const uint32_t due_index =
                 raw_due >= count ? count - 1U : (uint32_t)raw_due;
             if (due_index < state->sample_index) {
-                PATH_TIMING_EVENT(GP_TIMING_PATH_PERIOD_WAIT);
+                PATH_TIMING_EVENT(TIMING_PATH_PERIOD_WAIT);
                 break;
             }
 
@@ -556,9 +556,9 @@ StateStepResult state_path_execution_step(
                 if (!state->services.read_sample(
                         state->sample_index, &sample, state->services.context))
                     return fail(state, PATH_EXEC_ERR_STORAGE_READ);
-                PATH_TIMING_BEGIN(GP_TIMING_PATH_COMMAND);
+                PATH_TIMING_BEGIN(TIMING_PATH_COMMAND);
                 const bool command_sent = send_execution_sample(state, &sample);
-                PATH_TIMING_END(GP_TIMING_PATH_COMMAND, command_sent);
+                PATH_TIMING_END(TIMING_PATH_COMMAND, command_sent);
                 if (!command_sent)
                     return fail(state, PATH_EXEC_ERR_COMMUNICATION);
                 if (!state->feedback_watch_started) {

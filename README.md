@@ -42,6 +42,14 @@ Firmware/STM32H745. Host code does not depend on STM32 HAL headers.
 Historical archives are kept outside the repository in `~/GP_Workspace_Archive/`.
 Current builds use the checked-in source tree without patch installers.
 
+## Runtime configuration
+
+Hand-guiding settings use `HAND_GUIDING_*`; simulation storage/fault selection
+uses `SIM_STORAGE_BACKEND` and `SIM_FLASH_TEST_MODE`. Host timing recording uses
+`HOST_TIMING_CSV`. Launchers, tests and module guides use these names throughout.
+External launch scripts must adopt the current names; no legacy aliases are
+provided. Binary IPC, trajectory, storage and F/T protocol formats are unchanged.
+
 ## Generated outputs
 
 Use an out-of-tree CMake build, or an ignored `build/` or root `build-*`

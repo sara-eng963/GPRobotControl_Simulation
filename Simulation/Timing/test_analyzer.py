@@ -17,7 +17,7 @@ COLUMNS = [
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("Usage: test_analyzer.py scripts/analyze_timing_csv.py")
-    with tempfile.TemporaryDirectory(prefix="gp-timing-analyzer-") as folder:
+    with tempfile.TemporaryDirectory(prefix="timing-analyzer-") as folder:
         root = Path(folder)
         source = root / "synthetic.csv"
         with source.open("w", newline="", encoding="utf-8") as f:

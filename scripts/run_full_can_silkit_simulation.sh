@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Full PC graduation-project pipeline:
+# Full PC robotics simulation pipeline:
 #   SIL Kit registry
 #   six AVATAR M virtual CANopen nodes
 #   FreeRTOS Supervisor / StateMachine
@@ -178,7 +178,7 @@ wait_for_log() {
 cd "$REPO_ROOT"
 
 echo "============================================================"
-echo " GP Robot — Full SIL Kit CANopen Simulation"
+echo " Robot Control — Full SIL Kit CANopen Simulation"
 echo "============================================================"
 echo "Repository : $REPO_ROOT"
 echo "Build      : $BUILD_DIR"
@@ -288,20 +288,20 @@ SUPERVISOR_ENV=(
     "MATLAB_IP=$MATLAB_IP"
     "SIM_EVENT_LOG=$EVENT_LOG"
     "SIM_TRACE_FILE=$TRACE_LOG"
-    "GP_TIMING_CSV=$TIMING_CSV"
+    "HOST_TIMING_CSV=$TIMING_CSV"
 )
 if ((VIRTUAL_FT)); then
     SUPERVISOR_ENV+=(
-        "GP_GUIDANCE_DRY_RUN=1"
-        "GP_GUIDANCE_SIM_MOTION=1"
-        "GP_GUIDANCE_VIRTUAL_FT=1"
-        "GP_GUIDANCE_TRACE_FILE=$GUIDANCE_TRACE_LOG"
+        "HAND_GUIDING_DRY_RUN=1"
+        "HAND_GUIDING_SIM_MOTION=1"
+        "HAND_GUIDING_VIRTUAL_FT=1"
+        "HAND_GUIDING_TRACE_FILE=$GUIDANCE_TRACE_LOG"
     )
 else
     SUPERVISOR_ENV+=(
-        "GP_GUIDANCE_DRY_RUN=0"
-        "GP_GUIDANCE_SIM_MOTION=0"
-        "GP_GUIDANCE_VIRTUAL_FT=0"
+        "HAND_GUIDING_DRY_RUN=0"
+        "HAND_GUIDING_SIM_MOTION=0"
+        "HAND_GUIDING_VIRTUAL_FT=0"
     )
 fi
 env "${SUPERVISOR_ENV[@]}" "$SUPERVISOR_BIN" \

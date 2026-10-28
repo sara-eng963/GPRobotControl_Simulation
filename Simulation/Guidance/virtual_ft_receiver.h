@@ -1,5 +1,5 @@
-#ifndef GP_VIRTUAL_FT_RECEIVER_H
-#define GP_VIRTUAL_FT_RECEIVER_H
+#ifndef VIRTUAL_FT_RECEIVER_H
+#define VIRTUAL_FT_RECEIVER_H
 
 #include "virtual_ft_protocol.h"
 
@@ -7,15 +7,15 @@
  * No socket operation may occur in a Supervisor tick. */
 typedef struct {
     int fd;
-    GpVirtualFtLimits limits;
-    GpVirtualFtState state;
+    VirtualFtLimits limits;
+    VirtualFtState state;
     bool rejected_reported;
-} GpVirtualFtReceiver;
+} VirtualFtReceiver;
 
-bool gp_virtual_ft_receiver_init(GpVirtualFtReceiver *receiver,
-                                 const GpVirtualFtLimits *limits);
-void gp_virtual_ft_receiver_poll(GpVirtualFtReceiver *receiver);
-bool gp_virtual_ft_receiver_read(GpVirtualFtReceiver *receiver,
+bool virtual_ft_receiver_init(VirtualFtReceiver *receiver,
+                                 const VirtualFtLimits *limits);
+void virtual_ft_receiver_poll(VirtualFtReceiver *receiver);
+bool virtual_ft_receiver_read(VirtualFtReceiver *receiver,
                                  uint32_t now_us, double wrench[6]);
-void gp_virtual_ft_receiver_close(GpVirtualFtReceiver *receiver);
+void virtual_ft_receiver_close(VirtualFtReceiver *receiver);
 #endif

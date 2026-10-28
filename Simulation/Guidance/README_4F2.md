@@ -137,7 +137,7 @@ Exactly **40 bytes**, ten 32-bit big-endian words:
 Host receiver records the packet's **receive time from the same monotonic
 FreeRTOS clock** used by the Supervisor. Sender timestamps are not trusted.
 Default bounds are ±5 N per force component and ±1 N·m per moment
-component; configurable in `GpVirtualFtLimits`. A valid ENABLED all-zero
+component; configurable in `VirtualFtLimits`. A valid ENABLED all-zero
 packet is normal release. The admittance state retains its velocity and
 decelerates through the existing virtual damping.
 
@@ -166,10 +166,10 @@ git switch sara/can-replacement
 git pull --ff-only origin sara/can-replacement
 export SILKIT_ROOT="$HOME/silkit_test/SilKit-5.0.7-ubuntu-24.04-x86_64-gcc/SilKit"
 
-cmake -S . -B /tmp/gp-4f2 -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
-cmake --build /tmp/gp-4f2 --target test_virtual_ft_protocol test_virtual_ft_sensor supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
-ctest --test-dir /tmp/gp-4f2 -R '^virtual_ft_(protocol|sensor_frame)$' --output-on-failure
-ctest --test-dir /tmp/gp-4f2 -R '^supervisor_silkit_virtual_ft_input$' --output-on-failure
+cmake -S . -B /tmp/virtual-ft-integration -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
+cmake --build /tmp/virtual-ft-integration --target test_virtual_ft_protocol test_virtual_ft_sensor supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
+ctest --test-dir /tmp/virtual-ft-integration -R '^virtual_ft_(protocol|sensor_frame)$' --output-on-failure
+ctest --test-dir /tmp/virtual-ft-integration -R '^supervisor_silkit_virtual_ft_input$' --output-on-failure
 ```
 
 A small real-input sender (same protocol/receiver as the future Raylib GUI):
@@ -181,8 +181,8 @@ python3 Simulation/Tools/send_virtual_ft.py --fx 0.5 --duration 2 --zero-tail 1
 For a manual multi-terminal run:
 
 1. Start `$SILKIT_ROOT/bin/sil-kit-registry --listen-uri silkit://localhost:8500`.
-2. Start `/tmp/gp-4f2/avatar_m_silkit_motor_bank`.
-3. Start `GP_GUIDANCE_DRY_RUN=1 GP_GUIDANCE_SIM_MOTION=1 GP_GUIDANCE_VIRTUAL_FT=1 /tmp/gp-4f2/supervisor_silkit_sim`.
+2. Start `/tmp/virtual-ft-integration/avatar_m_silkit_motor_bank`.
+3. Start `HAND_GUIDING_DRY_RUN=1 HAND_GUIDING_SIM_MOTION=1 HAND_GUIDING_VIRTUAL_FT=1 /tmp/virtual-ft-integration/supervisor_silkit_sim`.
 4. Wait until HOMING finishes and state IDLE is reached, **start the sender
    continuously with zero wrench**, then enter TEACHING through the existing
    HMI/panel. The sender can then apply force. For reproducibility use the
@@ -257,16 +257,16 @@ git switch sara/can-replacement
 git pull --ff-only origin sara/can-replacement
 export SILKIT_ROOT="$HOME/silkit_test/SilKit-5.0.7-ubuntu-24.04-x86_64-gcc/SilKit"
 
-cmake -S . -B /tmp/gp-4f2 -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
-cmake --build /tmp/gp-4f2 --target \
+cmake -S . -B /tmp/virtual-ft-integration -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
+cmake --build /tmp/virtual-ft-integration --target \
   virtual_ft_gui supervisor_panel supervisor_silkit_sim \
   avatar_m_silkit_motor_bank test_virtual_ft_protocol \
   test_virtual_ft_sensor test_virtual_ft_controls \
   test_virtual_ft_client -j2
-ctest --test-dir /tmp/gp-4f2 \
+ctest --test-dir /tmp/virtual-ft-integration \
   -R '^virtual_ft_(protocol|sensor_frame|controls|client_udp)$' \
   --output-on-failure
-ctest --test-dir /tmp/gp-4f2 \
+ctest --test-dir /tmp/virtual-ft-integration \
   -R '^supervisor_silkit_virtual_ft_input$' --output-on-failure
 ```
 

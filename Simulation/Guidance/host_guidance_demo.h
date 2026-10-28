@@ -1,5 +1,5 @@
-#ifndef GP_HOST_GUIDANCE_DEMO_H
-#define GP_HOST_GUIDANCE_DEMO_H
+#ifndef HOST_GUIDANCE_DEMO_H
+#define HOST_GUIDANCE_DEMO_H
 
 /* Host-only candidate producer; only Supervisor can dispatch to drives.
  * The old observation fixture perturbs geometry. Interactive F/T uses the
@@ -9,28 +9,28 @@
 #include "virtual_ft_receiver.h"
 
 typedef enum {
-    GP_GUIDANCE_FAIL_NONE = 0,
-    GP_GUIDANCE_FAIL_PRE_SAMPLE,
-    GP_GUIDANCE_FAIL_INPUT,
-    GP_GUIDANCE_FAIL_SENSOR_FRAME,
-    GP_GUIDANCE_FAIL_FEEDBACK_CONVERSION,
-    GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE,
-    GP_GUIDANCE_FAIL_WRENCH_FRAME,
-    GP_GUIDANCE_FAIL_ADMITTANCE,
-    GP_GUIDANCE_FAIL_MAPPER_SINGULARITY,
-    GP_GUIDANCE_FAIL_MAPPER_TRACKING,
-    GP_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT,
-    GP_GUIDANCE_FAIL_MAPPER_OTHER
-} GpHostGuidanceFailure;
+    HOST_GUIDANCE_FAIL_NONE = 0,
+    HOST_GUIDANCE_FAIL_PRE_SAMPLE,
+    HOST_GUIDANCE_FAIL_INPUT,
+    HOST_GUIDANCE_FAIL_SENSOR_FRAME,
+    HOST_GUIDANCE_FAIL_FEEDBACK_CONVERSION,
+    HOST_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE,
+    HOST_GUIDANCE_FAIL_WRENCH_FRAME,
+    HOST_GUIDANCE_FAIL_ADMITTANCE,
+    HOST_GUIDANCE_FAIL_MAPPER_SINGULARITY,
+    HOST_GUIDANCE_FAIL_MAPPER_TRACKING,
+    HOST_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT,
+    HOST_GUIDANCE_FAIL_MAPPER_OTHER
+} HostGuidanceFailure;
 
-const char *gp_host_guidance_failure_name(GpHostGuidanceFailure reason);
+const char *host_guidance_failure_name(HostGuidanceFailure reason);
 
-#define GP_GUIDANCE_RING_SIZE 256U
+#define HOST_GUIDANCE_RING_SIZE 256U
 typedef enum {
-    GP_GUIDANCE_INJECT_NONE = 0,
-    GP_GUIDANCE_INJECT_STALE_FT,
-    GP_GUIDANCE_INJECT_BAD_FEEDBACK
-} GpGuidanceFaultKind;
+    HOST_GUIDANCE_INJECT_NONE = 0,
+    HOST_GUIDANCE_INJECT_STALE_FT,
+    HOST_GUIDANCE_INJECT_BAD_FEEDBACK
+} HostGuidanceFaultKind;
 typedef struct {
     uint64_t time_us;
     unsigned cycle;
@@ -40,7 +40,7 @@ typedef struct {
     double q_actual[6];
     uint64_t feedback_max_age_us;
     bool feedback_measurement_valid;
-} GpGuidanceTraceRow;
+} HostGuidanceTraceRow;
 /* Bounded, read-only snapshot of the latest two candidates; no drive API. */
 typedef struct {
     bool has_last;
@@ -48,23 +48,23 @@ typedef struct {
     SupervisorGuidanceDryRunCycle last_cycle;
     SupervisorGuidanceCandidate last_candidate;
     SupervisorGuidanceCandidate previous_candidate;
-} GpGuidanceGateAudit;
+} HostGuidanceGateAudit;
 
 /* Simulation observation, published by the existing Supervisor callback. */
 typedef struct {
     uint64_t time_us;
     bool enabled, force_applied, settled;
-} GpGuidanceMotionStatus;
+} HostGuidanceMotionStatus;
 
 typedef struct {
     HandGuidingDryRunState adapter;
     const RobotConfig *simulation_robot; /* immutable, outlives this adapter */
     RobotConfig synthetic_observation_robot;
-    GpGuidanceFaultKind inject;
+    HostGuidanceFaultKind inject;
     unsigned inject_after;
     unsigned cycles;
     bool inject_ft_active;
-    GpHostGuidanceFailure last_failure;
+    HostGuidanceFailure last_failure;
     /* Host-only data for a non-committing replay AFTER a failed tick.
      * Never read by the physical STM32 or a motor command path. */
     FtSensorSample diagnostic_sample;
@@ -75,32 +75,32 @@ typedef struct {
     bool motion_requested;
     bool candidate_pending;
     SupervisorGuidanceCandidate candidate;
-    GpGuidanceGateAudit gate_audit;
-    GpGuidanceMotionStatus motion_status;
+    HostGuidanceGateAudit gate_audit;
+    HostGuidanceMotionStatus motion_status;
     unsigned stationary_feedback_sets;
     uint32_t stationary_sequence[ROBOT_DOF];
     int32_t stationary_position[ROBOT_DOF];
-    GpGuidanceTraceRow rows[GP_GUIDANCE_RING_SIZE];
+    HostGuidanceTraceRow rows[HOST_GUIDANCE_RING_SIZE];
     unsigned head, tail, dropped;
     unsigned drops_reported;
     FILE *csv;
     bool open_attempted;
-    GpVirtualFtReceiver *virtual_ft_receiver; /* NULL => original 0.5 N */
+    VirtualFtReceiver *virtual_ft_receiver; /* NULL => original 0.5 N */
     const SupervisorGuidanceDryRunCycle *sample_cycle; /* only during tick */
-} GpHostGuidanceDemo;
+} HostGuidanceDemo;
 
-bool gp_host_guidance_init(GpHostGuidanceDemo *demo,
+bool host_guidance_init(HostGuidanceDemo *demo,
                            const RobotConfig *simulation_robot,
-                           GpGuidanceFaultKind kind, unsigned inject_after);
-void gp_host_guidance_use_virtual_ft(GpHostGuidanceDemo *demo,
-                                     GpVirtualFtReceiver *receiver);
-SupervisorGuidanceDryRunPort gp_host_guidance_port(GpHostGuidanceDemo *demo);
+                           HostGuidanceFaultKind kind, unsigned inject_after);
+void host_guidance_use_virtual_ft(HostGuidanceDemo *demo,
+                                     VirtualFtReceiver *receiver);
+SupervisorGuidanceDryRunPort host_guidance_port(HostGuidanceDemo *demo);
 /* Call only from the lower-priority HMI task; no CSV I/O on Supervisor. */
-void gp_host_guidance_flush(GpHostGuidanceDemo *demo, const char *filename);
+void host_guidance_flush(HostGuidanceDemo *demo, const char *filename);
 /* Captured in the Supervisor cycle and copied for diagnostics only. */
-bool gp_host_guidance_gate_audit_snapshot(
-    GpHostGuidanceDemo *demo, GpGuidanceGateAudit *out);
+bool host_guidance_gate_audit_snapshot(
+    HostGuidanceDemo *demo, HostGuidanceGateAudit *out);
 /* False on stale observation; never treats repeated feedback as settled. */
-bool gp_host_guidance_motion_status(
-    GpHostGuidanceDemo *demo, GpGuidanceMotionStatus *out);
+bool host_guidance_motion_status(
+    HostGuidanceDemo *demo, HostGuidanceMotionStatus *out);
 #endif

@@ -1,5 +1,5 @@
-#ifndef GP_VALIDATION_STORAGE_BRIDGE_H
-#define GP_VALIDATION_STORAGE_BRIDGE_H
+#ifndef VALIDATION_STORAGE_BRIDGE_H
+#define VALIDATION_STORAGE_BRIDGE_H
 
 #include "../StateMachine/States/state_path_validation.h"
 #include "validation_storage_wire.h"
@@ -9,27 +9,27 @@
 
 /* M7 computes geometry/IK. M4 alone calls the underlying flash storage.
  * Shared region is fixed-capacity, SPSC, with no pointers or mutex handles.
- * Place GpValidationShared in MPU NON-CACHEABLE memory visible to both cores.
+ * Place ValidationShared in MPU NON-CACHEABLE memory visible to both cores.
  * Initialize while both cores are quiescent; hardware boot/HSEM is separate.
  */
 typedef enum {
-    GP_VALIDATION_FLASH_IDLE = 0,
-    GP_VALIDATION_FLASH_WRITING = 1,
-    GP_VALIDATION_FLASH_COMMITTED = 2,
-    GP_VALIDATION_FLASH_FAILED = 3
-} GpValidationFlashStatus;
+    VALIDATION_FLASH_IDLE = 0,
+    VALIDATION_FLASH_WRITING = 1,
+    VALIDATION_FLASH_COMMITTED = 2,
+    VALIDATION_FLASH_FAILED = 3
+} ValidationFlashStatus;
 
 typedef enum {
-    GP_VALIDATION_OP_BEGIN = 1,
-    GP_VALIDATION_OP_SAMPLE = 2,
-    GP_VALIDATION_OP_COMMIT = 3
-} GpValidationOperation;
+    VALIDATION_OP_BEGIN = 1,
+    VALIDATION_OP_SAMPLE = 2,
+    VALIDATION_OP_COMMIT = 3
+} ValidationOperation;
 
 typedef struct {
     uint32_t kind;
     uint32_t index;
     PvExecutionSample sample;
-} GpValidationStorageMessage;
+} ValidationStorageMessage;
 
 typedef struct {
     uint32_t magic;
@@ -43,46 +43,46 @@ typedef struct {
     uint32_t worker_ready;     /* M4 publishes only after backend init */
     uint32_t reserved_alignment; /* 8-byte align metadata in wire header */
     ValidatedTrajectory commit_metadata; /* M7 publishes before COMMIT slot */
-    GpValidationStorageMessage slots[GP_VALIDATION_QUEUE_CAPACITY];
+    ValidationStorageMessage slots[VALIDATION_QUEUE_CAPACITY];
     /* B4: M7 single-writer playback request; M4 single-writer response.
      * These fields are entirely within the existing 12 KiB reservation.
      * M7 never reads NOR or writes the trajectory ring. */
-    GpTrajectoryIdentity playback_identity;
+    TrajectoryIdentity playback_identity;
     uint32_t playback_request_seq;
     uint32_t playback_cancel_seq;
     uint32_t playback_ack_seq;
     uint32_t playback_status;
-} GpValidationShared;
+} ValidationShared;
 
 /* These descriptors are PRIVATE to the respective core. */
 typedef struct {
-    GpValidationShared *shared;
+    ValidationShared *shared;
     uint32_t next_index;
     bool active;
     bool commit_queued;
-} GpValidationM7Client;
+} ValidationM7Client;
 
 typedef struct {
-    GpValidationShared *shared;
+    ValidationShared *shared;
     PathValidationStorage backend; /* M4's actual QSPI/NOR callbacks only */
     uint32_t next_index;
     bool open;
-} GpValidationM4Worker;
+} ValidationM4Worker;
 
-void gp_validation_shared_initialize(GpValidationShared *shared);
-bool gp_validation_shared_valid(const GpValidationShared *shared);
-void gp_validation_m7_init(GpValidationM7Client *client, GpValidationShared *shared);
-void gp_validation_m4_shutdown(GpValidationM4Worker *worker);
-bool gp_validation_m4_init(GpValidationM4Worker *worker, GpValidationShared *shared,
+void validation_shared_initialize(ValidationShared *shared);
+bool validation_shared_valid(const ValidationShared *shared);
+void validation_m7_init(ValidationM7Client *client, ValidationShared *shared);
+void validation_m4_shutdown(ValidationM4Worker *worker);
+bool validation_m4_init(ValidationM4Worker *worker, ValidationShared *shared,
                            const PathValidationStorage *backend);
 
 /* M7: nonblocking adapter for state_path_validation's storage callbacks. */
-PathValidationStorage gp_validation_m7_storage(GpValidationM7Client *client,
+PathValidationStorage validation_m7_storage(ValidationM7Client *client,
                                                uint32_t capacity_samples);
-bool gp_validation_m4_idle(const GpValidationShared *shared);
+bool validation_m4_idle(const ValidationShared *shared);
 
 /* M4: run one queued flash operation (or abort) per call.
  * May block inside the backend, NEVER invoke from M7's control task. */
-bool gp_validation_m4_step(GpValidationM4Worker *worker);
+bool validation_m4_step(ValidationM4Worker *worker);
 
 #endif

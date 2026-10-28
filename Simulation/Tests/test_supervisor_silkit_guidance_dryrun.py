@@ -75,7 +75,7 @@ def wait_rows(path, condition, seconds=6):
         f"Timed out: {fault}; trace rows={len(read_rows(path))}")
 
 try:
-    with tempfile.TemporaryDirectory(prefix="gp-4e2b-") as temp:
+    with tempfile.TemporaryDirectory(prefix="host-guidance-") as temp:
         trace = pathlib.Path(temp) / "guidance.csv"
         start("registry", [registry, "--listen-uri",
                            "silkit://localhost:8500"])
@@ -86,9 +86,9 @@ try:
         alive()
         env = os.environ.copy()
         env.update({
-            "GP_GUIDANCE_DRY_RUN": "1",
-            "GP_GUIDANCE_TRACE_FILE": str(trace),
-            "GP_GUIDANCE_INJECT": fault,
+            "HAND_GUIDING_DRY_RUN": "1",
+            "HAND_GUIDING_TRACE_FILE": str(trace),
+            "HAND_GUIDING_INJECT": fault,
             "SILKIT_REGISTRY_URI": "silkit://localhost:8500"
         })
         start("supervisor", [supervisor], env=env)

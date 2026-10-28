@@ -1,5 +1,5 @@
 """4F1 sustained SIL Kit host experiment. Owns registry, virtual motors and
-Supervisor; writes reproducible CSV and report if GP_4F1_OUTPUT_DIR is set.
+Supervisor; writes reproducible CSV and report if HAND_GUIDING_EXPERIMENT_OUTPUT_DIR is set.
 This measures POSIX/WSL behavior, NOT STM32 real-time deadlines."""
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ registry, motors, supervisor = (
     str(pathlib.Path(a).resolve()) for a in sys.argv[1:]
 )
 # Default temporary experiment; explicit environment retains logs and charts.
-saved = os.environ.get("GP_4F1_OUTPUT_DIR", "").strip()
-temp = tempfile.TemporaryDirectory(prefix="gp-4f1-")
+saved = os.environ.get("HAND_GUIDING_EXPERIMENT_OUTPUT_DIR", "").strip()
+temp = tempfile.TemporaryDirectory(prefix="hand-guiding-experiment-")
 root = pathlib.Path(saved).resolve() if saved else pathlib.Path(temp.name)
 root.mkdir(parents=True, exist_ok=True)
 guidance_csv = root / "guidance.csv"
@@ -67,11 +67,11 @@ try:
     alive()
     env = os.environ.copy()
     env.update({
-        "GP_GUIDANCE_DRY_RUN": "1",
-        "GP_GUIDANCE_SIM_MOTION": "1",
-        "GP_GUIDANCE_INJECT": "none",
-        "GP_GUIDANCE_TRACE_FILE": str(guidance_csv),
-        "GP_TIMING_CSV": str(timing_csv),
+        "HAND_GUIDING_DRY_RUN": "1",
+        "HAND_GUIDING_SIM_MOTION": "1",
+        "HAND_GUIDING_INJECT": "none",
+        "HAND_GUIDING_TRACE_FILE": str(guidance_csv),
+        "HOST_TIMING_CSV": str(timing_csv),
         "SILKIT_REGISTRY_URI": "silkit://localhost:8500",
     })
     start("supervisor", [supervisor], env=env)

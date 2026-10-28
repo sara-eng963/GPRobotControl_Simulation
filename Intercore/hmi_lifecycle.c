@@ -1,9 +1,9 @@
 #include "hmi_lifecycle.h"
 
-bool gp_hmi_status_decode(const GpIpcMessage *msg, uint32_t last_sequence,
-                          GpHmiControllerStatus *out)
+bool hmi_status_decode(const IpcMessage *msg, uint32_t last_sequence,
+                          HmiControllerStatus *out)
 {
-    if (msg == NULL || out == NULL || msg->type != GP_IPC_CONTROLLER_STATUS ||
+    if (msg == NULL || out == NULL || msg->type != IPC_CONTROLLER_STATUS ||
         msg->sequence == 0U ||
         (last_sequence != 0U &&
          (int32_t)(msg->sequence - last_sequence) <= 0) ||
@@ -11,7 +11,7 @@ bool gp_hmi_status_decode(const GpIpcMessage *msg, uint32_t last_sequence,
         msg->data[1] > 1U || msg->data[4] > 1U)
         return false;
 
-    *out = (GpHmiControllerStatus) {
+    *out = (HmiControllerStatus) {
         .ipc_sequence = msg->sequence,
         .robot_state = msg->data[0],
         .motion_permitted = msg->data[1] != 0U,
@@ -24,7 +24,7 @@ bool gp_hmi_status_decode(const GpIpcMessage *msg, uint32_t last_sequence,
     return true;
 }
 
-bool gp_hmi_status_is_fresh(uint32_t now, uint32_t received,
+bool hmi_status_is_fresh(uint32_t now, uint32_t received,
                             uint32_t max_age_ticks)
 {
     /* FreeRTOS CM4 configuration has a 32-bit tick; subtraction tolerates
@@ -33,7 +33,7 @@ bool gp_hmi_status_is_fresh(uint32_t now, uint32_t received,
            (uint32_t)(now - received) <= max_age_ticks;
 }
 
-bool gp_hmi_command_allowed(const GpHmiControllerStatus *status,
+bool hmi_command_allowed(const HmiControllerStatus *status,
                             SupervisorHmiCommand command)
 {
     if (status == NULL || (unsigned)command >= (unsigned)SUP_HMI_COMMAND_COUNT ||
@@ -52,8 +52,8 @@ bool gp_hmi_command_allowed(const GpHmiControllerStatus *status,
     return true;
 }
 
-bool gp_hmi_should_drop_pending(const GpHmiControllerStatus *old_status,
-                                const GpHmiControllerStatus *new_status)
+bool hmi_should_drop_pending(const HmiControllerStatus *old_status,
+                                const HmiControllerStatus *new_status)
 {
     if (new_status == NULL) return true;
     /* A stable FAULT state is allowed to accept a NEW RESET request.

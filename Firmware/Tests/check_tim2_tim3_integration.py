@@ -12,7 +12,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 FW = ROOT / "Firmware" / "STM32H745"
 read = lambda name: (ROOT / name).read_text(encoding="utf-8")
-ioc = read("Firmware/STM32H745/GP_STM32H745ZIT6_BoardConfig.ioc")
+ioc = read("Firmware/STM32H745/STM32H745ZIT6_BoardConfig.ioc")
 main = read("Firmware/STM32H745/CM7/Core/Src/main.c")
 isr = read("Firmware/STM32H745/CM7/Core/Src/stm32h7xx_it.c")
 msp = read("Firmware/STM32H745/CM7/Core/Src/stm32h7xx_hal_msp.c")

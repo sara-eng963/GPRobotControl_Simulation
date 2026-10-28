@@ -26,7 +26,7 @@ static bool acquisition_ok = true;
 static bool context_ok = true;
 static SupervisorInputSnapshot board_inputs;
 static SupervisorOutputSnapshot board_outputs;
-static GpIpcShared test_ipc;
+static IpcShared test_ipc;
 static void check(bool ok, const char *name)
 {
     printf("[%s] %s\n", ok ? "PASS" : "FAIL", name);
@@ -132,12 +132,12 @@ static void test_task(void *argument)
           "Supervisor routes HMI START and rejects it during E-stop");
 
     /* Simulate M4 HMI: only Supervisor may mutate state. */
-    GpIpcMessage ipc_hmi = {0};
-    ipc_hmi.type = GP_IPC_HMI_COMMAND;
+    IpcMessage ipc_hmi = {0};
+    ipc_hmi.type = IPC_HMI_COMMAND;
     ipc_hmi.sequence = 1U;
     ipc_hmi.data[0] = SUP_HMI_START_REPLAY;
     rejections = state.rejectedEventCount;
-    check(gp_ipc_m4_send(&test_ipc, &ipc_hmi), "M4 sends IPC HMI request");
+    check(ipc_m4_send(&test_ipc, &ipc_hmi), "M4 sends IPC HMI request");
     wait_for_cycles();
     check(supervisor_task_get_state(&state) &&
           state.activeState == ROBOT_STATE_EMERGENCY_STOP &&
@@ -147,17 +147,17 @@ static void test_task(void *argument)
     /* Status is deliberately published at 10 ms, not on every tick.
      * Wait more than one publish interval to avoid scheduler-phase races. */
     vTaskDelay(pdMS_TO_TICKS(25));
-    GpIpcMessage ipc_status = {0};
+    IpcMessage ipc_status = {0};
     bool saw_ipc_status = false;
-    while (gp_ipc_m4_receive(&test_ipc, &ipc_status)) {
-        if (ipc_status.type == GP_IPC_CONTROLLER_STATUS &&
+    while (ipc_m4_receive(&test_ipc, &ipc_status)) {
+        if (ipc_status.type == IPC_CONTROLLER_STATUS &&
             ipc_status.data[0] == ROBOT_STATE_EMERGENCY_STOP &&
             ipc_status.data[5] == 1U) saw_ipc_status = true;
     }
     check(saw_ipc_status, "M4 receives M7 status with last received command");
 
     rejections = state.rejectedEventCount;
-    check(gp_ipc_m4_send(&test_ipc, &ipc_hmi), "M4 sends duplicate sequence");
+    check(ipc_m4_send(&test_ipc, &ipc_hmi), "M4 sends duplicate sequence");
     wait_for_cycles();
     check(supervisor_task_get_state(&state) &&
           state.rejectedEventCount == rejections,
@@ -223,7 +223,7 @@ int main(void)
     config.validation_sample_budget = 1;
     check(!supervisor_task_init(&config), "Zero task period is rejected");
     config.period_ticks = pdMS_TO_TICKS(1);
-    gp_ipc_initialize(&test_ipc);
+    ipc_initialize(&test_ipc);
     config.ipc = &test_ipc;
     config.io.context = &board_inputs;
     config.io.read_inputs = read_board;

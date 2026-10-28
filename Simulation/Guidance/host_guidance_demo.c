@@ -10,35 +10,35 @@
 #include <stddef.h>
 #include <string.h>
 
-const char *gp_host_guidance_failure_name(GpHostGuidanceFailure reason)
+const char *host_guidance_failure_name(HostGuidanceFailure reason)
 {
     switch (reason) {
-    case GP_GUIDANCE_FAIL_NONE: return "none";
-    case GP_GUIDANCE_FAIL_PRE_SAMPLE: return "pre_sample_safety_or_feedback_gate";
-    case GP_GUIDANCE_FAIL_INPUT: return "virtual_ft_input_unavailable";
-    case GP_GUIDANCE_FAIL_SENSOR_FRAME: return "virtual_ft_sensor_frame_conversion";
-    case GP_GUIDANCE_FAIL_FEEDBACK_CONVERSION: return "virtual_ft_feedback_conversion";
-    case GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE: return "pipeline_failure_unclassified";
-    case GP_GUIDANCE_FAIL_WRENCH_FRAME: return "sensor_to_base_tcp_wrench_rejected";
-    case GP_GUIDANCE_FAIL_ADMITTANCE: return "admittance_step_rejected";
-    case GP_GUIDANCE_FAIL_MAPPER_SINGULARITY: return "mapper_singularity_threshold";
-    case GP_GUIDANCE_FAIL_MAPPER_TRACKING: return "mapper_tracking_error_limit";
-    case GP_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT: return "mapper_joint_position_limit";
-    case GP_GUIDANCE_FAIL_MAPPER_OTHER: return "mapper_dls_or_other_constraint";
+    case HOST_GUIDANCE_FAIL_NONE: return "none";
+    case HOST_GUIDANCE_FAIL_PRE_SAMPLE: return "pre_sample_safety_or_feedback_gate";
+    case HOST_GUIDANCE_FAIL_INPUT: return "virtual_ft_input_unavailable";
+    case HOST_GUIDANCE_FAIL_SENSOR_FRAME: return "virtual_ft_sensor_frame_conversion";
+    case HOST_GUIDANCE_FAIL_FEEDBACK_CONVERSION: return "virtual_ft_feedback_conversion";
+    case HOST_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE: return "pipeline_failure_unclassified";
+    case HOST_GUIDANCE_FAIL_WRENCH_FRAME: return "sensor_to_base_tcp_wrench_rejected";
+    case HOST_GUIDANCE_FAIL_ADMITTANCE: return "admittance_step_rejected";
+    case HOST_GUIDANCE_FAIL_MAPPER_SINGULARITY: return "mapper_singularity_threshold";
+    case HOST_GUIDANCE_FAIL_MAPPER_TRACKING: return "mapper_tracking_error_limit";
+    case HOST_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT: return "mapper_joint_position_limit";
+    case HOST_GUIDANCE_FAIL_MAPPER_OTHER: return "mapper_dls_or_other_constraint";
     default: return "unclassified";
     }
 }
 
 static bool synthetic_ft(void *context, FtSensorSample *out)
 {
-    GpHostGuidanceDemo *d = (GpHostGuidanceDemo *)context;
+    HostGuidanceDemo *d = (HostGuidanceDemo *)context;
     if (d == NULL || out == NULL) return false;
     memset(out, 0, sizeof(*out));
     if (d->virtual_ft_receiver != NULL) {
         double requested[6], measured[ROBOT_DOF];
         const SupervisorGuidanceDryRunCycle *cycle = d->sample_cycle;
         if (cycle == NULL || cycle->scales == NULL) {
-            d->last_failure = GP_GUIDANCE_FAIL_PRE_SAMPLE;
+            d->last_failure = HOST_GUIDANCE_FAIL_PRE_SAMPLE;
             return false;
         }
         /* Use the Supervisor cycle's authoritative timestamp for BOTH
@@ -48,9 +48,9 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
          * (unsigned age wraps to ~2^32). This was a rare intermittent E061
          * even while the GUI UDP stream was healthy. */
         const uint32_t now_us = (uint32_t)cycle->now_us;
-        if (!gp_virtual_ft_receiver_read(d->virtual_ft_receiver,
+        if (!virtual_ft_receiver_read(d->virtual_ft_receiver,
                                          now_us, requested)) {
-            d->last_failure = GP_GUIDANCE_FAIL_INPUT;
+            d->last_failure = HOST_GUIDANCE_FAIL_INPUT;
             return false;
         }
         for (size_t i=0; i<ROBOT_DOF; ++i)
@@ -58,18 +58,18 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
                 !avatar_m_position_units_to_joint_rad(&cycle->scales[i],
                     cycle->feedback[i].actual_position_units, &measured[i]))
             {
-                d->last_failure = GP_GUIDANCE_FAIL_FEEDBACK_CONVERSION;
+                d->last_failure = HOST_GUIDANCE_FAIL_FEEDBACK_CONVERSION;
                 return false;
             }
-        if (!gp_virtual_ft_sensor_sample(requested,
+        if (!virtual_ft_sensor_sample(requested,
                 &d->adapter.config.pipeline_config.sensor,
                 &d->synthetic_observation_robot, measured, now_us, out)) {
-            d->last_failure = GP_GUIDANCE_FAIL_SENSOR_FRAME;
+            d->last_failure = HOST_GUIDANCE_FAIL_SENSOR_FRAME;
             return false;
         }
         if (d->inject_ft_active)
             out->received_time_us -= 40000U;
-        d->last_failure = GP_GUIDANCE_FAIL_NONE; /* sample accepted */
+        d->last_failure = HOST_GUIDANCE_FAIL_NONE; /* sample accepted */
         d->diagnostic_sample = *out;
         memcpy(d->diagnostic_measured_q, measured, sizeof(measured));
         d->diagnostic_sample_ready = true;
@@ -80,7 +80,7 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
     out->received_time_us = (uint32_t)(
         d->inject_ft_active ? now - UINT64_C(40000) : now);
     out->force_N[0] = 0.5; /* fake handle load, N */
-    d->last_failure = GP_GUIDANCE_FAIL_NONE;
+    d->last_failure = HOST_GUIDANCE_FAIL_NONE;
     return true;
 }
 
@@ -88,12 +88,12 @@ static bool synthetic_ft(void *context, FtSensorSample *out)
  * It uses COPIES of the pre-tick states and the original input sample.
  * It cannot clear a fault, change the live state or dispatch a target.
  * Reuse the same numerical functions; never duplicate control equations. */
-static GpHostGuidanceFailure classify_failed_pipeline(
-    GpHostGuidanceDemo *d, const HandGuidingPipelineState *before,
+static HostGuidanceFailure classify_failed_pipeline(
+    HostGuidanceDemo *d, const HandGuidingPipelineState *before,
     const SupervisorGuidanceDryRunCycle *cycle)
 {
     if (!d->diagnostic_sample_ready || !before->active)
-        return GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE;
+        return HOST_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE;
 
     const HandGuidingPipelineConfig *cfg = &before->config;
     const RobotConfig *robot = &d->synthetic_observation_robot;
@@ -103,20 +103,20 @@ static GpHostGuidanceFailure classify_failed_pipeline(
             &d->diagnostic_sample, (uint32_t)cycle->now_us,
             d->adapter.config.max_sensor_age_us, &cfg->sensor, &cfg->bias,
             robot, q, cfg->mapper.model_verified, wrench))
-        return GP_GUIDANCE_FAIL_WRENCH_FRAME;
+        return HOST_GUIDANCE_FAIL_WRENCH_FRAME;
 
     AdmittanceState admittance_copy = before->admittance;
     double twist[ADMITTANCE_AXES] = {0};
     if (!admittance_step(&cfg->admittance, &admittance_copy,
                         wrench, cycle->period_s, twist))
-        return GP_GUIDANCE_FAIL_ADMITTANCE;
+        return HOST_GUIDANCE_FAIL_ADMITTANCE;
 
     CartesianJointMapperState mapper_copy = before->mapper;
     CartesianJointMapperOutput output = {0};
     if (cartesian_joint_mapper_step(
             &mapper_copy, &cfg->mapper, robot, q, twist, cycle->period_s,
             &output) && output.valid)
-        return GP_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE;
+        return HOST_GUIDANCE_FAIL_PIPELINE_AFTER_SAMPLE;
 
     /* Discriminate common mapper rejections without weakening any gate. */
     double max_track = 0.0;
@@ -130,11 +130,11 @@ static GpHostGuidanceFailure classify_failed_pipeline(
             q[axis] > robot->limits.qMax[axis] ||
             before->mapper.position_ref[axis] < robot->limits.qMin[axis] ||
             before->mapper.position_ref[axis] > robot->limits.qMax[axis])
-            return GP_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT;
+            return HOST_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT;
     }
     d->diagnostic_max_tracking_error_rad = max_track;
     if (excessive_tracking_error)
-        return GP_GUIDANCE_FAIL_MAPPER_TRACKING;
+        return HOST_GUIDANCE_FAIL_MAPPER_TRACKING;
 
     double J[ROBOT_DOF][ROBOT_DOF];
     double sigma = 0.0;
@@ -142,17 +142,17 @@ static GpHostGuidanceFailure classify_failed_pipeline(
     if (!singularity_sigma_min((const double (*)[ROBOT_DOF])J, &sigma) ||
         !isfinite(sigma) || sigma < cfg->mapper.minimum_sigma) {
         d->diagnostic_sigma_min = sigma;
-        return GP_GUIDANCE_FAIL_MAPPER_SINGULARITY;
+        return HOST_GUIDANCE_FAIL_MAPPER_SINGULARITY;
     }
     d->diagnostic_sigma_min = sigma;
-    return GP_GUIDANCE_FAIL_MAPPER_OTHER;
+    return HOST_GUIDANCE_FAIL_MAPPER_OTHER;
 }
 
-static void record(GpHostGuidanceDemo *d, const GpGuidanceTraceRow *r)
+static void record(HostGuidanceDemo *d, const HostGuidanceTraceRow *r)
 {
     /* Short bounded copy under the same FreeRTOS POSIX scheduler. */
     taskENTER_CRITICAL();
-    unsigned next = (d->head + 1U) % GP_GUIDANCE_RING_SIZE;
+    unsigned next = (d->head + 1U) % HOST_GUIDANCE_RING_SIZE;
     if (next != d->tail) {
         d->rows[d->head] = *r;
         d->head = next;
@@ -162,7 +162,7 @@ static void record(GpHostGuidanceDemo *d, const GpGuidanceTraceRow *r)
     taskEXIT_CRITICAL();
 }
 
-static void observe_motion(GpHostGuidanceDemo *d,
+static void observe_motion(HostGuidanceDemo *d,
                           const SupervisorGuidanceDryRunCycle *cycle,
                           bool accepted)
 {
@@ -170,7 +170,7 @@ static void observe_motion(GpHostGuidanceDemo *d,
      * sets at the same attained target, with zero applied wrench. This is
      * a simulation measurement, not a change to Teaching recording rules. */
     const unsigned required_sets = 20U;
-    GpGuidanceMotionStatus status = {.time_us = cycle->now_us};
+    HostGuidanceMotionStatus status = {.time_us = cycle->now_us};
     status.enabled = accepted && d->adapter.pipeline.active;
     for (size_t i = 0U; i < ROBOT_DOF; ++i)
         if (d->adapter.last_output.wrench_base_tcp[i] != 0.0)
@@ -209,29 +209,29 @@ static void observe_motion(GpHostGuidanceDemo *d,
 
 static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
 {
-    GpHostGuidanceDemo *d = (GpHostGuidanceDemo *)context;
+    HostGuidanceDemo *d = (HostGuidanceDemo *)context;
     if (d == NULL || cycle == NULL) return false;
     SupervisorGuidanceDryRunCycle observation = *cycle;
     observation.robot = &d->synthetic_observation_robot;
     if (d->cycles < UINT32_MAX) ++d->cycles;
-    const bool inject = d->inject != GP_GUIDANCE_INJECT_NONE &&
+    const bool inject = d->inject != HOST_GUIDANCE_INJECT_NONE &&
         d->cycles >= d->inject_after;
     d->inject_ft_active = inject &&
-        d->inject == GP_GUIDANCE_INJECT_STALE_FT;
-    if (inject && d->inject == GP_GUIDANCE_INJECT_BAD_FEEDBACK)
+        d->inject == HOST_GUIDANCE_INJECT_STALE_FT;
+    if (inject && d->inject == HOST_GUIDANCE_INJECT_BAD_FEEDBACK)
         observation.feedback_healthy = false;
 
     d->candidate_pending = false;
     memset(&d->candidate, 0, sizeof(d->candidate));
-    d->last_failure = GP_GUIDANCE_FAIL_PRE_SAMPLE;
+    d->last_failure = HOST_GUIDANCE_FAIL_PRE_SAMPLE;
     d->diagnostic_sample_ready = false;
     const HandGuidingPipelineState before = d->adapter.pipeline;
     d->sample_cycle = &observation;
     const bool accepted = hand_guiding_dry_run_tick(&d->adapter, &observation);
     d->sample_cycle = NULL;
     if (accepted) {
-        d->last_failure = GP_GUIDANCE_FAIL_NONE;
-    } else if (d->last_failure == GP_GUIDANCE_FAIL_NONE) {
+        d->last_failure = HOST_GUIDANCE_FAIL_NONE;
+    } else if (d->last_failure == HOST_GUIDANCE_FAIL_NONE) {
         d->last_failure = classify_failed_pipeline(d, &before, &observation);
     }
     if (accepted && d->adapter.last_output.valid) {
@@ -258,7 +258,7 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
         taskEXIT_CRITICAL();
     }
     if (d->virtual_ft_receiver != NULL) observe_motion(d, cycle, accepted);
-    GpGuidanceTraceRow r = {0};
+    HostGuidanceTraceRow r = {0};
     r.time_us = cycle->now_us;
     r.cycle = d->cycles;
     r.accepted = accepted;
@@ -290,7 +290,7 @@ static bool tick(void *context, const SupervisorGuidanceDryRunCycle *cycle)
 }
 static void stop(void *context)
 {
-    GpHostGuidanceDemo *d = (GpHostGuidanceDemo *)context;
+    HostGuidanceDemo *d = (HostGuidanceDemo *)context;
     if (d != NULL) {
         d->candidate_pending = false;
         memset(&d->candidate, 0, sizeof(d->candidate));
@@ -304,7 +304,7 @@ static void stop(void *context)
 
 static bool take_candidate(void *context, SupervisorGuidanceCandidate *out)
 {
-    GpHostGuidanceDemo *d = (GpHostGuidanceDemo *)context;
+    HostGuidanceDemo *d = (HostGuidanceDemo *)context;
     if (out == NULL) return false;
     memset(out, 0, sizeof(*out));
     if (d == NULL || !d->candidate_pending) return false;
@@ -314,12 +314,12 @@ static bool take_candidate(void *context, SupervisorGuidanceCandidate *out)
     return true;
 }
 
-bool gp_host_guidance_init(GpHostGuidanceDemo *d,
+bool host_guidance_init(HostGuidanceDemo *d,
                            const RobotConfig *robot,
-                           GpGuidanceFaultKind kind, unsigned after)
+                           HostGuidanceFaultKind kind, unsigned after)
 {
     if (d == NULL || robot == NULL ||
-        (kind != GP_GUIDANCE_INJECT_NONE && after < 5U)) return false;
+        (kind != HOST_GUIDANCE_INJECT_NONE && after < 5U)) return false;
     memset(d, 0, sizeof(*d));
     d->simulation_robot = robot;
     d->synthetic_observation_robot = *robot;
@@ -358,8 +358,8 @@ bool gp_host_guidance_init(GpHostGuidanceDemo *d,
     return hand_guiding_dry_run_init(&d->adapter, &cfg);
 }
 
-void gp_host_guidance_use_virtual_ft(GpHostGuidanceDemo *d,
-                                     GpVirtualFtReceiver *receiver)
+void host_guidance_use_virtual_ft(HostGuidanceDemo *d,
+                                     VirtualFtReceiver *receiver)
 {
     if (d != NULL && d->simulation_robot != NULL) {
         d->virtual_ft_receiver = receiver;
@@ -371,7 +371,7 @@ void gp_host_guidance_use_virtual_ft(GpHostGuidanceDemo *d,
     }
 }
 
-SupervisorGuidanceDryRunPort gp_host_guidance_port(GpHostGuidanceDemo *d)
+SupervisorGuidanceDryRunPort host_guidance_port(HostGuidanceDemo *d)
 {
     SupervisorGuidanceDryRunPort port = {0};
     if (d != NULL && d->adapter.configured) {
@@ -383,7 +383,7 @@ SupervisorGuidanceDryRunPort gp_host_guidance_port(GpHostGuidanceDemo *d)
     return port;
 }
 
-void gp_host_guidance_flush(GpHostGuidanceDemo *d, const char *name)
+void host_guidance_flush(HostGuidanceDemo *d, const char *name)
 {
     if (d == NULL || name == NULL || name[0] == 0) return;
     if (!d->open_attempted) {
@@ -412,12 +412,12 @@ void gp_host_guidance_flush(GpHostGuidanceDemo *d, const char *name)
     }
     bool any = false;
     for (;;) {
-        GpGuidanceTraceRow row;
+        HostGuidanceTraceRow row;
         bool have = false;
         taskENTER_CRITICAL();
         if (d->tail != d->head) {
             row = d->rows[d->tail];
-            d->tail = (d->tail + 1U) % GP_GUIDANCE_RING_SIZE;
+            d->tail = (d->tail + 1U) % HOST_GUIDANCE_RING_SIZE;
             have = true;
         }
         taskEXIT_CRITICAL();
@@ -443,8 +443,8 @@ void gp_host_guidance_flush(GpHostGuidanceDemo *d, const char *name)
     if (any) (void)fflush(d->csv);
 }
 
-bool gp_host_guidance_gate_audit_snapshot(
-    GpHostGuidanceDemo *demo, GpGuidanceGateAudit *out)
+bool host_guidance_gate_audit_snapshot(
+    HostGuidanceDemo *demo, HostGuidanceGateAudit *out)
 {
     if (demo == NULL || out == NULL) return false;
     taskENTER_CRITICAL();
@@ -453,8 +453,8 @@ bool gp_host_guidance_gate_audit_snapshot(
     return out->has_last;
 }
 
-bool gp_host_guidance_motion_status(
-    GpHostGuidanceDemo *demo, GpGuidanceMotionStatus *out)
+bool host_guidance_motion_status(
+    HostGuidanceDemo *demo, HostGuidanceMotionStatus *out)
 {
     if (demo == NULL || out == NULL) return false;
     taskENTER_CRITICAL();

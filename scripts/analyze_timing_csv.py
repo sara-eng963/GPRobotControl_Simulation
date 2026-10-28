@@ -254,7 +254,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     groups = parse(args.csv_file)
     if not groups:
-        parser.error("CSV has no measurement rows. Run SIL Kit with GP_TIMING_CSV set.")
+        parser.error("CSV has no measurement rows. Run SIL Kit with HOST_TIMING_CSV set.")
     summaries = [summarize(name, items) for name, items in sorted(groups.items())]
     write_csv(out_dir / "summary_metrics.csv", summaries)
 

@@ -11,9 +11,9 @@ before. F1 adds only host instrumentation and offline analysis.
 
 | Instrument / file | Observable | Interpretation |
 |---|---|---|
-| `GP_TIMING_SUPERVISOR_2MS` | Host Supervisor task-body time and observed start interval; nominal metadata 2,000 us | **Not** true RTOS release-to-release jitter or STM32 deadline measurement |
-| `GP_TIMING_GUIDANCE_OBSERVER` | Time spent in the F/T-to-joint-reference callback | Includes read-only feedback and admittance pipeline work |
-| `GP_TIMING_GUIDANCE_DISPATCH` | Time for candidate validation, JointDrive CANopen dispatch request | Measures host operation; **not** acknowledged motor motion latency |
+| `TIMING_SUPERVISOR_2MS` | Host Supervisor task-body time and observed start interval; nominal metadata 2,000 us | **Not** true RTOS release-to-release jitter or STM32 deadline measurement |
+| `TIMING_GUIDANCE_OBSERVER` | Time spent in the F/T-to-joint-reference callback | Includes read-only feedback and admittance pipeline work |
+| `TIMING_GUIDANCE_DISPATCH` | Time for candidate validation, JointDrive CANopen dispatch request | Measures host operation; **not** acknowledged motor motion latency |
 | `guidance.csv` | Same-cycle pre-dispatch computed `q1..q6` and measured `actual_q1..actual_q6` | `q_ref - q_actual` is a reference-minus-prior-feedback difference, **not** settled point tracking error |
 | `guidance.csv` | Observed feedback age, valid/fault markers, cycle timestamp | Host/synthetic sample freshness, not physical sensor latency |
 
@@ -53,14 +53,14 @@ cd ~/freertos-pc-test
 git pull --ff-only origin sara/can-replacement
 export SILKIT_ROOT="$HOME/silkit_test/SilKit-5.0.7-ubuntu-24.04-x86_64-gcc/SilKit"
 
-cmake -S . -B /tmp/gp-stage4-f1-silkit \
+cmake -S . -B /tmp/hand-guiding-f1-silkit \
     -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
-cmake --build /tmp/gp-stage4-f1-silkit \
+cmake --build /tmp/hand-guiding-f1-silkit \
     --target supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
 
 # Preserve the raw CSV and generated reports; otherwise tests use temp files.
-export GP_4F1_OUTPUT_DIR="$PWD/build-can-silkit/logs/stage4f1"
-ctest --test-dir /tmp/gp-stage4-f1-silkit \
+export HAND_GUIDING_EXPERIMENT_OUTPUT_DIR="$PWD/build-can-silkit/logs/stage4f1"
+ctest --test-dir /tmp/hand-guiding-f1-silkit \
     -R '^(guidance_4f1_analyzer_fixture|supervisor_silkit_guidance_4f1_sustained)$' \
     --output-on-failure
 ```

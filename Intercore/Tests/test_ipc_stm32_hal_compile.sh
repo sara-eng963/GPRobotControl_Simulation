@@ -72,8 +72,8 @@ for spec in "M7 cortex-m7 ARM_CM7 fpv5-d16 CM7" \
         -mfpu="$fpu" -mfloat-abi=hard
         -DSTM32H745xx -DUSE_HAL_DRIVER
         "-DCORE_$st_core=1"
-        "-DGP_IPC_CORE_$core=1"
-        -DGP_IPC_FREERTOS_BACKEND=1
+        "-DIPC_CORE_$core=1"
+        -DIPC_FREERTOS_BACKEND=1
         -I"$TMP"
         -I"$KERNEL/include" -I"$(dirname "$port")"
         -I"$ROOT/Intercore"
@@ -84,7 +84,7 @@ for spec in "M7 cortex-m7 ARM_CM7 fpv5-d16 CM7" \
 
     "$CC" "${common[@]}" -Wall -Wextra -Werror \
         -c "$ROOT/Intercore/ipc_stm32h745_hsem.c" \
-        -o "$TMP/gp_hsem_$core.o"
+        -o "$TMP/hsem_probe_$core.o"
 
     # Compile ST's real HSEM implementation in its own translation unit,
     # rather than merely accepting mocked HAL symbols.

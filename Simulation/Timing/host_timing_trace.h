@@ -1,5 +1,5 @@
-#ifndef GP_HOST_TIMING_TRACE_H
-#define GP_HOST_TIMING_TRACE_H
+#ifndef HOST_TIMING_TRACE_H
+#define HOST_TIMING_TRACE_H
 
 /* POSIX-only instrumentation. Never link this module into STM32 firmware.
  * A single RTOS task writes each named ring; a separate background host
@@ -10,48 +10,48 @@
 #include <stdint.h>
 
 typedef enum {
-    GP_TIMING_SUPERVISOR = 0,
-    GP_TIMING_SIM_INPUTS,
-    GP_TIMING_HMI,
-    GP_TIMING_VALIDATION,
-    GP_TIMING_FLASH,
-    GP_TIMING_PREFETCH,
-    GP_TIMING_CAN_TARGET,
+    TIMING_SUPERVISOR = 0,
+    TIMING_SIM_INPUTS,
+    TIMING_HMI,
+    TIMING_VALIDATION,
+    TIMING_FLASH,
+    TIMING_PREFETCH,
+    TIMING_CAN_TARGET,
     /* Events/callbacks issued only by PathExecution in the Supervisor task.
      * Each waiting event counts one Supervisor polling opportunity, not a
      * unique missed command or deadline. No periodic cadence assigned. */
-    GP_TIMING_PATH_FEEDBACK_WAIT,
-    GP_TIMING_PATH_FEEDBACK_LATE,
-    GP_TIMING_PATH_PERIOD_WAIT,
-    GP_TIMING_PATH_COMMAND,
-    GP_TIMING_PATH_SAMPLES_SKIPPED,
-    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_1,
-    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_2,
-    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_3,
-    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_4,
-    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_5,
-    GP_TIMING_PATH_FEEDBACK_AGE_AXIS_6,
+    TIMING_PATH_FEEDBACK_WAIT,
+    TIMING_PATH_FEEDBACK_LATE,
+    TIMING_PATH_PERIOD_WAIT,
+    TIMING_PATH_COMMAND,
+    TIMING_PATH_SAMPLES_SKIPPED,
+    TIMING_PATH_FEEDBACK_AGE_AXIS_1,
+    TIMING_PATH_FEEDBACK_AGE_AXIS_2,
+    TIMING_PATH_FEEDBACK_AGE_AXIS_3,
+    TIMING_PATH_FEEDBACK_AGE_AXIS_4,
+    TIMING_PATH_FEEDBACK_AGE_AXIS_5,
+    TIMING_PATH_FEEDBACK_AGE_AXIS_6,
     /* F1: explicit 2 ms HOST Supervisor, not a physical deadline. */
-    GP_TIMING_SUPERVISOR_2MS,
+    TIMING_SUPERVISOR_2MS,
     /* Source/adapter work. No nominal 2-ms release guarantee. */
-    GP_TIMING_GUIDANCE_OBSERVER,
+    TIMING_GUIDANCE_OBSERVER,
     /* Gate + six RPDO/SYNC dispatch (M7 host owner only). */
-    GP_TIMING_GUIDANCE_DISPATCH,
-    GP_TIMING_SOURCE_COUNT
-} GpTimingSource;
+    TIMING_GUIDANCE_DISPATCH,
+    TIMING_SOURCE_COUNT
+} TimingSource;
 
 /* Calling with NULL or "" disables recording. Call before scheduler start.
  * Returns false on invalid/failed output path; caller should fail startup.
  */
-bool gp_timing_init(const char *csv_path);
+bool timing_init(const char *csv_path);
 
 /* Exactly one producer task per source. Instrumented calls are no-ops when
- * GP_TIMING_CSV is unset. 'success' reports whether a measured operation
+ * HOST_TIMING_CSV is unset. 'success' reports whether a measured operation
  * returned success, not whether the overall robot task succeeded.
  */
-void gp_timing_begin(GpTimingSource source);
-void gp_timing_end(GpTimingSource source, bool success);
+void timing_begin(TimingSource source);
+void timing_end(TimingSource source, bool success);
 /* Nonblocking numeric diagnostic; value is NOT an elapsed duration. */
-void gp_timing_value(GpTimingSource source, uint64_t value);
+void timing_value(TimingSource source, uint64_t value);
 
 #endif

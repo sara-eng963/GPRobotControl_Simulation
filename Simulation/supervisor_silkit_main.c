@@ -43,11 +43,11 @@ static CanopenMaster can_boot_master;
 /* Non-owning drive service for the standalone retraction callback. */
 static JointDrivePort retraction_drive;
 static AvatarMPositionScale avatar_position_scales[SIM_NUM_AXES];
-static GpHostGuidanceDemo host_guidance_demo;
+static HostGuidanceDemo host_guidance_demo;
 static bool host_guidance_enabled;
 static bool virtual_ft_mode;
 static bool virtual_motion_settled;
-static GpVirtualFtReceiver virtual_ft_receiver;
+static VirtualFtReceiver virtual_ft_receiver;
 /* Exact, already-configured host-only gate limits copied at init for
  * post-fault diagnostics. No access to the Supervisor's live gate state. */
 static HandGuidingCommandGateConfig diagnostic_gate_limits;
@@ -74,9 +74,9 @@ static TaskHandle_t prefetch_task_handle;
 /* Two-core target ownership model: M7 numerical validation worker only
  * enqueues storage requests; M4 owns the QSPI and durable commit backend.
  * POSIX simulation models the two roles with independent FreeRTOS tasks. */
-static GpValidationShared flash_validation_shared;
-static GpValidationM7Client flash_validation_client;
-static GpValidationM4Worker flash_validation_worker;
+static ValidationShared flash_validation_shared;
+static ValidationM7Client flash_validation_client;
+static ValidationM4Worker flash_validation_worker;
 static TaskHandle_t flash_storage_task_handle;
 static PathValidationStorage path_validation_storage;
 static ValidatedTrajectory validated_trajectory;
@@ -246,7 +246,7 @@ static bool prefetch_ready_for_validation(void *ignored)
     (void)ignored;
     /* Do not start a new validation while M4 still has a pending commit,
      * failed transaction, or in-flight cancellation to acknowledge. */
-    if (host_flash_mode && !gp_validation_m4_idle(&flash_validation_shared))
+    if (host_flash_mode && !validation_m4_idle(&flash_validation_shared))
         return false;
     if (trajectory_prefetch_stopped(&validated_prefetch)) return true;
     if (!trajectory_prefetch_request_stop(&validated_prefetch)) return false;
@@ -267,9 +267,9 @@ static void flash_storage_worker_task(void *arg)
         const bool active = head != tail ||
             __atomic_load_n(&flash_validation_shared.cancel_request, __ATOMIC_ACQUIRE) ||
             __atomic_load_n(&flash_validation_shared.release_request, __ATOMIC_ACQUIRE);
-        if (active) gp_timing_begin(GP_TIMING_FLASH);
-        const bool result = gp_validation_m4_step(&flash_validation_worker);
-        if (active) gp_timing_end(GP_TIMING_FLASH, result);
+        if (active) timing_begin(TIMING_FLASH);
+        const bool result = validation_m4_step(&flash_validation_worker);
+        if (active) timing_end(TIMING_FLASH, result);
         vTaskDelay(1);
     }
 }
@@ -279,9 +279,9 @@ static void prefetch_worker_task(void *arg)
     (void)arg;
     for (;;) {
         const bool active = !trajectory_prefetch_stopped(&validated_prefetch);
-        if (active) gp_timing_begin(GP_TIMING_PREFETCH);
+        if (active) timing_begin(TIMING_PREFETCH);
         const bool result = trajectory_prefetch_worker_step(&validated_prefetch);
-        if (active) gp_timing_end(GP_TIMING_PREFETCH, result);
+        if (active) timing_end(TIMING_PREFETCH, result);
         vTaskDelay(1);
     }
 }
@@ -523,7 +523,7 @@ static bool host_flash_test_command(void *ctx, uint8_t op, uint32_t addr,
 static bool host_flash_initialize(void)
 {
     /* Tests only: one-shot error/delay. Normal runs retain strict NOR model. */
-    const char *test_mode = getenv("GP_FLASH_TEST_MODE");
+    const char *test_mode = getenv("SIM_FLASH_TEST_MODE");
     host_flash_test_mode = test_mode != NULL && strcmp(test_mode,"cancel")==0
         ? 1 : (test_mode != NULL && strcmp(test_mode,"program_fail")==0 ? 2 : 0);
     host_flash_test_fired = false;
@@ -883,16 +883,16 @@ static void input_task(void *arg)
     (void)arg;bool old_estop=false,old_protective=false,old_fault=false;
 
     for(;;) {
-        gp_timing_begin(GP_TIMING_SIM_INPUTS);
+        timing_begin(TIMING_SIM_INPUTS);
         /* Acquisition must not wait behind HMI printf/CSV/file flushing. */
-        if (virtual_ft_mode) gp_virtual_ft_receiver_poll(&virtual_ft_receiver);
+        if (virtual_ft_mode) virtual_ft_receiver_poll(&virtual_ft_receiver);
         StateMachine machine;
         supervisor_task_get_state(&machine);
         bool settled = false;
         if (virtual_ft_mode) {
-            GpGuidanceMotionStatus motion;
+            HostGuidanceMotionStatus motion;
             settled = machine.activeState == ROBOT_STATE_TEACHING &&
-                gp_host_guidance_motion_status(&host_guidance_demo, &motion) &&
+                host_guidance_motion_status(&host_guidance_demo, &motion) &&
                 motion.settled;
             taskENTER_CRITICAL();
             virtual_motion_settled = settled;
@@ -963,7 +963,7 @@ static void input_task(void *arg)
         m.type=SUPERVISOR_MESSAGE_PATH_EXECUTION_INPUTS;memset(&m.data,0,sizeof(m.data));
         m.data.path_execution_inputs.now_ms=(uint32_t)(xTaskGetTickCount()*1000/configTICK_RATE_HZ);
         post_required(&m);
-        gp_timing_end(GP_TIMING_SIM_INPUTS, true);
+        timing_end(TIMING_SIM_INPUTS, true);
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
@@ -1000,7 +1000,7 @@ static void operator_log_open(void)
 
     fprintf(
         operator_event_log,
-        "# GP Robot operator/debug event log\n"
+        "# Robot Control operator/debug event log\n"
         "# EVENT numbers are HMI/operator actions received by the controller.\n"
         "# OUTCOME lines show meaningful changes observed after the latest EVENT.\n"
         "# time_ms is monotonic FreeRTOS simulation time.\n\n"
@@ -1525,8 +1525,8 @@ static void trace_state(const SupervisorDiagnostics *s)
             fprintf(stderr, "[FAULT] E061: no fresh admissible hand-guiding "
                             "candidate; retaining simulated safe-stop.\n");
         if (virtual_ft_mode) {
-            GpVirtualFtState input;
-            GpHostGuidanceFailure guidance_failure;
+            VirtualFtState input;
+            HostGuidanceFailure guidance_failure;
             taskENTER_CRITICAL();
             input = virtual_ft_receiver.state;
             guidance_failure = host_guidance_demo.last_failure;
@@ -1539,20 +1539,20 @@ static void trace_state(const SupervisorDiagnostics *s)
             fprintf(stderr, "[FAULT] last_guidance_failure=%s; "
                     "vft_connected=%u, enabled=%u, latched=%u, reason=%s, "
                     "last_seq=%u, last_input_age_ms=%s",
-                    gp_host_guidance_failure_name(guidance_failure),
+                    host_guidance_failure_name(guidance_failure),
                     (unsigned)input.connected, (unsigned)input.enabled,
                     (unsigned)input.fault_latched,
-                    gp_vft_fault_name(input.fault_reason),
+                    virtual_ft_fault_name(input.fault_reason),
                     (unsigned)input.sequence,
                     input.connected ? "" : "never_received");
             if (input.connected)
                 fprintf(stderr, "%.1f", (double)input_age_us / 1000.0);
             fprintf(stderr, " (watchdog=%.1f ms)\n",
                     (double)virtual_ft_receiver.limits.timeout_us / 1000.0);
-            if (guidance_failure == GP_GUIDANCE_FAIL_MAPPER_SINGULARITY ||
-                guidance_failure == GP_GUIDANCE_FAIL_MAPPER_TRACKING ||
-                guidance_failure == GP_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT ||
-                guidance_failure == GP_GUIDANCE_FAIL_MAPPER_OTHER) {
+            if (guidance_failure == HOST_GUIDANCE_FAIL_MAPPER_SINGULARITY ||
+                guidance_failure == HOST_GUIDANCE_FAIL_MAPPER_TRACKING ||
+                guidance_failure == HOST_GUIDANCE_FAIL_MAPPER_JOINT_LIMIT ||
+                guidance_failure == HOST_GUIDANCE_FAIL_MAPPER_OTHER) {
                 fprintf(stderr, "[FAULT] mapper_diagnostic_sigma_min=%.9g; "
                                 "maximum_joint_tracking_error=%.6f rad\n",
                         host_guidance_demo.diagnostic_sigma_min,
@@ -1560,8 +1560,8 @@ static void trace_state(const SupervisorDiagnostics *s)
             }
             if (((code >> 16U) & 0xffU) == ROBOT_STATE_TEACHING &&
                 (code & 0xffffU) == 0xE062U) {
-                GpGuidanceGateAudit audit;
-                if (gp_host_guidance_gate_audit_snapshot(
+                HostGuidanceGateAudit audit;
+                if (host_guidance_gate_audit_snapshot(
                         &host_guidance_demo, &audit)) {
                     /* This probe uses a FRESH COPIED gate state and
                      * cannot command a motor or touch the live Supervisor. */
@@ -1632,7 +1632,7 @@ static void trace_state(const SupervisorDiagnostics *s)
     }
     previous_diagnostic_state = s->machine.activeState;
     if (host_guidance_enabled)
-        gp_host_guidance_flush(&host_guidance_demo, host_guidance_trace_path);
+        host_guidance_flush(&host_guidance_demo, host_guidance_trace_path);
 
     static bool started, file_failed;
     static FILE *csv;
@@ -1951,54 +1951,54 @@ static bool start_system(void)
     /* One-slot FreeRTOS mailbox: GUI overwrites stale Cartesian requests. */
     guidance_pose_queue = xQueueCreate(1U, sizeof(SimGuidancePose));
     if (guidance_pose_queue == NULL) return false;
-    const char *selected=getenv("GP_STORAGE_BACKEND");
+    const char *selected=getenv("SIM_STORAGE_BACKEND");
     host_flash_mode=selected != NULL && strcmp(selected,"flash")==0;
     if (host_flash_mode && !host_flash_initialize()) return false;
     /* Strict host opt-in only. Never wired into production STM32 firmware. */
-    const char *guidance_opt = getenv("GP_GUIDANCE_DRY_RUN");
+    const char *guidance_opt = getenv("HAND_GUIDING_DRY_RUN");
     host_guidance_enabled = guidance_opt && strcmp(guidance_opt, "1") == 0;
-    const char *dispatch_opt = getenv("GP_GUIDANCE_SIM_MOTION");
+    const char *dispatch_opt = getenv("HAND_GUIDING_SIM_MOTION");
     const bool sim_guidance_dispatch =
         dispatch_opt && strcmp(dispatch_opt, "1") == 0;
-    const char *virtual_opt = getenv("GP_GUIDANCE_VIRTUAL_FT");
+    const char *virtual_opt = getenv("HAND_GUIDING_VIRTUAL_FT");
     virtual_ft_mode = virtual_opt && strcmp(virtual_opt, "1") == 0;
     if (virtual_ft_mode && (!host_guidance_enabled ||
                             !sim_guidance_dispatch)) {
-        fprintf(stderr, "[VFT] requires GP_GUIDANCE_DRY_RUN=1 and "
-                        "GP_GUIDANCE_SIM_MOTION=1\\n");
+        fprintf(stderr, "[VFT] requires HAND_GUIDING_DRY_RUN=1 and "
+                        "HAND_GUIDING_SIM_MOTION=1\\n");
         return false;
     }
     if (sim_guidance_dispatch && !host_guidance_enabled) {
-        fprintf(stderr, "[4E3] GP_GUIDANCE_SIM_MOTION requires "
-                        "GP_GUIDANCE_DRY_RUN=1\\n");
+        fprintf(stderr, "[4E3] HAND_GUIDING_SIM_MOTION requires "
+                        "HAND_GUIDING_DRY_RUN=1\\n");
         return false;
     }
     /* Interactive home is nonsingular in the unmodified simulation model.
      * Teaching FK, guidance and MATLAB all see the actual J5 angle. */
     configure_robot();configure_state_dependencies();
-    host_guidance_trace_path = getenv("GP_GUIDANCE_TRACE_FILE");
+    host_guidance_trace_path = getenv("HAND_GUIDING_TRACE_FILE");
     if (host_guidance_enabled && (!host_guidance_trace_path ||
                                   !*host_guidance_trace_path))
         host_guidance_trace_path = "guidance_dry_run.csv";
     if (host_guidance_enabled) {
-        const char *fault = getenv("GP_GUIDANCE_INJECT");
-        GpGuidanceFaultKind kind = GP_GUIDANCE_INJECT_NONE;
+        const char *fault = getenv("HAND_GUIDING_INJECT");
+        HostGuidanceFaultKind kind = HOST_GUIDANCE_INJECT_NONE;
         if (fault && strcmp(fault, "stale_ft") == 0)
-            kind = GP_GUIDANCE_INJECT_STALE_FT;
+            kind = HOST_GUIDANCE_INJECT_STALE_FT;
         else if (fault && strcmp(fault, "bad_feedback") == 0)
-            kind = GP_GUIDANCE_INJECT_BAD_FEEDBACK;
+            kind = HOST_GUIDANCE_INJECT_BAD_FEEDBACK;
         else if (fault && *fault && strcmp(fault, "none") != 0) {
-            fprintf(stderr, "[4E2B] Invalid GP_GUIDANCE_INJECT value\n");
+            fprintf(stderr, "[4E2B] Invalid HAND_GUIDING_INJECT value\n");
             return false;
         }
-        if (!gp_host_guidance_init(&host_guidance_demo, &robot, kind, 20U))
+        if (!host_guidance_init(&host_guidance_demo, &robot, kind, 20U))
             return false;
         if (virtual_ft_mode) {
-            const GpVirtualFtLimits limits = {5.0, 1.0,
-                                            GP_VFT_DEFAULT_TIMEOUT_US};
-            if (!gp_virtual_ft_receiver_init(&virtual_ft_receiver, &limits))
+            const VirtualFtLimits limits = {5.0, 1.0,
+                                            VIRTUAL_FT_DEFAULT_TIMEOUT_US};
+            if (!virtual_ft_receiver_init(&virtual_ft_receiver, &limits))
                 return false;
-            gp_host_guidance_use_virtual_ft(&host_guidance_demo,
+            host_guidance_use_virtual_ft(&host_guidance_demo,
                                            &virtual_ft_receiver);
         }
         fprintf(stderr, "[4E2B] guidance candidate producer enabled; "
@@ -2016,17 +2016,17 @@ static bool start_system(void)
             .capacity_samples=SIM_PV_STORAGE_CAPACITY,
             .context=&host_flash_storage
         };
-        gp_validation_shared_initialize(&flash_validation_shared);
-        gp_validation_m7_init(&flash_validation_client,
+        validation_shared_initialize(&flash_validation_shared);
+        validation_m7_init(&flash_validation_client,
                               &flash_validation_shared);
-        if (!gp_validation_m4_init(&flash_validation_worker,
+        if (!validation_m4_init(&flash_validation_worker,
                                    &flash_validation_shared,
                                    &m4_flash_backend)) {
             fprintf(stderr, "[STARTUP] M4 flash storage bridge init failed\n");
             return false;
         }
         path_validation_storage =
-            gp_validation_m7_storage(&flash_validation_client,
+            validation_m7_storage(&flash_validation_client,
                                      SIM_PV_STORAGE_CAPACITY);
         approach_services.storage_context=&host_flash_storage;
     }
@@ -2058,7 +2058,7 @@ static bool start_system(void)
     c.validation_sample_budget=4;c.first_program_id=1;
     c.period_ticks=pdMS_TO_TICKS(host_guidance_enabled ? 2 : 1);
     if (host_guidance_enabled)
-        c.guidance_dry_run = gp_host_guidance_port(&host_guidance_demo);
+        c.guidance_dry_run = host_guidance_port(&host_guidance_demo);
     if (sim_guidance_dispatch) {
         /* Host-only synthetic validation limits; NOT motion approval for
          * the actual custom robot. Used solely with SIL Kit virtual motors. */
@@ -2131,7 +2131,7 @@ int main(void)
     struct sockaddr_in addr={0};addr.sin_family=AF_INET;addr.sin_port=htons(HMI_CONTROLLER_PORT);addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
     if(udp<0 || bind(udp,(struct sockaddr*)&addr,sizeof(addr))<0){perror("GUI command port 5010");return 1;}
     (void)configure_matlab_status_destination();
-    if (!gp_timing_init(getenv("GP_TIMING_CSV"))) {
+    if (!timing_init(getenv("HOST_TIMING_CSV"))) {
         fprintf(stderr, "[TIMING] CSV initialization failed\n");
         return 1;
     }

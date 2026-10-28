@@ -30,18 +30,18 @@ _Static_assert(SRAM4_VALIDATION_BASE == UINT32_C(0x38005000) &&
 _Static_assert((sizeof(IpcShared) + sizeof(TrajectoryShared)) <= SRAM4_SHARED_BYTES,
                "Objects exceed shared MPU window");
 
-#define GP_PROBE __attribute__((used))
+#define LAYOUT_PROBE_USED __attribute__((used))
 /* The following are BSS probe objects, not actual firmware allocations. */
-GP_PROBE IpcShared gp_stage2_shared_ipc;
-GP_PROBE TrajectoryShared gp_stage2_shared_trajectory;
-GP_PROBE IpcMessage gp_stage2_ipc_message;
-GP_PROBE TrajectorySample gp_stage2_trajectory_sample;
-GP_PROBE TrajectoryProducer gp_stage2_private_m4_producer;
-GP_PROBE TrajectoryConsumer gp_stage2_private_m7_consumer;
+LAYOUT_PROBE_USED IpcShared layout_probe_shared_ipc;
+LAYOUT_PROBE_USED TrajectoryShared layout_probe_shared_trajectory;
+LAYOUT_PROBE_USED IpcMessage layout_probe_ipc_message;
+LAYOUT_PROBE_USED TrajectorySample layout_probe_trajectory_sample;
+LAYOUT_PROBE_USED TrajectoryProducer layout_probe_private_m4_producer;
+LAYOUT_PROBE_USED TrajectoryConsumer layout_probe_private_m7_consumer;
 /* Array sizes encode constants for readelf's per-symbol Size field. */
-GP_PROBE uint8_t gp_stage2_ipc_align[_Alignof(IpcShared)];
-GP_PROBE uint8_t gp_stage2_trajectory_align[_Alignof(TrajectoryShared)];
-GP_PROBE uint8_t gp_stage2_ipc_m4_storage_offset[offsetof(IpcShared, m4_to_m7_storage) + 1U];
-GP_PROBE uint8_t gp_stage2_ipc_m7_storage_offset[offsetof(IpcShared, m7_to_m4_storage) + 1U];
-GP_PROBE uint8_t gp_stage2_trajectory_samples_offset[offsetof(TrajectoryShared, samples) + 1U];
-GP_PROBE uint8_t gp_stage2_ipc_length_prefix[sizeof(size_t)];
+LAYOUT_PROBE_USED uint8_t layout_probe_ipc_align[_Alignof(IpcShared)];
+LAYOUT_PROBE_USED uint8_t layout_probe_trajectory_align[_Alignof(TrajectoryShared)];
+LAYOUT_PROBE_USED uint8_t layout_probe_ipc_m4_storage_offset[offsetof(IpcShared, m4_to_m7_storage) + 1U];
+LAYOUT_PROBE_USED uint8_t layout_probe_ipc_m7_storage_offset[offsetof(IpcShared, m7_to_m4_storage) + 1U];
+LAYOUT_PROBE_USED uint8_t layout_probe_trajectory_samples_offset[offsetof(TrajectoryShared, samples) + 1U];
+LAYOUT_PROBE_USED uint8_t layout_probe_ipc_length_prefix[sizeof(size_t)];

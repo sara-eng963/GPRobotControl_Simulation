@@ -41,7 +41,7 @@ bash scripts/run_full_can_silkit_simulation.sh
 python3 scripts/analyze_timing_csv.py build-can-silkit/logs/timing-metrics.csv
 ```
 
-The launcher sets GP_TIMING_CSV automatically, and overwrites the previous
+The launcher sets HOST_TIMING_CSV automatically, and overwrites the previous
 \`timing-metrics.csv\` for each complete simulation run. To preserve multiple
 runs, use the benchmark runner's separate scenario files or copy the CSV.
 

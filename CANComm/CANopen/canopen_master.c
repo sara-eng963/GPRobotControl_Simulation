@@ -1,8 +1,8 @@
 #include "canopen_master.h"
-#if defined(GP_HOST_TIMING)
+#if defined(HOST_TIMING_TRACE_ENABLED)
 #include "../../Simulation/Timing/host_timing_trace.h"
-#define TRACE_CAN_BEGIN() gp_timing_begin(GP_TIMING_CAN_TARGET)
-#define TRACE_CAN_END(ok) gp_timing_end(GP_TIMING_CAN_TARGET, ok)
+#define TRACE_CAN_BEGIN() timing_begin(TIMING_CAN_TARGET)
+#define TRACE_CAN_END(ok) timing_end(TIMING_CAN_TARGET, ok)
 #else
 #define TRACE_CAN_BEGIN() ((void)0)
 #define TRACE_CAN_END(ok) ((void)0)

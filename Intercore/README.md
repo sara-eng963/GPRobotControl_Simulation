@@ -7,7 +7,7 @@ not pretend that the existing single-RTOS POSIX simulator is already dual-core.
 - M4-to-M7: only the M4 IPC service task writes; only M7 Supervisor reads.
 - M7-to-M4: only M7 Supervisor writes; only the M4 IPC service task reads.
 - Other M4 tasks send to their M4 IPC service through local FreeRTOS queues.
-- The Supervisor has an optional GpIpcShared pointer. NULL preserves
+- The Supervisor has an optional IpcShared pointer. NULL preserves
   the current SIL Kit/single-core runtime.
 - M7 consumes bounded HMI commands with monotonic sequence rejection and
   publishes a small status packet (state, motion permission, active fault,
@@ -68,7 +68,7 @@ not pretend that the existing single-RTOS POSIX simulator is already dual-core.
 See the [verified Stage 1 STM32H745 firmware record](../Firmware/STAGE1_DUAL_CORE_FOUNDATION.md) for the source-backed CubeMX settings and dual-image build evidence.
 
 ## STM32H745 integration gate
-- Allocate GpIpcShared in SRAM visible to both CPUs via BOTH linker scripts.
+- Allocate IpcShared in SRAM visible to both CPUs via BOTH linker scripts.
 - Configure Cortex-M7 MPU mapping as **non-cacheable**, and confirm physical
   alignment, memory barriers, ownership, and boot-time handshake (HSEM).
 - Verify ABI version, GPIO safety paths, reset/fault/recovery behavior and
@@ -99,28 +99,28 @@ Files:
 
 ### Ownership and lifecycle
 
-Only `GpTrajectoryShared` lives in shared SRAM (12,288 bytes of sample
-data, plus a small header). M4 owns the `GpTrajectoryProducer` descriptor,
+Only `TrajectoryShared` lives in shared SRAM (12,288 bytes of sample
+data, plus a small header). M4 owns the `TrajectoryProducer` descriptor,
 private 256-sample staging buffer (6,144 bytes), and flash read callback.
-M7 owns the `GpTrajectoryConsumer` descriptor and 500 Hz execution.
+M7 owns the `TrajectoryConsumer` descriptor and 500 Hz execution.
 
 1. M7 and M4 boot with a hardware handshake; initialize the shared region
    exactly once with both cores quiescent.
 2. M4 validates a committed trajectory's identity (program ID, revision,
-   artifact CRC, count, 2 ms period), then calls `gp_traj_m4_prepare`.
+   artifact CRC, count, 2 ms period), then calls `trajectory_m4_prepare`.
    **Identity equality is not a replacement for verifying flash contents
    against the committed artifact CRC.** That belongs to the M4 storage layer.
-3. M4 calls `gp_traj_m4_step` as the sole producer. Each call reads at most
+3. M4 calls `trajectory_m4_step` as the sole producer. Each call reads at most
    256 samples from storage into private staging; it publishes complete
    six-joint samples to non-cacheable shared SRAM.
 4. M7 starts only after `min(sample_count,512)` samples are published, with
-   `gp_traj_m7_begin`, then consumes one indexed sample every 2 ms.
+   `trajectory_m7_begin`, then consumes one indexed sample every 2 ms.
    M7 never calls a flash read or waits on a mutex/HSEM.
 5. STARVED or STORAGE_ERROR is an immediate failure, not a valid position.
    The path-execution state must disable wire feed and issue its existing
    controlled-stop/fault response. This is not certified machine safety.
-6. Once motion has ceased reading, M7 calls `gp_traj_m7_finish` (or
-   `gp_traj_m7_discard` before starting). M4 acknowledges the epoch only
+6. Once motion has ceased reading, M7 calls `trajectory_m7_finish` (or
+   `trajectory_m7_discard` before starting). M4 acknowledges the epoch only
    after any in-flight read returned. M4 cannot reset/reuse the buffer
    before that acknowledgement.
 7. Replaying the same validated path still requires a new epoch and M4
@@ -178,11 +178,11 @@ then may Supervisor receive VALID. Flash failure causes abort/reject, never
 
 Cancellation sets a nonblocking request; M4 owns backend.abort and does not
 acknowledge while an erase/program/read callback is in flight. The next
-validation is gated by `gp_validation_m4_idle()`, which requires queue drain,
+validation is gated by `validation_m4_idle()`, which requires queue drain,
 released/aborted flash transaction, and acknowledged cancellation.
 
 **Compatibility:** Legacy RAM storage and existing single-core prefetch
-are preserved. Host `GP_STORAGE_BACKEND=flash` now uses the new bridge;
+are preserved. Host `SIM_STORAGE_BACKEND=flash` now uses the new bridge;
 the SIL Kit hardware model still runs on one POSIX FreeRTOS scheduler.
 This is functional separation, **not** a deployed pair of STM32 firmware
 images and not a proven 1 ms worst-case timing result.
@@ -230,14 +230,14 @@ compile success, interrupt correctness, or 500 Hz execution guarantees**.
 
 1. Compile `Intercore/ipc_mailbox_freertos.c` **instead** of
    `Intercore/ipc_mailbox.c` into each STM32 target. Define
-   `GP_IPC_FREERTOS_BACKEND=1` for all application translation units using
-   `GpIpcShared`. Do not define it for POSIX host targets.
+   `IPC_FREERTOS_BACKEND=1` for all application translation units using
+   `IpcShared`. Do not define it for POSIX host targets.
 2. Pin and use identical FreeRTOS kernel revision/ABI, compiler C data layout,
    FreeRTOSConfig settings and `StaticMessageBuffer_t` layout on both cores.
    `configSUPPORT_STATIC_ALLOCATION=1` and `configUSE_STREAM_BUFFERS=1` are
    required. The existing **host** `FreeRTOSConfig.h` has static allocation
    disabled and must not simply be reused as the final target configuration.
-3. Allocate **one** `GpIpcShared` in D3 SRAM at 0x38000000 (64 KiB total
+3. Allocate **one** `IpcShared` in D3 SRAM at 0x38000000 (64 KiB total
    SRAM4), in an identically mapped `.shared_ram (NOLOAD)` section in both
    linker files. Other shared regions (trajectory samples and validation
    queue) need their own bounded allocation; check total SRAM4 usage and any
@@ -245,16 +245,16 @@ compile success, interrupt correctness, or 500 Hz execution guarantees**.
    and validate MPU rules before enabling D-cache. The global structure must
    be 32-byte aligned and never initialized independently by M4.
 4. M7, with M4 quiescent, initializes shared regions and calls
-   `gp_ipc_initialize` ONCE. After publication of the magic/ABI and a
+   `ipc_initialize` ONCE. After publication of the magic/ABI and a
    documented HSEM boot handshake, release M4. Both cores check
-   `gp_ipc_valid` before any send/receive. Reset of either core invalidates
+   `ipc_valid` before any send/receive. Reset of either core invalidates
    session ownership: stop control, quiesce both IPC users, and re-bootstrap;
    never silently resume an old buffer/trajectory epoch.
 5. Compile `ipc_stm32h745_hsem.c` in each core image, with exactly one
-   `GP_IPC_CORE_M7` or `GP_IPC_CORE_M4`. Call
-   `gp_ipc_stm32_hsem_setup(local_service_task)` per core after HAL clock/
+   `IPC_CORE_M7` or `IPC_CORE_M4`. Call
+   `ipc_stm32_hsem_setup(local_service_task)` per core after HAL clock/
    RTOS setup. In the board's single `HAL_HSEM_FreeCallback(uint32_t mask)`
-   call `gp_ipc_stm32_hsem_on_free(mask)`. Enable `HSEM1_IRQn` on M7 or
+   call `ipc_stm32_hsem_on_free(mask)`. Enable `HSEM1_IRQn` on M7 or
    `HSEM2_IRQn` on M4, with an ISR priority compatible with FreeRTOS
    `...FromISR` calls. Call `HAL_HSEM_IRQHandler()` from the IRQ handler.
    Reserve HSEM IDs 24..27 for IPC, keeping HSEM 0 available for ST's boot handshake (see enum); do not share them with other
@@ -370,7 +370,7 @@ capacity, non-overwrite backpressure, ordered delivery, duplicated sequences,
 successful-send/receive notification callbacks, and two producer / two consumer
 FreeRTOS tasks transmitting 2000 messages in each direction.
 
-Only the test compile defines `GP_IPC_POSIX_TEST=1` to allow 64-bit
+Only the test compile defines `IPC_POSIX_TEST=1` to allow 64-bit
 host-sized pointers and `size_t`; the original 32-bit ABI assertions remain
 mandatory for real STM32 images. A test-specific FreeRTOS configuration enables
 static allocation and supplies idle-task static memory, while inheriting the
@@ -386,7 +386,7 @@ behavior, HAL integration, or physical 500 Hz determinism.
 
 `bash Intercore/Tests/run_ipc_hsem_mock.sh` executes the actual
 `ipc_stm32h745_hsem.c` with small HAL/FreeRTOS test doubles and compiles
-**both** `GP_IPC_CORE_M7` and `GP_IPC_CORE_M4` configurations.
+**both** `IPC_CORE_M7` and `IPC_CORE_M4` configurations.
 CTest name: `intercore_ipc_hsem_mock_test`.
 
 The test checks HSEM clock/notification configuration, all four
@@ -402,7 +402,7 @@ cross-core timing, missed IRQ recovery, or hardware coherency.
 
 Run `bash Intercore/Tests/run_ipc_hsem_mock.sh` or the CTest case
 `intercore_ipc_hsem_mock_test`. The adapter is compiled separately with
-`GP_IPC_CORE_M7` and `GP_IPC_CORE_M4`, the **real installed FreeRTOS
+`IPC_CORE_M7` and `IPC_CORE_M4`, the **real installed FreeRTOS
 POSIX headers** and HAL-only test doubles. Tests cover the exact receiving
 core masks, 24..27 semaphore-ID mapping, one-shot rearm, failure counters,
 no release on a failed take, IRQ notification and yield, and NULL task.
@@ -418,7 +418,7 @@ header integration, NVIC priority, MPU and real inter-core wake-up remain.
 ### Official STM32CubeH7 HAL compilation (no hardware)
 
 `bash Intercore/Tests/test_ipc_stm32_hal_compile.sh` checks **both**
-`GP_IPC_CORE_M7` and `GP_IPC_CORE_M4` using the real ST HAL headers, the
+`IPC_CORE_M7` and `IPC_CORE_M4` using the real ST HAL headers, the
 actual `stm32h7xx_hal_hsem.c` implementation, CMSIS, and the installed
 FreeRTOS ARM ports. Set `STM32CUBEH7_ROOT` to a complete STM32CubeH7 SDK
 checkout if it is not available at `../STM32CubeH7`.
@@ -432,7 +432,7 @@ robot-control repository. Do not mix independently downloaded HAL and
 CMSIS versions.
 
 CMake/CTest can register the opt-in test when configured with
-`-DGP_STM32CUBEH7_ROOT=/absolute/path/to/STM32CubeH7`; its CTest name is
+`-DSTM32CUBEH7_ROOT=/absolute/path/to/STM32CubeH7`; its CTest name is
 `intercore_ipc_real_hal_compile_test`. The standalone script checks for
 missing SDK dependencies and exits nonzero, never reporting a false pass.
 

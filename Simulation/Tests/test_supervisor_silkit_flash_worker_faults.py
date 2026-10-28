@@ -32,8 +32,8 @@ processes = {}
 def start(name, command):
     env = os.environ.copy()
     if name == "supervisor":
-        env["GP_STORAGE_BACKEND"] = "flash"
-        env["GP_FLASH_TEST_MODE"] = TEST_MODE
+        env["SIM_STORAGE_BACKEND"] = "flash"
+        env["SIM_FLASH_TEST_MODE"] = TEST_MODE
     processes[name] = subprocess.Popen(
         command,
         env=env,

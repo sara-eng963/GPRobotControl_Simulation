@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(gp_ipc_freertos_posix_test C)
+project(ipc_freertos_posix_test C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -31,8 +31,8 @@ add_executable(ipc_freertos_runtime_test
     "${CMAKE_CURRENT_LIST_DIR}/../test_ipc_freertos_runtime.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../ipc_mailbox_freertos.c")
 target_compile_definitions(ipc_freertos_runtime_test PRIVATE
-    GP_IPC_FREERTOS_BACKEND=1
-    GP_IPC_POSIX_TEST=1)
+    IPC_FREERTOS_BACKEND=1
+    IPC_POSIX_TEST=1)
 target_include_directories(ipc_freertos_runtime_test PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../..")
 target_link_libraries(ipc_freertos_runtime_test PRIVATE

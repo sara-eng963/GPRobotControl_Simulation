@@ -11,12 +11,12 @@ int main(void)
 {
     const char *path = "host_timing_trace_test.csv";
     remove(path);
-    if (!gp_timing_init(path)) return 1;
+    if (!timing_init(path)) return 1;
     for (unsigned i = 0; i < 64U; ++i) {
-        gp_timing_begin(GP_TIMING_SUPERVISOR);
-        gp_timing_end(GP_TIMING_SUPERVISOR, true);
-        gp_timing_begin(GP_TIMING_CAN_TARGET);
-        gp_timing_end(GP_TIMING_CAN_TARGET, (i % 7U) != 0U);
+        timing_begin(TIMING_SUPERVISOR);
+        timing_end(TIMING_SUPERVISOR, true);
+        timing_begin(TIMING_CAN_TARGET);
+        timing_end(TIMING_CAN_TARGET, (i % 7U) != 0U);
     }
     struct timespec ts = {.tv_sec = 0, .tv_nsec = 150000000L};
     nanosleep(&ts, NULL); /* Let the writer drain before inspecting. */

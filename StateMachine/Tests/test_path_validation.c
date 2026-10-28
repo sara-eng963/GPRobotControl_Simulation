@@ -420,18 +420,18 @@ int main(void)
     const uint32_t baseline_data_crc = artifact.sample_data_crc;
     const uint32_t baseline_artifact_crc = artifact.artifact_crc;
     const uint32_t baseline_count = artifact.sample_count;
-    static GpValidationShared async_shared;
-    GpValidationM7Client client;
-    GpValidationM4Worker flash_worker;
-    gp_validation_shared_initialize(&async_shared);
-    gp_validation_m7_init(&client, &async_shared);
-    if (!gp_validation_m4_init(&flash_worker, &async_shared, &storage))
+    static ValidationShared async_shared;
+    ValidationM7Client client;
+    ValidationM4Worker flash_worker;
+    validation_shared_initialize(&async_shared);
+    validation_m7_init(&client, &async_shared);
+    if (!validation_m4_init(&flash_worker, &async_shared, &storage))
     {
         puts("Could not create the M4 flash-owner worker.");
         return 1;
     }
     PathValidationStorage async_storage =
-        gp_validation_m7_storage(&client, TEST_STORAGE_CAPACITY);
+        validation_m7_storage(&client, TEST_STORAGE_CAPACITY);
     state_path_validation_enter(
         &state, &robot, scales, &config, &services, &workspace,
         &async_storage, &artifact, &program,
@@ -457,7 +457,7 @@ int main(void)
             return 1;
         }
         if ((iteration % 2U) == 0U)
-            (void)gp_validation_m4_step(&flash_worker);
+            (void)validation_m4_step(&flash_worker);
     }
     if (step != STATE_STEP_COMPLETE || outputs.report.result != PV_RESULT_VALID ||
         !test_storage.committed || !saw_backpressure || !saw_commit_wait ||
@@ -472,8 +472,8 @@ int main(void)
                (int)saw_backpressure, (int)saw_commit_wait);
         return 1;
     }
-    if (!gp_validation_m4_step(&flash_worker) ||
-        !gp_validation_m4_idle(&async_shared))
+    if (!validation_m4_step(&flash_worker) ||
+        !validation_m4_idle(&async_shared))
     {
         puts("M4 release after durable commit failed.");
         return 1;

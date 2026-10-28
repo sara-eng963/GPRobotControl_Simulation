@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(GPRobotControl_Simulation C)
+project(RobotControlSimulation C)
 
 option(ENABLE_SILKIT "Build SIL Kit CAN simulation support" OFF)
 
@@ -41,58 +41,58 @@ set_tests_properties(ipc_mailbox_test PROPERTIES TIMEOUT 15)
 
 # Reusable STM32H745 target-only compile smoke test; independent of the POSIX
 # kernel build. No HAL/board firmware or target hardware is required here.
-find_program(GP_ARM_NONE_EABI_GCC arm-none-eabi-gcc)
-find_program(GP_BASH_EXECUTABLE bash)
+find_program(ARM_NONE_EABI_GCC arm-none-eabi-gcc)
+find_program(BASH_EXECUTABLE bash)
 
 # Real FreeRTOS message-buffer transport, isolated from the host SIL Kit
 # kernel configuration. The script builds a separate GCC_POSIX kernel.
-if(GP_BASH_EXECUTABLE)
+if(BASH_EXECUTABLE)
     # Native test of the target service with scheduler/provider mocks only.
     add_test(NAME stm32_cm4_validation_service_policy
-        COMMAND "${GP_BASH_EXECUTABLE}"
+        COMMAND "${BASH_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/check_cm4_validation_service.sh")
     set_tests_properties(stm32_cm4_validation_service_policy PROPERTIES TIMEOUT 30)
     add_test(NAME intercore_ipc_freertos_runtime_test
-        COMMAND "${GP_BASH_EXECUTABLE}"
+        COMMAND "${BASH_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Intercore/Tests/run_ipc_freertos_runtime.sh")
     set_tests_properties(intercore_ipc_freertos_runtime_test PROPERTIES
         TIMEOUT 90)
 endif()
-if(GP_ARM_NONE_EABI_GCC AND GP_BASH_EXECUTABLE)
+if(ARM_NONE_EABI_GCC AND BASH_EXECUTABLE)
     add_test(NAME intercore_ipc_arm_compile_test
-        COMMAND "${GP_BASH_EXECUTABLE}"
+        COMMAND "${BASH_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Intercore/Tests/test_ipc_freertos_compile.sh")
     set_tests_properties(intercore_ipc_arm_compile_test PROPERTIES
         TIMEOUT 60
-        ENVIRONMENT "ARM_NONE_EABI_GCC=${GP_ARM_NONE_EABI_GCC}")
+        ENVIRONMENT "ARM_NONE_EABI_GCC=${ARM_NONE_EABI_GCC}")
 else()
     message(STATUS "IPC ARM compile test not registered (bash or arm-none-eabi-gcc unavailable)")
 endif()
 
 # HSEM adapter HAL/RTOS contract test. Uses isolated mocks, not physical IRQs.
-if(GP_BASH_EXECUTABLE)
+if(BASH_EXECUTABLE)
     add_test(NAME intercore_ipc_hsem_mock_test
-        COMMAND "${GP_BASH_EXECUTABLE}"
+        COMMAND "${BASH_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Intercore/Tests/run_ipc_hsem_mock.sh")
     set_tests_properties(intercore_ipc_hsem_mock_test PROPERTIES TIMEOUT 20)
 endif()
 
 # Real STM32CubeH7 header/driver cross-compilation. Opt-in because
 # ST's separate SDK package is not vendored in this repository.
-set(GP_STM32CUBEH7_ROOT "" CACHE PATH "Installed official STM32CubeH7 root")
-if(GP_ARM_NONE_EABI_GCC AND GP_BASH_EXECUTABLE AND GP_STM32CUBEH7_ROOT
-   AND EXISTS "${GP_STM32CUBEH7_ROOT}/Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_hsem.h")
+set(STM32CUBEH7_ROOT "" CACHE PATH "Installed official STM32CubeH7 root")
+if(ARM_NONE_EABI_GCC AND BASH_EXECUTABLE AND STM32CUBEH7_ROOT
+   AND EXISTS "${STM32CUBEH7_ROOT}/Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_hsem.h")
     add_test(NAME intercore_ipc_real_hal_compile_test
-        COMMAND "${GP_BASH_EXECUTABLE}"
+        COMMAND "${BASH_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Intercore/Tests/test_ipc_stm32_hal_compile.sh")
     set_tests_properties(intercore_ipc_real_hal_compile_test PROPERTIES
         TIMEOUT 90
         ENVIRONMENT
-            "STM32CUBEH7_ROOT=${GP_STM32CUBEH7_ROOT};ARM_NONE_EABI_GCC=${GP_ARM_NONE_EABI_GCC}")
+            "STM32CUBEH7_ROOT=${STM32CUBEH7_ROOT};ARM_NONE_EABI_GCC=${ARM_NONE_EABI_GCC}")
 endif()
 
 # M4 owns the flash producer/staging; M7 owns the 500 Hz consumer.
-# Only GpTrajectoryShared crosses the inter-core SRAM boundary.
+# Only TrajectoryShared crosses the inter-core SRAM boundary.
 add_library(intercore_trajectory_stream STATIC Intercore/trajectory_stream.c)
 target_compile_features(intercore_trajectory_stream PUBLIC c_std_11)
 target_include_directories(intercore_trajectory_stream PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Intercore)
@@ -224,7 +224,7 @@ target_compile_definitions(freertos_config INTERFACE projCOVERAGE_TEST=0)
 # Host simulation needs space for the dedicated non-real-time flash writer.
 # This definition is NOT enabled in the STM32 firmware/toolchain.
 if(ENABLE_SILKIT)
-    target_compile_definitions(freertos_config INTERFACE GP_POSIX_ASYNC_VALIDATION_HEAP=1)
+    target_compile_definitions(freertos_config INTERFACE POSIX_ASYNC_VALIDATION_HEAP=1)
 endif()
 set(FREERTOS_PORT GCC_POSIX CACHE STRING "")
 set(FREERTOS_HEAP "4" CACHE STRING "")

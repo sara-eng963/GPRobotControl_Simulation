@@ -157,7 +157,7 @@ class Rig:
         self.logs = {k: tempfile.TemporaryFile(mode="w+") for k in
                      ("registry", "motors", "supervisor")}
         self.processes = {}
-        self.tmp = tempfile.TemporaryDirectory(prefix="gp-stage3b-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="virtual-ft-regression-")
         self.trace = pathlib.Path(self.tmp.name) / "guidance.csv"
         self.status = None
         self.hmi = None
@@ -221,8 +221,8 @@ class Rig:
         time.sleep(1.)
         self.check_alive()
         env = os.environ.copy()
-        env.update(GP_GUIDANCE_DRY_RUN="1", GP_GUIDANCE_SIM_MOTION="1",
-                   GP_GUIDANCE_VIRTUAL_FT="1", GP_GUIDANCE_TRACE_FILE=str(self.trace),
+        env.update(HAND_GUIDING_DRY_RUN="1", HAND_GUIDING_SIM_MOTION="1",
+                   HAND_GUIDING_VIRTUAL_FT="1", HAND_GUIDING_TRACE_FILE=str(self.trace),
                    SILKIT_REGISTRY_URI="silkit://localhost:8500")
         self.launch("supervisor", [supervisor], env)
         self.status = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

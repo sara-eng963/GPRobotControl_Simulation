@@ -14,17 +14,17 @@ _Static_assert(sizeof(IpcShared) <= SRAM4_IPC_BYTES,
 _Static_assert(sizeof(TrajectoryShared) <= SRAM4_TRAJECTORY_BYTES,
                "Trajectory object exceeds linker trajectory reservation");
 
-#define GP_LINKER_PROBE __attribute__((used, aligned(32)))
+#define LINKER_PROBE_USED __attribute__((used, aligned(32)))
 
-IpcShared gp_stage2_linker_ipc
-    GP_LINKER_PROBE __attribute__((section(".shared_ipc")));
+IpcShared linker_probe_ipc
+    LINKER_PROBE_USED __attribute__((section(".shared_ipc")));
 
-TrajectoryShared gp_stage2_linker_trajectory
-    GP_LINKER_PROBE __attribute__((section(".shared_trajectory")));
+TrajectoryShared linker_probe_trajectory
+    LINKER_PROBE_USED __attribute__((section(".shared_trajectory")));
 
 /* Synthetic validation allocation, never linked into production. */
-uint8_t gp_stage3_linker_validation[SRAM4_VALIDATION_BYTES]
-    GP_LINKER_PROBE __attribute__((section(".shared_validation")));
+uint8_t linker_probe_validation[SRAM4_VALIDATION_BYTES]
+    LINKER_PROBE_USED __attribute__((section(".shared_validation")));
 
 /* Real app uses CubeMX startup; this standalone probe uses an inert entry. */
 void Reset_Handler(void) { for (;;) { __asm volatile("nop"); } }

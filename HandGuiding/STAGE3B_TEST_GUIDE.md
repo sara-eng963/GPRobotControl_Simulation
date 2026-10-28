@@ -38,12 +38,12 @@ Those are the current HOST TEST FIXTURE thresholds as verified in
 cd ~/freertos-pc-test
 python3 Simulation/Tests/test_supervisor_silkit_virtual_ft_3b.py --selftest
 export SILKIT_ROOT="$HOME/silkit_test/SilKit-5.0.7-ubuntu-24.04-x86_64-gcc/SilKit"
-cmake -S . -B /tmp/gp-stage3b -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
-cmake --build /tmp/gp-stage3b --target supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
-ctest --test-dir /tmp/gp-stage3b -N -R '^supervisor_silkit_virtual_ft_3b_'
+cmake -S . -B /tmp/virtual-ft-regression -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
+cmake --build /tmp/virtual-ft-regression --target supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
+ctest --test-dir /tmp/virtual-ft-regression -N -R '^supervisor_silkit_virtual_ft_3b_'
 set -o pipefail
-ctest --test-dir /tmp/gp-stage3b -R '^supervisor_silkit_virtual_ft_3b_' -j1 --output-on-failure 2>&1 | tee /tmp/gp-stage3b-results.log
-ctest --test-dir /tmp/gp-stage3b -R '^(supervisor_silkit_virtual_ft_input|supervisor_silkit_guidance_sim_motor_.*|canopen_master_test|canopen_bounded_rx_test)$' -j1 --output-on-failure
+ctest --test-dir /tmp/virtual-ft-regression -R '^supervisor_silkit_virtual_ft_3b_' -j1 --output-on-failure 2>&1 | tee /tmp/virtual-ft-regression-results.log
+ctest --test-dir /tmp/virtual-ft-regression -R '^(supervisor_silkit_virtual_ft_input|supervisor_silkit_guidance_sim_motor_.*|canopen_master_test|canopen_bounded_rx_test)$' -j1 --output-on-failure
 ```
 
 Each SIL Kit case launches its own registry, six-node bank and Supervisor.

@@ -57,9 +57,9 @@ if(ENABLE_SILKIT)
         PRIVATE
         -Wall
         -Wextra
-        -DGP_HOST_TIMING=1
-        -DGP_ENABLE_LEGACY_SILKIT_GUIDANCE=1
-        -DGP_HOST_GUIDANCE_MOTION_TEST=1
+        -DHOST_TIMING_TRACE_ENABLED=1
+        -DHAND_GUIDING_ENABLE_LEGACY_SILKIT=1
+        -DHOST_HAND_GUIDING_MOTION_TEST=1
         -Werror=implicit-function-declaration
         -Werror=incompatible-pointer-types
     )
@@ -253,7 +253,7 @@ if(ENABLE_SILKIT)
         endforeach()
 
         # Stage 4E3: host-only simulated motor dispatch. The physical
-        # STM32 target never compiles GP_HOST_GUIDANCE_MOTION_TEST.
+        # STM32 target never compiles HOST_HAND_GUIDING_MOTION_TEST.
         foreach(fault IN ITEMS none stale_ft bad_feedback)
             add_test(
                 NAME supervisor_silkit_guidance_sim_motor_${fault}
@@ -270,7 +270,7 @@ if(ENABLE_SILKIT)
         endforeach()
 
         # F1: real virtual motor motion observed for several seconds.
-        # Run with GP_4F1_OUTPUT_DIR to preserve measurements and plots.
+        # Run with HAND_GUIDING_EXPERIMENT_OUTPUT_DIR to preserve measurements and plots.
         add_test(
             NAME supervisor_silkit_guidance_4f1_sustained
             COMMAND ${Python3_EXECUTABLE}

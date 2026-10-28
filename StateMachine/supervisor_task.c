@@ -6,10 +6,10 @@
 #include <string.h>
 #include <limits.h>
 
-#if defined(GP_HOST_TIMING)
+#if defined(HOST_TIMING_TRACE_ENABLED)
 #include "../Simulation/Timing/host_timing_trace.h"
-#define TRACE_BEGIN(source) gp_timing_begin(source)
-#define TRACE_END(source, success) gp_timing_end(source, success)
+#define TRACE_BEGIN(source) timing_begin(source)
+#define TRACE_END(source, success) timing_end(source, success)
 #else
 #define TRACE_BEGIN(source) ((void)0)
 #define TRACE_END(source, success) ((void)0)
@@ -184,12 +184,12 @@ static void validation_worker_entry(void *argument)
             }
 
             PathValidationOutputs snapshot = {0};
-            TRACE_BEGIN(GP_TIMING_VALIDATION);
+            TRACE_BEGIN(TIMING_VALIDATION);
             StateStepResult result = state_path_validation_step(
                 &context->validation,
                 context->config.validation_sample_budget,
                 &snapshot);
-            TRACE_END(GP_TIMING_VALIDATION, result != STATE_STEP_FAILED);
+            TRACE_END(TIMING_VALIDATION, result != STATE_STEP_FAILED);
             taskENTER_CRITICAL();
             context->validation_outputs = snapshot;
             if (result != STATE_STEP_RUNNING)
@@ -578,14 +578,14 @@ static void publish_drive_snapshot(SupervisorTaskContext *context)
 static void consume_m4_ipc(SupervisorTaskContext *context)
 {
     if (context->config.ipc == NULL) return;
-    GpIpcMessage msg;
+    IpcMessage msg;
     for (uint32_t count = 0U; count < 8U; ++count) {
         /* The teaching state has ONE pending event slot. Do not consume
          * another M4 command until the previous teaching event is handled
          * by run_active_state() in the current/next Supervisor cycle. */
         if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
-        if (!gp_ipc_m7_receive(context->config.ipc, &msg)) break;
-        if (msg.type != GP_IPC_HMI_COMMAND || msg.sequence == 0U ||
+        if (!ipc_m7_receive(context->config.ipc, &msg)) break;
+        if (msg.type != IPC_HMI_COMMAND || msg.sequence == 0U ||
             (int32_t)(msg.sequence - context->last_m4_ipc_sequence) <= 0 ||
             msg.data[0] >= (uint32_t)SUP_HMI_COMMAND_COUNT) continue;
         context->last_m4_ipc_sequence = msg.sequence;
@@ -600,8 +600,8 @@ static void publish_m7_ipc_status(SupervisorTaskContext *context)
     const uint32_t now = supervisor_now_ms();
     if (context->m7_ipc_status_sent &&
         (uint32_t)(now - context->last_m7_ipc_status_ms) < 10U) return;
-    GpIpcMessage msg = {0};
-    msg.type = GP_IPC_CONTROLLER_STATUS;
+    IpcMessage msg = {0};
+    msg.type = IPC_CONTROLLER_STATUS;
     msg.sequence = ++context->m7_status_ipc_sequence;
     msg.timestamp_ms = now;
     msg.data[0] = (uint32_t)context->machine.activeState;
@@ -611,7 +611,7 @@ static void publish_m7_ipc_status(SupervisorTaskContext *context)
     msg.data[4] = (uint32_t)context->machine.safety.estopActive;
     msg.data[5] = context->last_m4_ipc_sequence; /* receipt, not acceptance */
     msg.data[6] = context->machine.rejectedEventCount;
-    (void)gp_ipc_m7_send(context->config.ipc, &msg);
+    (void)ipc_m7_send(context->config.ipc, &msg);
     context->last_m7_ipc_status_ms = now;
     context->m7_ipc_status_sent = true;
 }
@@ -632,7 +632,7 @@ static void handle_message(
              * with explicit host-only build opt-in. Never compiled into the
              * normal firmware path: raw queued targets bypass 4E1 checks.
              * Stage 4E2A does NOT send motor position references. */
-#if defined(GP_ENABLE_LEGACY_SILKIT_GUIDANCE) && defined(GP_HOST_TIMING)
+#if defined(HAND_GUIDING_ENABLE_LEGACY_SILKIT) && defined(HOST_TIMING_TRACE_ENABLED)
             if (context->config.guidance_dry_run.tick == NULL &&
                 context->machine.activeState == ROBOT_STATE_TEACHING &&
                 context->machine.safety.statusValid &&
@@ -994,7 +994,7 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
     if (context->machine.activeState != ROBOT_STATE_TEACHING ||
         !context->teaching_runtime.manual_guidance_active) {
         port->stop(port->context);
-#if defined(GP_HOST_TIMING) && defined(GP_HOST_GUIDANCE_MOTION_TEST)
+#if defined(HOST_TIMING_TRACE_ENABLED) && defined(HOST_HAND_GUIDING_MOTION_TEST)
         hand_guiding_command_gate_reset(&context->sim_guidance_gate);
 #endif
         return;
@@ -1035,9 +1035,9 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
     cycle.global_fault_active = safety->globalFaultActive ||
         context->teaching_runtime.global_fault_active;
 
-    TRACE_BEGIN(GP_TIMING_GUIDANCE_OBSERVER);
+    TRACE_BEGIN(TIMING_GUIDANCE_OBSERVER);
     const bool observer_ok = port->tick(port->context, &cycle);
-    TRACE_END(GP_TIMING_GUIDANCE_OBSERVER, observer_ok);
+    TRACE_END(TIMING_GUIDANCE_OBSERVER, observer_ok);
     if (observer_ok) {
         if (context->guidance_dry_run_ok_cycles < UINT32_MAX)
             ++context->guidance_dry_run_ok_cycles;
@@ -1046,7 +1046,7 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
             ++context->guidance_dry_run_rejected_cycles;
     }
 
-#if defined(GP_HOST_TIMING) && defined(GP_HOST_GUIDANCE_MOTION_TEST)
+#if defined(HOST_TIMING_TRACE_ENABLED) && defined(HOST_HAND_GUIDING_MOTION_TEST)
     /* The ONLY authorized simulation dispatch point: M7 owner task.
      * This block cannot compile into normal STM32 firmware. */
     if (context->config.sim_guidance_dispatch_enabled) {
@@ -1058,7 +1058,7 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
          * intentionally produces no candidate. Every subsequent commanded
          * cycle must produce a fresh candidate; never replay old targets. */
         if (candidate_present) {
-            TRACE_BEGIN(GP_TIMING_GUIDANCE_DISPATCH);
+            TRACE_BEGIN(TIMING_GUIDANCE_DISPATCH);
             int32_t target_units[ROBOT_DOF] = {0};
             if (!hand_guiding_command_gate_validate(
                     &context->sim_guidance_gate,
@@ -1068,11 +1068,11 @@ static void service_guidance_dry_run(SupervisorTaskContext *context)
                                         cycle.now_ms) ||
                 !joint_drive_port_send_targets(&context->joint_drive,
                                                target_units)) {
-                TRACE_END(GP_TIMING_GUIDANCE_DISPATCH, false);
+                TRACE_END(TIMING_GUIDANCE_DISPATCH, false);
                 context->sim_guidance_gate.fault_latched = true;
                 emit_step_failure(context, 0xE062U);
             } else {
-                TRACE_END(GP_TIMING_GUIDANCE_DISPATCH, true);
+                TRACE_END(TIMING_GUIDANCE_DISPATCH, true);
                 if (context->sim_guidance_dispatched_cycles < UINT32_MAX)
                     ++context->sim_guidance_dispatched_cycles;
             }
@@ -1142,13 +1142,13 @@ static void supervisor_task_entry(void *argument)
         }
         const uint64_t cycle_start_us =
             hardware_timed ? supervisor_now_us() : UINT64_C(0);
-#if defined(GP_HOST_TIMING)
-        const GpTimingSource supervisor_timing_source =
+#if defined(HOST_TIMING_TRACE_ENABLED)
+        const TimingSource supervisor_timing_source =
             context->config.period_ticks == pdMS_TO_TICKS(2U)
-                ? GP_TIMING_SUPERVISOR_2MS : GP_TIMING_SUPERVISOR;
+                ? TIMING_SUPERVISOR_2MS : TIMING_SUPERVISOR;
         TRACE_BEGIN(supervisor_timing_source);
 #else
-        TRACE_BEGIN(GP_TIMING_SUPERVISOR);
+        TRACE_BEGIN(TIMING_SUPERVISOR);
 #endif
         /* Acquisition only: raw inputs do not authorize motion or create HMI
          * events until a separately tested input adapter is connected. */
@@ -1218,10 +1218,10 @@ static void supervisor_task_entry(void *argument)
             (void)context->config.io.write_outputs(
                 context->config.io.context, &outputs);
         }
-#if defined(GP_HOST_TIMING)
+#if defined(HOST_TIMING_TRACE_ENABLED)
         TRACE_END(supervisor_timing_source, true);
 #else
-        TRACE_END(GP_TIMING_SUPERVISOR, true);
+        TRACE_END(TIMING_SUPERVISOR, true);
 #endif
         if (hardware_timed) {
             const uint64_t elapsed = supervisor_now_us() - cycle_start_us;
@@ -1238,7 +1238,7 @@ static void supervisor_task_entry(void *argument)
                     emit_step_failure(context, 0xE004U);
             }
         } else {
-#if defined(GP_HOST_TIMING) && defined(GP_HOST_GUIDANCE_MOTION_TEST)
+#if defined(HOST_TIMING_TRACE_ENABLED) && defined(HOST_HAND_GUIDING_MOTION_TEST)
             if (context->config.sim_guidance_dispatch_enabled) {
                 /* WSL/POSIX may miss a release. Skip simulated catch-up
                  * iterations instead of producing two motion candidates
@@ -1279,7 +1279,7 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
         (config->sim_guidance_dispatch_enabled &&
          (config->guidance_dry_run.tick == NULL ||
           config->guidance_dry_run.take_candidate == NULL)) ||
-#if !defined(GP_HOST_TIMING) || !defined(GP_HOST_GUIDANCE_MOTION_TEST)
+#if !defined(HOST_TIMING_TRACE_ENABLED) || !defined(HOST_HAND_GUIDING_MOTION_TEST)
         config->sim_guidance_dispatch_enabled ||
 #endif
         (config->validation_sample_budget == 0U) ||
@@ -1291,7 +1291,7 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
           (config->timing.start == NULL) ||
           (config->timing.wait_next == NULL) ||
           (config->period_ticks != 2U))) ||
-        (config->ipc != NULL && !gp_ipc_valid(config->ipc)))
+        (config->ipc != NULL && !ipc_valid(config->ipc)))
     {
         return false;
     }

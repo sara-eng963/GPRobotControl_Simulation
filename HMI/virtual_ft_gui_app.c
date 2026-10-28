@@ -100,21 +100,21 @@ static bool any_nonzero(const double wrench[6])
 
 int main(void)
 {
-    GpVirtualFtClient client;
-    if (!gp_virtual_ft_client_open(&client)) {
+    VirtualFtClient client;
+    if (!virtual_ft_client_open(&client)) {
         fprintf(stderr, "[VFT GUI] UDP sender socket could not open\n");
         return 1;
     }
     HmiProtocol status;
     if (!hmi_protocol_init(&status, HMI_VFT_STATUS_PORT)) {
         fprintf(stderr, "[VFT GUI] status UDP port 5014 unavailable\n");
-        gp_virtual_ft_client_close(&client);
+        virtual_ft_client_close(&client);
         return 1;
     }
     InitWindow(WINDOW_W, WINDOW_H, "Virtual F/T Sensor | Six-Axis Hand Guiding");
     if (!IsWindowReady()) {
         hmi_protocol_shutdown(&status);
-        gp_virtual_ft_client_close(&client);
+        virtual_ft_client_close(&client);
         return 1;
     }
     SetTargetFPS(120);
@@ -127,7 +127,7 @@ int main(void)
     float force_N = 0.5f;
     float torque_Nm = 0.05f;
     int pointer = POINTER_NONE;
-    GpVirtualFtInputGate input_gate = {0};
+    VirtualFtInputGate input_gate = {0};
     bool transport_error = false;
     double next_send = 0.0;
     double last_sent[6] = {0};
@@ -178,7 +178,7 @@ int main(void)
                                                TORQUE_TRACK.width, 0.0f, 1.0f);
         }
 
-        GpVirtualFtKeys keys = {0};
+        VirtualFtKeys keys = {0};
         for (unsigned i = 0U; i < 6U; ++i) {
             const bool mouse_neg = mouse_down && pointer == (int)(2U*i) &&
                 CheckCollisionPointRec(mouse, key_rect(i, false));
@@ -187,17 +187,17 @@ int main(void)
             keys.negative[i] = focus && (IsKeyDown(negative_key[i]) || mouse_neg);
             keys.positive[i] = focus && (IsKeyDown(positive_key[i]) || mouse_pos);
         }
-        gp_virtual_ft_input_gate_update(&input_gate, focus, clear_pressed, &keys);
+        virtual_ft_input_gate_update(&input_gate, focus, clear_pressed, &keys);
         const bool enabled = allowed && !input_gate.suppressed_until_release;
         double wrench[6];
-        gp_virtual_ft_wrench_request(&keys, enabled, force_N, torque_Nm, wrench);
+        virtual_ft_wrench_request(&keys, enabled, force_N, torque_Nm, wrench);
 
         /* The GUI streams 50 Hz, not at the 500-Hz controller rate.
          * Send a zero immediately on release, focus loss, or inhibition;
          * keep sending zeros afterward for the existing watchdog. */
         const double now = GetTime();
         if (now >= next_send || (!any_nonzero(wrench) && any_nonzero(last_sent))) {
-            transport_error = !gp_virtual_ft_client_send(&client, wrench);
+            transport_error = !virtual_ft_client_send(&client, wrench);
             if (!transport_error) memcpy(last_sent, wrench, sizeof(last_sent));
             next_send = now + 0.020;
         }
@@ -261,7 +261,7 @@ int main(void)
     }
 
     /* Best-effort valid zero packets; loss after exit still faults watchdog. */
-    gp_virtual_ft_client_close(&client);
+    virtual_ft_client_close(&client);
     hmi_protocol_shutdown(&status);
     hmi_ui_shutdown();
     CloseWindow();

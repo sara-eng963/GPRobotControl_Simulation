@@ -1,5 +1,5 @@
-#ifndef GP_IPC_RUNTIME_TEST_FREERTOS_CONFIG_H
-#define GP_IPC_RUNTIME_TEST_FREERTOS_CONFIG_H
+#ifndef IPC_RUNTIME_TEST_FREERTOS_CONFIG_H
+#define IPC_RUNTIME_TEST_FREERTOS_CONFIG_H
 
 /* Inherit the existing project host configuration, but build an isolated
  * FreeRTOS kernel instance with static allocation enabled for MessageBuffers.

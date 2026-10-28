@@ -59,7 +59,7 @@ def main():
         if source.count(key) != 1:
             raise ValueError("Unexpected harness placeholder: " + key)
         source = source.replace(key, value)
-    with tempfile.TemporaryDirectory(prefix="gp_timer_fault_") as folder:
+    with tempfile.TemporaryDirectory(prefix="timer_fault_") as folder:
         test_c = Path(folder) / "timer_fault.c"
         exe = Path(folder) / "timer_fault"
         test_c.write_text(source)

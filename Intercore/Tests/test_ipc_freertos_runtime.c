@@ -11,11 +11,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define GP_STRESS_MESSAGES 2000U
-#define GP_WORKER_STACK_WORDS 1024U
-#define GP_MAX_WAIT_TICKS pdMS_TO_TICKS(20000U)
+#define IPC_TEST_STRESS_MESSAGES 2000U
+#define IPC_TEST_WORKER_STACK_WORDS 1024U
+#define IPC_TEST_MAX_WAIT_TICKS pdMS_TO_TICKS(20000U)
 
-static GpIpcShared ipc_shared;
+static IpcShared ipc_shared;
 static uint32_t notices[4];
 static volatile uint32_t failed;
 static volatile uint32_t finished;
@@ -44,46 +44,46 @@ static uint32_t payload(uint32_t index, uint32_t word, uint32_t direction)
            (direction ? UINT32_C(0xa5c3e2d1) : UINT32_C(0x27bd512c));
 }
 
-static GpIpcMessage make_message(uint32_t i, uint32_t direction)
+static IpcMessage make_message(uint32_t i, uint32_t direction)
 {
-    GpIpcMessage m = {0};
-    m.type = direction ? GP_IPC_CONTROLLER_STATUS : GP_IPC_HMI_COMMAND;
+    IpcMessage m = {0};
+    m.type = direction ? IPC_CONTROLLER_STATUS : IPC_HMI_COMMAND;
     m.sequence = i;
     m.timestamp_ms = 2U * i;
-    for (unsigned j = 0; j < GP_IPC_WORDS; ++j)
+    for (unsigned j = 0; j < IPC_WORDS; ++j)
         m.data[j] = payload(i, j, direction);
     return m;
 }
 
-static int valid_message(const GpIpcMessage *m, uint32_t i, uint32_t direction)
+static int valid_message(const IpcMessage *m, uint32_t i, uint32_t direction)
 {
-    if (m->type != (direction ? GP_IPC_CONTROLLER_STATUS : GP_IPC_HMI_COMMAND) ||
+    if (m->type != (direction ? IPC_CONTROLLER_STATUS : IPC_HMI_COMMAND) ||
         m->sequence != i || m->timestamp_ms != 2U * i)
         return 0;
-    for (uint32_t j = 0; j < GP_IPC_WORDS; ++j)
+    for (uint32_t j = 0; j < IPC_WORDS; ++j)
         if (m->data[j] != payload(i, j, direction)) return 0;
     return 1;
 }
 
-static bool send_one(uint32_t direction, const GpIpcMessage *m)
+static bool send_one(uint32_t direction, const IpcMessage *m)
 {
-    return direction ? gp_ipc_m7_send(&ipc_shared, m) :
-                       gp_ipc_m4_send(&ipc_shared, m);
+    return direction ? ipc_m7_send(&ipc_shared, m) :
+                       ipc_m4_send(&ipc_shared, m);
 }
 
-static bool recv_one(uint32_t direction, GpIpcMessage *m)
+static bool recv_one(uint32_t direction, IpcMessage *m)
 {
-    return direction ? gp_ipc_m4_receive(&ipc_shared, m) :
-                       gp_ipc_m7_receive(&ipc_shared, m);
+    return direction ? ipc_m4_receive(&ipc_shared, m) :
+                       ipc_m7_receive(&ipc_shared, m);
 }
 
 static uint32_t pending(uint32_t direction)
 {
-    return direction ? gp_ipc_m7_to_m4_pending(&ipc_shared) :
-                       gp_ipc_m4_to_m7_pending(&ipc_shared);
+    return direction ? ipc_m7_to_m4_pending(&ipc_shared) :
+                       ipc_m4_to_m7_pending(&ipc_shared);
 }
 
-static void on_notice(GpIpcNotifyEvent event, void *context)
+static void on_notice(IpcNotifyEvent event, void *context)
 {
     uint32_t *counter = (uint32_t *)context;
     if ((unsigned)event < 4U) ++counter[(unsigned)event];
@@ -92,33 +92,33 @@ static void on_notice(GpIpcNotifyEvent event, void *context)
 
 static void unit_checks(void)
 {
-    GpIpcMessage rx = {0};
-    GpIpcMessage tx = make_message(42U, 0U);
-    require(!gp_ipc_valid(&ipc_shared), "not valid before bootstrap");
-    require(!gp_ipc_m4_send(&ipc_shared, &tx), "send rejected before init");
-    gp_ipc_initialize(&ipc_shared);
-    require(gp_ipc_valid(&ipc_shared), "static message buffer initialization");
+    IpcMessage rx = {0};
+    IpcMessage tx = make_message(42U, 0U);
+    require(!ipc_valid(&ipc_shared), "not valid before bootstrap");
+    require(!ipc_m4_send(&ipc_shared, &tx), "send rejected before init");
+    ipc_initialize(&ipc_shared);
+    require(ipc_valid(&ipc_shared), "static message buffer initialization");
 
-    gp_ipc_set_notifier(on_notice, notices);
-    require(!gp_ipc_m7_receive(&ipc_shared, &rx), "initial empty M4->M7");
-    require(!gp_ipc_m4_receive(&ipc_shared, &rx), "initial empty M7->M4");
-    require(!gp_ipc_m4_send(&ipc_shared, NULL), "reject NULL payload");
+    ipc_set_notifier(on_notice, notices);
+    require(!ipc_m7_receive(&ipc_shared, &rx), "initial empty M4->M7");
+    require(!ipc_m4_receive(&ipc_shared, &rx), "initial empty M7->M4");
+    require(!ipc_m4_send(&ipc_shared, NULL), "reject NULL payload");
 
     tx.type = 99U;
-    require(!gp_ipc_m4_send(&ipc_shared, &tx), "reject invalid payload type");
+    require(!ipc_m4_send(&ipc_shared, &tx), "reject invalid payload type");
 
     /* Fill both channels to exact logical depth, then reject an extra item.
      * Exercise real FreeRTOS framing, not the project's old ring. */
     for (uint32_t direction = 0U; direction < 2U; ++direction) {
-        for (uint32_t i = 1U; i <= GP_IPC_RING_CAPACITY; ++i) {
+        for (uint32_t i = 1U; i <= IPC_RING_CAPACITY; ++i) {
             tx = make_message(i, direction);
             require(send_one(direction, &tx), "full-buffer fill");
         }
-        require(pending(direction) == GP_IPC_RING_CAPACITY,
+        require(pending(direction) == IPC_RING_CAPACITY,
                 "accurate full-buffer message count");
         tx = make_message(100U, direction);
         require(!send_one(direction, &tx), "full-buffer refuses overwrite");
-        for (uint32_t i = 1U; i <= GP_IPC_RING_CAPACITY; ++i) {
+        for (uint32_t i = 1U; i <= IPC_RING_CAPACITY; ++i) {
             require(recv_one(direction, &rx), "drain full buffer");
             require(valid_message(&rx, i, direction), "payload preserved / FIFO");
         }
@@ -126,23 +126,23 @@ static void unit_checks(void)
         require(!recv_one(direction, &rx), "empty read fails");
     }
 
-    require(notices[GP_IPC_NOTIFY_M4_TO_M7_DATA] == GP_IPC_RING_CAPACITY,
+    require(notices[IPC_NOTIFY_M4_TO_M7_DATA] == IPC_RING_CAPACITY,
             "M4 data notification only after successful send");
-    require(notices[GP_IPC_NOTIFY_M4_TO_M7_SPACE] == GP_IPC_RING_CAPACITY,
+    require(notices[IPC_NOTIFY_M4_TO_M7_SPACE] == IPC_RING_CAPACITY,
             "M7 free-space notification only after successful receive");
-    require(notices[GP_IPC_NOTIFY_M7_TO_M4_DATA] == GP_IPC_RING_CAPACITY,
+    require(notices[IPC_NOTIFY_M7_TO_M4_DATA] == IPC_RING_CAPACITY,
             "M7 data notification only after successful send");
-    require(notices[GP_IPC_NOTIFY_M7_TO_M4_SPACE] == GP_IPC_RING_CAPACITY,
+    require(notices[IPC_NOTIFY_M7_TO_M4_SPACE] == IPC_RING_CAPACITY,
             "M4 free-space notification only after successful receive");
 
     /* Duplicate sequences are transported, not falsely suppressed: sequence
      * rejection belongs to the Supervisor's application protocol. */
     tx = make_message(7U, 0U);
-    require(gp_ipc_m4_send(&ipc_shared, &tx), "first sequence");
-    require(gp_ipc_m4_send(&ipc_shared, &tx), "duplicate sequence");
-    require(gp_ipc_m7_receive(&ipc_shared, &rx) && rx.sequence == 7U,
+    require(ipc_m4_send(&ipc_shared, &tx), "first sequence");
+    require(ipc_m4_send(&ipc_shared, &tx), "duplicate sequence");
+    require(ipc_m7_receive(&ipc_shared, &rx) && rx.sequence == 7U,
             "first duplicate read");
-    require(gp_ipc_m7_receive(&ipc_shared, &rx) && rx.sequence == 7U,
+    require(ipc_m7_receive(&ipc_shared, &rx) && rx.sequence == 7U,
             "second duplicate read");
     require(pending(0U) == 0U, "duplicate test drained");
 }
@@ -152,20 +152,20 @@ static void worker_task(void *parameter)
     const WorkerArgument a = *(const WorkerArgument *)parameter;
     const TickType_t started = xTaskGetTickCount();
 
-    for (uint32_t i = 1U; i <= GP_STRESS_MESSAGES && !failed; ++i) {
+    for (uint32_t i = 1U; i <= IPC_TEST_STRESS_MESSAGES && !failed; ++i) {
         if (a.producer) {
-            const GpIpcMessage tx = make_message(i, a.direction);
+            const IpcMessage tx = make_message(i, a.direction);
             while (!send_one(a.direction, &tx)) {
-                if (xTaskGetTickCount() - started > GP_MAX_WAIT_TICKS) {
+                if (xTaskGetTickCount() - started > IPC_TEST_MAX_WAIT_TICKS) {
                     require(0, "producer timeout");
                     goto finished_task;
                 }
                 vTaskDelay(1U);
             }
         } else {
-            GpIpcMessage rx = {0};
+            IpcMessage rx = {0};
             while (!recv_one(a.direction, &rx)) {
-                if (xTaskGetTickCount() - started > GP_MAX_WAIT_TICKS) {
+                if (xTaskGetTickCount() - started > IPC_TEST_MAX_WAIT_TICKS) {
                     require(0, "consumer timeout");
                     goto finished_task;
                 }
@@ -195,22 +195,22 @@ static void controller_task(void *parameter)
         const TickType_t start = xTaskGetTickCount();
         for (unsigned i = 0; i < 4U; ++i) {
             const BaseType_t made = xTaskCreate(worker_task, "ipc-worker",
-                GP_WORKER_STACK_WORDS, &args[i], tskIDLE_PRIORITY + 2U, NULL);
+                IPC_TEST_WORKER_STACK_WORDS, &args[i], tskIDLE_PRIORITY + 2U, NULL);
             require(made == pdPASS, "create worker task");
         }
         if (!failed) {
             while ((done_producers != 2U || done_consumers != 2U) &&
                    !failed &&
-                   xTaskGetTickCount() - start < GP_MAX_WAIT_TICKS)
+                   xTaskGetTickCount() - start < IPC_TEST_MAX_WAIT_TICKS)
                 vTaskDelay(1U);
             require(done_producers == 2U && done_consumers == 2U,
                     "all bidirectional workers completed");
             require(pending(0U) == 0U && pending(1U) == 0U,
                     "no messages left after parallel task test");
-            require(notices[GP_IPC_NOTIFY_M4_TO_M7_DATA] ==
-                        notices[GP_IPC_NOTIFY_M4_TO_M7_SPACE] &&
-                    notices[GP_IPC_NOTIFY_M7_TO_M4_DATA] ==
-                        notices[GP_IPC_NOTIFY_M7_TO_M4_SPACE],
+            require(notices[IPC_NOTIFY_M4_TO_M7_DATA] ==
+                        notices[IPC_NOTIFY_M4_TO_M7_SPACE] &&
+                    notices[IPC_NOTIFY_M7_TO_M4_DATA] ==
+                        notices[IPC_NOTIFY_M7_TO_M4_SPACE],
                     "notification count balanced");
         }
     }
@@ -241,7 +241,7 @@ void vApplicationGetIdleTaskMemory(StaticTask_t **tcb, StackType_t **stack,
 
 int main(void)
 {
-    if (xTaskCreate(controller_task, "ipc-test", GP_WORKER_STACK_WORDS,
+    if (xTaskCreate(controller_task, "ipc-test", IPC_TEST_WORKER_STACK_WORDS,
                     NULL, tskIDLE_PRIORITY + 3U, NULL) != pdPASS) {
         fprintf(stderr, "FAIL: create IPC controller task\n");
         return EXIT_FAILURE;

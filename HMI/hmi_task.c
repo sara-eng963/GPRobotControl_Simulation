@@ -1,8 +1,8 @@
 #include "hmi_task.h"
-#if defined(GP_HOST_TIMING)
+#if defined(HOST_TIMING_TRACE_ENABLED)
 #include "../Simulation/Timing/host_timing_trace.h"
-#define TRACE_HMI_BEGIN() gp_timing_begin(GP_TIMING_HMI)
-#define TRACE_HMI_END() gp_timing_end(GP_TIMING_HMI, true)
+#define TRACE_HMI_BEGIN() timing_begin(TIMING_HMI)
+#define TRACE_HMI_END() timing_end(TIMING_HMI, true)
 #else
 #define TRACE_HMI_BEGIN() ((void)0)
 #define TRACE_HMI_END() ((void)0)

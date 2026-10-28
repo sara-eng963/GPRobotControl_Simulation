@@ -15,7 +15,7 @@ See [executed migration results](MIGRATION_STATUS.md) for build/test evidence.
 
 ## Authoritative structure
 
-- STM32H745/GP_STM32H745ZIT6_BoardConfig.ioc: exact MCU/generator configuration.
+- STM32H745/STM32H745ZIT6_BoardConfig.ioc: exact MCU/generator configuration.
 - STM32H745/CM7: Supervisor/CANopen integration, generated initialization,
   ZITX startup and FLASH/RAM linker scripts.
 - STM32H745/CM4: generated initialization, IPC/HMI and separate validation task.

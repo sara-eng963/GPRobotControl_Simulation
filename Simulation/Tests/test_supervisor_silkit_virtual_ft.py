@@ -87,16 +87,16 @@ def wait_rows(path, predicate, timeout=8):
     raise AssertionError("timed out waiting for traced guidance rows")
 
 try:
-    with tempfile.TemporaryDirectory(prefix="gp-vft-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="virtual-ft-") as tmp:
         trace = pathlib.Path(tmp) / "guidance.csv"
         start("registry", [registry, "--listen-uri", "silkit://localhost:8500"])
         time.sleep(0.7)
         start("motors", [motors])
         time.sleep(1.0)
         env = os.environ.copy()
-        env.update(GP_GUIDANCE_DRY_RUN="1", GP_GUIDANCE_SIM_MOTION="1",
-                   GP_GUIDANCE_VIRTUAL_FT="1",
-                   GP_GUIDANCE_TRACE_FILE=str(trace),
+        env.update(HAND_GUIDING_DRY_RUN="1", HAND_GUIDING_SIM_MOTION="1",
+                   HAND_GUIDING_VIRTUAL_FT="1",
+                   HAND_GUIDING_TRACE_FILE=str(trace),
                    SILKIT_REGISTRY_URI="silkit://localhost:8500")
         start("supervisor", [supervisor], env)
         with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as status, \

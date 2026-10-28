@@ -9,8 +9,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define GP_TIMING_RING_CAPACITY 2048U
-#define GP_TIMING_RING_MASK (GP_TIMING_RING_CAPACITY - 1U)
+#define TIMING_RING_CAPACITY 2048U
+#define TIMING_RING_MASK (TIMING_RING_CAPACITY - 1U)
 
 typedef struct {
     uint64_t sequence;
@@ -24,10 +24,10 @@ typedef struct {
     uint32_t dropped_total;
     uint8_t execution_budget_overrun;
     uint8_t success;
-} GpTimingSample;
+} TimingSample;
 
 typedef struct {
-    GpTimingSample samples[GP_TIMING_RING_CAPACITY];
+    TimingSample samples[TIMING_RING_CAPACITY];
     uint32_t head;         /* producer only writes */
     uint32_t tail;         /* logger only writes */
     uint32_t dropped;      /* producer only writes */
@@ -35,15 +35,15 @@ typedef struct {
     uint64_t last_start;   /* producer only writes */
     uint64_t began_us;     /* producer only writes */
     bool in_progress;      /* producer only writes */
-} GpTimingRing;
+} TimingRing;
 
 typedef struct {
     const char *name;
     const char *kind;
     uint32_t period_us; /* Zero for event-driven / best-effort tasks. */
-} GpTimingDefinition;
+} TimingDefinition;
 
-static const GpTimingDefinition defs[GP_TIMING_SOURCE_COUNT] = {
+static const TimingDefinition defs[TIMING_SOURCE_COUNT] = {
     {"supervisor",    "periodic", 1000U},
     {"sim_inputs",    "best_effort", 0U},
     {"hmi",           "periodic", 10000U},
@@ -66,7 +66,7 @@ static const GpTimingDefinition defs[GP_TIMING_SOURCE_COUNT] = {
     {"guidance_observer", "activity", 0U},
     {"guidance_dispatch", "event", 0U},
 };
-static GpTimingRing rings[GP_TIMING_SOURCE_COUNT];
+static TimingRing rings[TIMING_SOURCE_COUNT];
 static FILE *output;
 static pthread_t writer_thread;
 static uint64_t epoch_us;
@@ -82,9 +82,9 @@ static uint64_t monotonic_us(void)
 }
 
 /* NEVER called by a periodic task; only background logger touches stdio. */
-static void write_sample(unsigned source, const GpTimingSample *s)
+static void write_sample(unsigned source, const TimingSample *s)
 {
-    const GpTimingDefinition *def = &defs[source];
+    const TimingDefinition *def = &defs[source];
     fprintf(output,
         "3,%s,%s,%" PRIu64 ",%u,%" PRIu64 ",%" PRIu64 ","
         "%" PRIu64 ",%" PRIu64 ",",
@@ -106,14 +106,14 @@ static void *writer_entry(void *unused)
     (void)unused;
     for (;;) {
         bool wrote = false;
-        for (unsigned source = 0; source < GP_TIMING_SOURCE_COUNT; ++source) {
-            GpTimingRing *ring = &rings[source];
+        for (unsigned source = 0; source < TIMING_SOURCE_COUNT; ++source) {
+            TimingRing *ring = &rings[source];
             uint32_t tail = __atomic_load_n(&ring->tail, __ATOMIC_RELAXED);
             const uint32_t head =
                 __atomic_load_n(&ring->head, __ATOMIC_ACQUIRE);
             while (tail != head) {
-                const GpTimingSample sample =
-                    ring->samples[tail & GP_TIMING_RING_MASK];
+                const TimingSample sample =
+                    ring->samples[tail & TIMING_RING_MASK];
                 write_sample(source, &sample);
                 ++tail;
                 __atomic_store_n(&ring->tail, tail, __ATOMIC_RELEASE);
@@ -127,7 +127,7 @@ static void *writer_entry(void *unused)
     return NULL;
 }
 
-bool gp_timing_init(const char *csv_path)
+bool timing_init(const char *csv_path)
 {
     if (csv_path == NULL || csv_path[0] == '\0') return true;
     if (enabled) return false;
@@ -159,20 +159,20 @@ bool gp_timing_init(const char *csv_path)
     return true;
 }
 
-void gp_timing_begin(GpTimingSource source)
+void timing_begin(TimingSource source)
 {
-    if ((unsigned)source >= GP_TIMING_SOURCE_COUNT ||
+    if ((unsigned)source >= TIMING_SOURCE_COUNT ||
         !__atomic_load_n(&enabled, __ATOMIC_ACQUIRE)) return;
-    GpTimingRing *ring = &rings[source];
+    TimingRing *ring = &rings[source];
     ring->began_us = monotonic_us() - epoch_us;
     ring->in_progress = true;
 }
 
-void gp_timing_end(GpTimingSource source, bool success)
+void timing_end(TimingSource source, bool success)
 {
-    if ((unsigned)source >= GP_TIMING_SOURCE_COUNT ||
+    if ((unsigned)source >= TIMING_SOURCE_COUNT ||
         !__atomic_load_n(&enabled, __ATOMIC_ACQUIRE)) return;
-    GpTimingRing *ring = &rings[source];
+    TimingRing *ring = &rings[source];
     if (!ring->in_progress) return;
     const uint64_t finished_us = monotonic_us() - epoch_us;
     const uint64_t started_us = ring->began_us;
@@ -181,7 +181,7 @@ void gp_timing_end(GpTimingSource source, bool success)
     const uint64_t last_start = ring->last_start;
     ring->last_start = started_us;
 
-    GpTimingSample sample = {0};
+    TimingSample sample = {0};
     sample.sequence = sequence;
     sample.start_us = started_us;
     sample.finish_us = finished_us;
@@ -198,26 +198,26 @@ void gp_timing_end(GpTimingSource source, bool success)
         __atomic_load_n(&ring->head, __ATOMIC_RELAXED);
     const uint32_t tail =
         __atomic_load_n(&ring->tail, __ATOMIC_ACQUIRE);
-    if ((uint32_t)(head - tail) >= GP_TIMING_RING_CAPACITY) {
+    if ((uint32_t)(head - tail) >= TIMING_RING_CAPACITY) {
         ++ring->dropped; /* Never block control tasks to log. */
         return;
     }
     sample.dropped_total = ring->dropped;
-    ring->samples[head & GP_TIMING_RING_MASK] = sample;
+    ring->samples[head & TIMING_RING_MASK] = sample;
     __atomic_store_n(&ring->head, head + 1U, __ATOMIC_RELEASE);
 }
 
 /* Numeric diagnostics reuse single-producer rings and their async writer. */
-void gp_timing_value(GpTimingSource source, uint64_t value)
+void timing_value(TimingSource source, uint64_t value)
 {
-    if ((unsigned)source >= GP_TIMING_SOURCE_COUNT ||
+    if ((unsigned)source >= TIMING_SOURCE_COUNT ||
         !__atomic_load_n(&enabled, __ATOMIC_ACQUIRE)) return;
-    GpTimingRing *ring = &rings[source];
+    TimingRing *ring = &rings[source];
     const uint64_t now = monotonic_us() - epoch_us;
     const uint64_t sequence = ring->count++;
     const uint64_t previous = ring->last_start;
     ring->last_start = now;
-    GpTimingSample sample = {0};
+    TimingSample sample = {0};
     sample.sequence = sequence;
     sample.start_us = now;
     sample.finish_us = now;
@@ -227,11 +227,11 @@ void gp_timing_value(GpTimingSource source, uint64_t value)
     sample.has_value = true;
     const uint32_t head = __atomic_load_n(&ring->head, __ATOMIC_RELAXED);
     const uint32_t tail = __atomic_load_n(&ring->tail, __ATOMIC_ACQUIRE);
-    if ((uint32_t)(head - tail) >= GP_TIMING_RING_CAPACITY) {
+    if ((uint32_t)(head - tail) >= TIMING_RING_CAPACITY) {
         ++ring->dropped;
         return;
     }
     sample.dropped_total = ring->dropped;
-    ring->samples[head & GP_TIMING_RING_MASK] = sample;
+    ring->samples[head & TIMING_RING_MASK] = sample;
     __atomic_store_n(&ring->head, head + 1U, __ATOMIC_RELEASE);
 }

@@ -56,7 +56,7 @@ run_scenario() {
     local analysis_dir="$LOG_DIR/${name}-analysis"
     rm -f "$csv"
     echo "[TIMING] Scenario: $name ($test)"
-    GP_TIMING_CSV="$csv" \
+    HOST_TIMING_CSV="$csv" \
         ctest --test-dir "$BUILD_DIR" \
         -R "^${test}$" \
         --output-on-failure

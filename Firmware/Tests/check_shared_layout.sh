@@ -11,7 +11,7 @@ for x in "$GCC" "$READELF"; do
     command -v "$x" >/dev/null 2>&1 || { echo "FAIL: missing $x" >&2; exit 1; }
 done
 [[ -f "$SRC" ]] || { echo "FAIL: probe missing: $SRC" >&2; exit 1; }
-[[ -f "$FW/GP_STM32H745ZIT6_BoardConfig.ioc" ]] || { echo "FAIL: CubeMX target missing" >&2; exit 1; }
+[[ -f "$FW/STM32H745ZIT6_BoardConfig.ioc" ]] || { echo "FAIL: CubeMX target missing" >&2; exit 1; }
 KERNEL="$FW/Middlewares/Third_Party/FreeRTOS/Source"
 PORT="$KERNEL/portable/GCC/ARM_CM4F"
 DEV="$FW/Drivers/CMSIS/Device/ST/STM32H7xx/Include"
@@ -38,7 +38,7 @@ for core in CM7 CM4; do
         -I"$HAL" -I"$HAL/Legacy" \
         -c "$SRC" -o "$TMP/$core.o"
     "$READELF" --wide --symbols "$TMP/$core.o" | \
-        awk '$4 == "OBJECT" && $NF ~ /^gp_stage2_/ {print $NF, $3}' | \
+        awk '$4 == "OBJECT" && $NF ~ /^layout_probe_/ {print $NF, $3}' | \
         LC_ALL=C sort > "$TMP/$core.sizes"
     [[ "$(wc -l < "$TMP/$core.sizes")" -eq 12 ]] || {
         echo "FAIL: unexpected number of layout symbols on $core" >&2
@@ -52,8 +52,8 @@ if ! cmp -s "$TMP/CM7.sizes" "$TMP/CM4.sizes"; then
     exit 1
 fi
 get_size() { awk -v name="$1" '$1 == name {print $2}' "$TMP/CM7.sizes"; }
-ipc="$(get_size gp_stage2_shared_ipc)"
-traj="$(get_size gp_stage2_shared_trajectory)"
+ipc="$(get_size layout_probe_shared_ipc)"
+traj="$(get_size layout_probe_shared_trajectory)"
 [[ "$ipc" =~ ^[0-9]+$ && "$traj" =~ ^[0-9]+$ ]] || {
     echo "FAIL: unable to read object sizes" >&2; exit 1;
 }

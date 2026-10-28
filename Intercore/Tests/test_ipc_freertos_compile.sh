@@ -70,7 +70,7 @@ compile_core() {
     "$COMPILER" \
         -std=c11 -O2 -Wall -Wextra -Werror \
         -mcpu="$cpu" -mthumb -mfpu="$fpu" -mfloat-abi=hard \
-        -DGP_IPC_FREERTOS_BACKEND=1 \
+        -DIPC_FREERTOS_BACKEND=1 \
         -I"$TMP_DIR" -I"$KERNEL/include" -I"$(dirname "$port")" \
         -I"$ROOT/Intercore" \
         -c "$ROOT/Intercore/ipc_mailbox_freertos.c" \

@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 
-static bool source_read(uint32_t first, GpTrajectorySample *out,
+static bool source_read(uint32_t first, TrajectorySample *out,
                         uint32_t count, void *unused)
 {
     (void)unused;
@@ -62,14 +62,14 @@ static bool physical_stop(bool *stopped, void *context)
 
 static void test_production_binding(void)
 {
-    static GpTrajectoryShared shared;
-    static GpTrajectoryProducer producer;
-    static GpTrajectoryExecutionBinding binding;
-    GpTrajectoryIdentity id = {
+    static TrajectoryShared shared;
+    static TrajectoryProducer producer;
+    static TrajectoryExecutionBinding binding;
+    TrajectoryIdentity id = {
         .program_id = 42U, .source_revision = 8U,
         .artifact_crc = UINT32_C(0x99887766),
         .sample_count = 513U,
-        .sample_period_us = GP_TRAJ_SAMPLE_PERIOD_US
+        .sample_period_us = TRAJECTORY_SAMPLE_PERIOD_US
     };
     ValidatedTrajectory artifact = {0};
     artifact.program_id = id.program_id;
@@ -87,12 +87,12 @@ static void test_production_binding(void)
         .prefill_timeout_ms = 1000U,
         .context = &physical
     };
-    gp_traj_shared_initialize(&shared);
-    gp_traj_m4_init(&producer, &shared);
-    board.read_sample = gp_traj_path_read_sample; /* Reject competing source. */
-    assert(!gp_traj_execution_bind(&binding, &shared, &artifact, &board));
+    trajectory_shared_initialize(&shared);
+    trajectory_m4_init(&producer, &shared);
+    board.read_sample = trajectory_path_read_sample; /* Reject competing source. */
+    assert(!trajectory_execution_bind(&binding, &shared, &artifact, &board));
     board.read_sample = NULL;
-    assert(gp_traj_execution_bind(&binding, &shared, &artifact, &board));
+    assert(trajectory_execution_bind(&binding, &shared, &artifact, &board));
     PathExecutionServices *s = &binding.services;
     assert(s->context == &binding);
     assert(!s->stream_ready(0U, artifact.sample_count, s->context));
@@ -105,10 +105,10 @@ static void test_production_binding(void)
     assert(physical.relay_calls == 1U && physical.stop_calls == 1U &&
            physical.retract_calls == 2U);
     /* Prepared but short of the required 512-sample prefill. */
-    assert(gp_traj_m4_prepare(&producer, source_read, NULL, &id));
-    assert(gp_traj_m4_step(&producer));
+    assert(trajectory_m4_prepare(&producer, source_read, NULL, &id));
+    assert(trajectory_m4_step(&producer));
     assert(!s->stream_ready(0U, artifact.sample_count, s->context));
-    assert(gp_traj_m4_step(&producer));
+    assert(trajectory_m4_step(&producer));
     assert(s->stream_ready(0U, artifact.sample_count, s->context));
     PvExecutionSample sample = {0};
     assert(s->read_sample(0U, &sample, s->context));
@@ -125,25 +125,25 @@ static void test_production_binding(void)
     verify_sample(&sample, 3U);
     s->end_stream(s->context);
     assert(!binding.consumer.active);
-    assert(gp_traj_m4_step(&producer));
-    assert(gp_traj_m4_release_acknowledged(&shared, binding.consumer.epoch));
+    assert(trajectory_m4_step(&producer));
+    assert(trajectory_m4_release_acknowledged(&shared, binding.consumer.epoch));
     /* A second playback must publish a fresh epoch. */
     assert(!s->stream_ready(0U, artifact.sample_count, s->context));
-    assert(gp_traj_m4_prepare(&producer, source_read, NULL, &id));
-    assert(gp_traj_m4_step(&producer));
-    assert(gp_traj_m4_step(&producer));
+    assert(trajectory_m4_prepare(&producer, source_read, NULL, &id));
+    assert(trajectory_m4_step(&producer));
+    assert(trajectory_m4_step(&producer));
     s->end_stream(s->context); /* Abort before consumer entered the new epoch. */
-    assert(gp_traj_m4_step(&producer));
-    assert(gp_traj_current_epoch(&shared) == 2U);
-    assert(gp_traj_m4_release_acknowledged(&shared, gp_traj_current_epoch(&shared)));
+    assert(trajectory_m4_step(&producer));
+    assert(trajectory_current_epoch(&shared) == 2U);
+    assert(trajectory_m4_release_acknowledged(&shared, trajectory_current_epoch(&shared)));
     /* B4: attachment is explicit. An offline M4 never causes the
      * canonical M7 PathExecution callback to fabricate READY. */
-    GpValidationShared offline;
-    gp_validation_shared_initialize(&offline);
-    GpTrajectoryExecutionBinding gated = {0};
-    assert(gp_traj_execution_bind(&gated, &shared, &artifact, &board));
-    assert(gp_traj_execution_attach_playback(&gated, &offline));
-    assert(!gp_traj_execution_attach_playback(&gated, &offline));
+    ValidationShared offline;
+    validation_shared_initialize(&offline);
+    TrajectoryExecutionBinding gated = {0};
+    assert(trajectory_execution_bind(&gated, &shared, &artifact, &board));
+    assert(trajectory_execution_attach_playback(&gated, &offline));
+    assert(!trajectory_execution_attach_playback(&gated, &offline));
     assert(!gated.services.stream_ready(0U, artifact.sample_count,
                                         gated.services.context));
     assert(!gated.playback_requested);
@@ -153,61 +153,61 @@ static void test_production_binding(void)
 
 int main(void)
 {
-    static GpTrajectoryShared shared;
-    static GpTrajectoryProducer m4;
-    static GpTrajectoryConsumer m7;
-    gp_traj_shared_initialize(&shared);
-    gp_traj_m4_init(&m4, &shared);
-    gp_traj_m7_init(&m7, &shared);
+    static TrajectoryShared shared;
+    static TrajectoryProducer m4;
+    static TrajectoryConsumer m7;
+    trajectory_shared_initialize(&shared);
+    trajectory_m4_init(&m4, &shared);
+    trajectory_m7_init(&m7, &shared);
 
-    const GpTrajectoryIdentity id = {
+    const TrajectoryIdentity id = {
         .program_id = 101U, .source_revision = 4U,
         .artifact_crc = UINT32_C(0x12345678),
         .sample_count = 513U,
-        .sample_period_us = GP_TRAJ_SAMPLE_PERIOD_US
+        .sample_period_us = TRAJECTORY_SAMPLE_PERIOD_US
     };
-    GpTrajectoryPathPort port = { .consumer = &m7, .identity = id };
-    assert(!gp_traj_path_stream_ready(0U, id.sample_count, &port));
-    assert(!gp_traj_path_stream_ready(0U, 512U, &port));
-    assert(gp_traj_m4_prepare(&m4, source_read, NULL, &id));
-    assert(gp_traj_m4_step(&m4));
-    assert(!gp_traj_path_stream_ready(0U, id.sample_count, &port));
-    assert(gp_traj_m4_step(&m4));
-    assert(gp_traj_path_stream_ready(0U, id.sample_count, &port));
+    TrajectoryPathPort port = { .consumer = &m7, .identity = id };
+    assert(!trajectory_path_stream_ready(0U, id.sample_count, &port));
+    assert(!trajectory_path_stream_ready(0U, 512U, &port));
+    assert(trajectory_m4_prepare(&m4, source_read, NULL, &id));
+    assert(trajectory_m4_step(&m4));
+    assert(!trajectory_path_stream_ready(0U, id.sample_count, &port));
+    assert(trajectory_m4_step(&m4));
+    assert(trajectory_path_stream_ready(0U, id.sample_count, &port));
 
     PvExecutionSample sample = {0};
-    assert(!gp_traj_path_read_sample(1U, &sample, &port));
+    assert(!trajectory_path_read_sample(1U, &sample, &port));
     for (uint32_t i = 0U; i < id.sample_count; ++i) {
-        if (gp_traj_buffered(&shared) <= GP_TRAJ_BATCH)
-            assert(gp_traj_m4_step(&m4));
-        assert(gp_traj_path_read_sample(i, &sample, &port));
+        if (trajectory_buffered(&shared) <= TRAJECTORY_BATCH)
+            assert(trajectory_m4_step(&m4));
+        assert(trajectory_path_read_sample(i, &sample, &port));
         verify_sample(&sample, i);
         if (i < id.sample_count - 1U)
-            assert(gp_traj_path_stream_ready(i + 1U, id.sample_count, &port));
+            assert(trajectory_path_stream_ready(i + 1U, id.sample_count, &port));
     }
-    assert(!gp_traj_path_read_sample(id.sample_count, &sample, &port));
-    gp_traj_path_end_stream(&port);
+    assert(!trajectory_path_read_sample(id.sample_count, &sample, &port));
+    trajectory_path_end_stream(&port);
     assert(!m7.active);
-    assert(gp_traj_m4_step(&m4));
-    assert(gp_traj_m4_release_acknowledged(&shared, m7.epoch));
-    assert(!gp_traj_path_stream_ready(0U, id.sample_count, &port));
+    assert(trajectory_m4_step(&m4));
+    assert(trajectory_m4_release_acknowledged(&shared, m7.epoch));
+    assert(!trajectory_path_stream_ready(0U, id.sample_count, &port));
 
     /* Same geometry/repeated playback uses a NEW stream epoch and prefill. */
-    assert(gp_traj_m4_prepare(&m4, source_read, NULL, &id));
-    assert(gp_traj_m4_step(&m4));
-    assert(gp_traj_m4_step(&m4));
-    assert(gp_traj_path_stream_ready(0U, id.sample_count, &port));
-    assert(gp_traj_path_read_sample(0U, &sample, &port));
+    assert(trajectory_m4_prepare(&m4, source_read, NULL, &id));
+    assert(trajectory_m4_step(&m4));
+    assert(trajectory_m4_step(&m4));
+    assert(trajectory_path_stream_ready(0U, id.sample_count, &port));
+    assert(trajectory_path_read_sample(0U, &sample, &port));
     verify_sample(&sample, 0U);
     /* Constant-time skip preserves ordering and rejects invalid offsets. */
-    assert(!gp_traj_path_skip_samples(2U, 1U, &port));
-    assert(!gp_traj_path_skip_samples(1U, 512U, &port));
-    assert(gp_traj_path_skip_samples(1U, 2U, &port));
-    assert(!gp_traj_path_read_sample(2U, &sample, &port));
-    assert(gp_traj_path_read_sample(3U, &sample, &port));
+    assert(!trajectory_path_skip_samples(2U, 1U, &port));
+    assert(!trajectory_path_skip_samples(1U, 512U, &port));
+    assert(trajectory_path_skip_samples(1U, 2U, &port));
+    assert(!trajectory_path_read_sample(2U, &sample, &port));
+    assert(trajectory_path_read_sample(3U, &sample, &port));
     verify_sample(&sample, 3U);
-    gp_traj_path_end_stream(&port);
-    assert(gp_traj_m4_step(&m4));
+    trajectory_path_end_stream(&port);
+    assert(trajectory_m4_step(&m4));
     test_production_binding();
     puts("PASS: M7 PathExecution callbacks preflight, read, pause, release, replay");
     return 0;

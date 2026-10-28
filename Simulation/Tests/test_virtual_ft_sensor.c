@@ -25,7 +25,7 @@ int main(void)
         if(pass==1) {measured[0]=-0.3; measured[4]=-0.7;}
         FtSensorSample sample={0};
         double recovered[6]={0};
-        assert(gp_virtual_ft_sensor_sample(requested,&sensor,&robot,
+        assert(virtual_ft_sensor_sample(requested,&sensor,&robot,
                     measured,1234U,&sample));
         assert(wrench_frame_sensor_to_base_tcp(&sample,1244U,1000U,
                     &sensor,&bias,&robot,measured,true,recovered));
@@ -34,7 +34,7 @@ int main(void)
     }
     sensor.geometry_verified=false;
     FtSensorSample sample={0};
-    assert(!gp_virtual_ft_sensor_sample(requested,&sensor,&robot,
+    assert(!virtual_ft_sensor_sample(requested,&sensor,&robot,
                 measured,1400U,&sample));
     assert(!sample.valid);
     puts("PASS: virtual F/T base/TCP-to-sensor roundtrip, offsets and rotation");

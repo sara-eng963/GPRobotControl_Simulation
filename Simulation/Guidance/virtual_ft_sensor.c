@@ -12,7 +12,7 @@ static void cross(const double a[3], const double b[3], double c[3])
     c[2] = a[0]*b[1] - a[1]*b[0];
 }
 
-bool gp_virtual_ft_sensor_sample(
+bool virtual_ft_sensor_sample(
     const double wrench_base_tcp[6], const SensorConfig *sensor,
     const RobotConfig *robot, const double measured_q[ROBOT_DOF],
     uint32_t sample_time_us, FtSensorSample *sample)

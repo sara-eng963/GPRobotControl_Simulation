@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-OUT_DIR="$(mktemp -d /tmp/gp-batch5-flash-prefetch.XXXXXX)"
+OUT_DIR="$(mktemp -d /tmp/flash-prefetch.XXXXXX)"
 EXE="$OUT_DIR/flash_prefetch_500hz"
 printf '[INFO] Build/log directory: %s\n' "$OUT_DIR"
 cc -std=c11 -O2 -Wall -Wextra -Werror -pthread \

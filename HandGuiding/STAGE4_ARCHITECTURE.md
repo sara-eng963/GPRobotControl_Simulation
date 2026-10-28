@@ -79,9 +79,9 @@ The parameters currently have **no approved physical tuning values**. Keemink et
 
 | Evidence | Command / finding | Status |
 |---|---|---|
-| Standalone configure | `cmake -S HandGuiding -B /tmp/gp-stage4-build` | PASS in isolated prepared snapshot |
-| Build with diagnostics | `cmake --build /tmp/gp-stage4-build -j2` | PASS in isolated prepared snapshot |
-| Focused CTest | `ctest --test-dir /tmp/gp-stage4-build --output-on-failure` | 3/3 PASS in isolated prepared snapshot |
+| Standalone configure | `cmake -S HandGuiding -B /tmp/hand-guiding-build` | PASS in isolated prepared snapshot |
+| Build with diagnostics | `cmake --build /tmp/hand-guiding-build -j2` | PASS in isolated prepared snapshot |
+| Focused CTest | `ctest --test-dir /tmp/hand-guiding-build --output-on-failure` | 3/3 PASS in isolated prepared snapshot |
 | New wrench test | 90° rotation, torque shift, tare, stale data, invalid geometry and invalid bias | PASS in isolated prepared snapshot |
 | Root integration | `cmake -S . -B <existing-host-build-dir>` and relevant `ctest` | NOT RUN; parent FreeRTOS/raylib dependencies are external |
 | STM32 target integration | CM7/CM4 firmware build | NOT RUN |
@@ -125,9 +125,9 @@ This is backward Euler **before** bounds; acceleration and speed clipping change
 
 | Evidence | Test/command | Result |
 |---|---|---|
-| Standalone host configure | `cmake -S HandGuiding -B /tmp/gp-stage4-build -DCMAKE_BUILD_TYPE=Debug` | PASS in isolated local source copy |
-| Standalone host compile | `cmake --build /tmp/gp-stage4-build -j2` | PASS in isolated local source copy |
-| Unit tests | `ctest --test-dir /tmp/gp-stage4-build --output-on-failure` | **4/4 PASS** in isolated local source copy |
+| Standalone host configure | `cmake -S HandGuiding -B /tmp/hand-guiding-build -DCMAKE_BUILD_TYPE=Debug` | PASS in isolated local source copy |
+| Standalone host compile | `cmake --build /tmp/hand-guiding-build -j2` | PASS in isolated local source copy |
+| Unit tests | `ctest --test-dir /tmp/hand-guiding-build --output-on-failure` | **4/4 PASS** in isolated local source copy |
 | Numerics | Six-axis independent reference values, analytical backward-Euler release, rotational response, signed acceleration and speed saturation | PASS |
 | Fault and lifecycle | Disabled controller, reset, invalid configuration/input/state, nonfinite or late time step, no partial state commit | PASS |
 | Full root CMake / SIL Kit / ARM firmware | Existing repository integrations | NOT RUN for 4C |
@@ -186,9 +186,9 @@ tracking error. Mixed linear/angular Jacobian units make `sigma_min` and
 
 Run after pulling:
 ```bash
-cmake -S HandGuiding -B /tmp/gp-stage4-build
-cmake --build /tmp/gp-stage4-build -j2
-ctest --test-dir /tmp/gp-stage4-build --output-on-failure
+cmake -S HandGuiding -B /tmp/hand-guiding-build
+cmake --build /tmp/hand-guiding-build -j2
+ctest --test-dir /tmp/hand-guiding-build --output-on-failure
 ```
 
 Expected test inventory is 5; **verification is pending** until the committed
@@ -350,9 +350,9 @@ is configured but no CI result is claimed.
 
 ```bash
 git pull --ff-only origin sara/can-replacement
-cmake -S HandGuiding -B /tmp/gp-stage4-e1-strict -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
-cmake --build /tmp/gp-stage4-e1-strict -j2
-ctest --test-dir /tmp/gp-stage4-e1-strict --output-on-failure
+cmake -S HandGuiding -B /tmp/hand-guiding-e1-strict -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
+cmake --build /tmp/hand-guiding-e1-strict -j2
+ctest --test-dir /tmp/hand-guiding-e1-strict --output-on-failure
 ```
 
 
@@ -388,7 +388,7 @@ diagnostics only. It never calls a drive write, ISR or hardware adapter.
 - The Supervisor exposes counters of accepted/rejected dry-run callbacks.
 - Legacy raw `SUPERVISOR_MESSAGE_GUIDED_TARGET` is **ignored by default**.
   The original host SIL Kit teaching demo explicitly opts back in using
-  `GP_ENABLE_LEGACY_SILKIT_GUIDANCE` + `GP_HOST_TIMING` to preserve the
+  `HAND_GUIDING_ENABLE_LEGACY_SILKIT` + `HOST_TIMING_TRACE_ENABLED` to preserve the
   pre-existing manual teaching simulation only. That simulator-only path
   is **not validated admittance control** and must never be enabled for
   physical firmware. The new 4E2A hook never sends targets.
@@ -409,9 +409,9 @@ verification in the user's WSL checkout; do not mark hardware or 500 Hz
 timing PASS.
 
 ```bash
-cmake -S HandGuiding -B /tmp/gp-stage4-e2a-strict -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
-cmake --build /tmp/gp-stage4-e2a-strict -j2
-ctest --test-dir /tmp/gp-stage4-e2a-strict --output-on-failure
+cmake -S HandGuiding -B /tmp/hand-guiding-e2a-strict -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
+cmake --build /tmp/hand-guiding-e2a-strict -j2
+ctest --test-dir /tmp/hand-guiding-e2a-strict --output-on-failure
 ```
 
 **Read-only interface hardening:** the Supervisor copies six `JointDriveAxisFeedback`
@@ -423,10 +423,10 @@ records into the observer message. The observer cannot access the
 ## 14. Batch 4E2B — SIL Kit host demonstration, opt-in only
 
 The existing `supervisor_silkit_sim` now supports
-`GP_GUIDANCE_DRY_RUN=1`. The original HMI/robot/SIL Kit boot, homing,
+`HAND_GUIDING_DRY_RUN=1`. The original HMI/robot/SIL Kit boot, homing,
 CANopen and virtual-motor infrastructure is not replaced.
 
-When enabled, it installs a host-only `GpHostGuidanceDemo` adapter
+When enabled, it installs a host-only `HostGuidanceDemo` adapter
 into the **existing** M7 Supervisor task's observation callback.
 One synthetic 0.5 N sensor-X force is generated using the same host
 FreeRTOS tick clock as the Supervisor. All six actual virtual-motor
@@ -451,14 +451,14 @@ configuration and fault policy from actual hardware.
 
 A bounded 256-row ring accumulates each active Supervisor dry-run tick
 in its task, with short FreeRTOS critical-section snapshots. The
-lower-priority HMI task drains it into a separate `GP_GUIDANCE_TRACE_FILE`
+lower-priority HMI task drains it into a separate `HAND_GUIDING_TRACE_FILE`
 CSV (default `guidance_dry_run.csv`). The CSV records timestamp, cycle,
 accepted/valid/latched flags and 6D wrench, twist and joint references.
 Never write a file or flush it from the Supervisor callback. The ring
 counts dropped rows when consumers lag; diagnostic completeness is not
 guaranteed without checking this counter.
 
-Optional failure injection `GP_GUIDANCE_INJECT=stale_ft` or
+Optional failure injection `HAND_GUIDING_INJECT=stale_ft` or
 `bad_feedback` begins at tick 20 after TEACHING becomes active,
 respectively delivering a synthetically stale sensor timestamp or a
 synthetically invalid feedback-health flag. These are **software fixture
@@ -468,15 +468,15 @@ Recovery is NOT automated.
 
 When host dry-run is installed, the old raw SIL Kit guided-target message
 is rejected even though the legacy simulation executable normally opts
-in to that message type. Without `GP_GUIDANCE_DRY_RUN=1`, the old
+in to that message type. Without `HAND_GUIDING_DRY_RUN=1`, the old
 simulation demo retains its original command behavior. On physical
 firmware the legacy raw guided-target route stays blocked.
 
 Example (run alongside SIL Kit registry and motor bank):
 ```sh
-GP_GUIDANCE_DRY_RUN=1 GP_GUIDANCE_TRACE_FILE=/tmp/gp_guidance.csv ./supervisor_silkit_sim
+HAND_GUIDING_DRY_RUN=1 HAND_GUIDING_TRACE_FILE=/tmp/hand_guiding_trace.csv ./supervisor_silkit_sim
 # fault fixture:
-GP_GUIDANCE_DRY_RUN=1 GP_GUIDANCE_INJECT=stale_ft ./supervisor_silkit_sim
+HAND_GUIDING_DRY_RUN=1 HAND_GUIDING_INJECT=stale_ft ./supervisor_silkit_sim
 ```
 
 **4E2B acceptance pending:** build `supervisor_silkit_sim` against the
@@ -490,8 +490,8 @@ commissioning or certified safety claims are made.
 
 **This phase is NOT real robot commissioning.** The command path runs only
 inside the explicitly flagged SIL Kit executable with **both**
-`GP_GUIDANCE_DRY_RUN=1` and `GP_GUIDANCE_SIM_MOTION=1`. The build gate
-requires `GP_HOST_TIMING` AND `GP_HOST_GUIDANCE_MOTION_TEST`, defined
+`HAND_GUIDING_DRY_RUN=1` and `HAND_GUIDING_SIM_MOTION=1`. The build gate
+requires `HOST_TIMING_TRACE_ENABLED` AND `HOST_HAND_GUIDING_MOTION_TEST`, defined
 together **only** for `supervisor_silkit_sim`. The normal STM32 firmware
 cannot build or invoke this target-send branch. Raw GUI guided-target
 messages are rejected while the observer is installed.
@@ -537,13 +537,13 @@ Supervisor FAULT entry for injected faults. **Run results pending WSL**.
 Expected host verification:
 
 ```bash
-cmake -S HandGuiding -B /tmp/gp-stage4-e3-host -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
-cmake --build /tmp/gp-stage4-e3-host -j2
-ctest --test-dir /tmp/gp-stage4-e3-host --output-on-failure
+cmake -S HandGuiding -B /tmp/hand-guiding-e3-host -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic"
+cmake --build /tmp/hand-guiding-e3-host -j2
+ctest --test-dir /tmp/hand-guiding-e3-host --output-on-failure
 
-cmake -S . -B /tmp/gp-stage4-e3-silkit -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
-cmake --build /tmp/gp-stage4-e3-silkit --target supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
-ctest --test-dir /tmp/gp-stage4-e3-silkit -R 'supervisor_silkit_guidance_' --output-on-failure
+cmake -S . -B /tmp/hand-guiding-e3-silkit -DENABLE_SILKIT=ON -DSILKIT_ROOT="$SILKIT_ROOT"
+cmake --build /tmp/hand-guiding-e3-silkit --target supervisor_silkit_sim avatar_m_silkit_motor_bank -j2
+ctest --test-dir /tmp/hand-guiding-e3-silkit -R 'supervisor_silkit_guidance_' --output-on-failure
 ```
 
 
@@ -564,7 +564,7 @@ in [Simulation/Guidance/README_4F1.md](../Simulation/Guidance/README_4F1.md).
 
 Host-only Batch A introduces `Simulation/Guidance/virtual_ft_protocol`,
 `virtual_ft_receiver` and `virtual_ft_sensor`, with an opt-in
-`GP_GUIDANCE_VIRTUAL_FT=1` mode. Input is an atomic six-component base/TCP
+`HAND_GUIDING_VIRTUAL_FT=1` mode. Input is an atomic six-component base/TCP
 wrench (not a position request). The receiver runs in the HMI task; the
 Supervisor still exclusively owns the 2 ms control and CANopen dispatch.
 Conversion back into a synthetic sensor-frame measurement uses measured
