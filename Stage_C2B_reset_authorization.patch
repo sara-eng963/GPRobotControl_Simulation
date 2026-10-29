@@ -1,0 +1,986 @@
+diff --git a/Firmware/STM32H745/CM7/Application/StateMachine/States/state_boot.h b/Firmware/STM32H745/CM7/Application/StateMachine/States/state_boot.h
+--- a/Firmware/STM32H745/CM7/Application/StateMachine/States/state_boot.h
++++ b/Firmware/STM32H745/CM7/Application/StateMachine/States/state_boot.h
+@@ -20,6 +20,8 @@ typedef enum
+     BOOT_PHASE_VERIFY_INTERPOLATION_MODE,
+     BOOT_PHASE_REQUEST_OPERATIONAL,
+     BOOT_PHASE_WAIT_OPERATIONAL_HEARTBEAT,
++    BOOT_PHASE_PRE_ENABLE_STATUS,
++    BOOT_PHASE_WAIT_AUTHORIZATION,
+     BOOT_PHASE_ENABLE_DRIVES,
+     BOOT_PHASE_READ_POSITION_FEEDBACK,
+     BOOT_PHASE_INITIAL_PDO_EXCHANGE,
+@@ -70,6 +72,8 @@ typedef struct
+ 
+     BootEnableStage enable_stage;
+     uint16_t pending_controlword;
+     uint32_t drive_enable_attempts;
++    bool preenable_status_checked;
++    bool drive_enable_authorized;
+ 
+     int32_t hold_position[JOINT_DRIVE_AXES];
+diff --git a/Firmware/STM32H745/CM7/Application/StateMachine/States/state_boot.c b/Firmware/STM32H745/CM7/Application/StateMachine/States/state_boot.c
+--- a/Firmware/STM32H745/CM7/Application/StateMachine/States/state_boot.c
++++ b/Firmware/STM32H745/CM7/Application/StateMachine/States/state_boot.c
+@@ -580,15 +580,10 @@ StateStepResult state_boot_step(
+             {
+                 boot_advance(
+                     boot,
+-                    BOOT_PHASE_ENABLE_DRIVES,
++                    BOOT_PHASE_PRE_ENABLE_STATUS,
+                     now_ms
+                 );
+-
+-                boot->enable_stage =
+-                    BOOT_ENABLE_READ_STATUS;
+-
+-                boot->drive_enable_attempts =
+-                    0U;
+-
++                boot->preenable_status_checked = false;
++                boot->drive_enable_authorized = false;
+                 return STATE_STEP_RUNNING;
+             }
+@@ -605,7 +600,65 @@ StateStepResult state_boot_step(
+             return STATE_STEP_RUNNING;
+         }
+ 
++        /* Read the actual 6041h statusword for EVERY axis before the operator
++         * approval window opens. An already-enabled axis after MCU reset is
++         * a commissioning fault, not evidence of safe readiness. */
++        case BOOT_PHASE_PRE_ENABLE_STATUS:
++        {
++            if (boot->axis_index >= JOINT_DRIVE_AXES)
++            {
++                boot->preenable_status_checked = true;
++                boot_advance(boot, BOOT_PHASE_WAIT_AUTHORIZATION, now_ms);
++                return STATE_STEP_RUNNING;
++            }
++            if (!boot->transaction_started)
++            {
++                if (!drive_commissioning_port_begin(commissioning,
++                    DRIVE_COMMISSION_READ_STATUSWORD, boot->axis_index, 0U,
++                    now_ms))
++                    return boot_fail(boot, BOOT_ERROR_DRIVE_STATE,
++                                     (int)boot->axis_index + 1);
++                boot->transaction_started = true;
++                return STATE_STEP_RUNNING;
++            }
++            uint32_t raw_statusword = 0U;
++            const BootSdoPollResult result = collect_sdo(
++                boot, commissioning, true, 2U, &raw_statusword);
++            if (result == BOOT_SDO_WAITING) return STATE_STEP_RUNNING;
++            if (result != BOOT_SDO_DONE)
++                return boot_fail(boot, BOOT_ERROR_DRIVE_STATE,
++                                 (int)boot->axis_index + 1);
++            const uint16_t drive_state = cia402_get_state(
++                (uint16_t)raw_statusword);
++            if (cia402_is_fault(drive_state) ||
++                cia402_is_quick_stop(drive_state) ||
++                drive_state == CIA402_STATE_OPERATION_ENABLED)
++                return boot_fail(boot, BOOT_ERROR_DRIVE_STATE,
++                                 (int)boot->axis_index + 1);
++            boot->axis_index++;
++            return STATE_STEP_RUNNING;
++        }
++
++        /* Intentional non-timed wait: time passing never grants authorization.
++         * Safety/board evidence is observed every Supervisor cycle. */
++        case BOOT_PHASE_WAIT_AUTHORIZATION:
++        {
++            if (!boot->preenable_status_checked)
++                return boot_fail(boot, BOOT_ERROR_SAFETY, 0);
++            if (!drive_commissioning_port_all_heartbeat_state(
++                    commissioning, DRIVE_NODE_OPERATIONAL))
++                return boot_fail(boot, BOOT_ERROR_HEARTBEAT_TIMEOUT, 0);
++            if (!boot->drive_enable_authorized)
++                return STATE_STEP_RUNNING;
++            boot_advance(boot, BOOT_PHASE_ENABLE_DRIVES, now_ms);
++            boot->enable_stage = BOOT_ENABLE_READ_STATUS;
++            boot->drive_enable_attempts = 0U;
++            return STATE_STEP_RUNNING;
++        }
++
+         case BOOT_PHASE_ENABLE_DRIVES:
+         {
++            if (!boot->drive_enable_authorized)
++                return boot_fail(boot, BOOT_ERROR_SAFETY, 0);
+             if (boot->axis_index >= JOINT_DRIVE_AXES)
+             {
+@@ -709,7 +762,10 @@ StateStepResult state_boot_step(
+             }
+ 
+             if (!boot->transaction_started)
+             {
++                /* Recheck immediately before the hazardous SDO submission. */
++                if (!boot->drive_enable_authorized)
++                    return boot_fail(boot, BOOT_ERROR_SAFETY, 0);
+                 if (!drive_commissioning_port_begin(commissioning,
+                         DRIVE_COMMISSION_WRITE_CONTROLWORD, boot->axis_index, boot->pending_controlword, now_ms))
+                 {
+diff --git a/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.h b/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.h
+--- a/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.h
++++ b/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.h
+@@ -101,4 +101,7 @@ typedef struct
+ 
+     CanopenMasterSdoTransaction sdo;
+ 
++    /* Software veto only. Cleared at init and every new NMT reset cycle. */
++    bool drive_command_permission;
++
+     bool initialized;
+@@ -115,6 +118,10 @@ bool canopen_master_bind_runtime_owner(CanopenMaster *master,
+                                         CanopenMasterOwnerCheck check,
+                                         void *context);
+ 
++/* Single-owner explicit gate; never accepts a permission from an RX frame. */
++void canopen_master_set_drive_permission(CanopenMaster *master,
++                                         bool permitted);
++
+ /*
+  * Initialize the six-axis CANopen coordinator around an already-created
+  * transport backend. The backend can be SIL Kit now and STM32 FDCAN later.
+diff --git a/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c b/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c
+--- a/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c
++++ b/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c
+@@ -180,7 +180,8 @@ void canopen_master_clear_runtime(
+     CanopenMaster *master
+ )
+ {
+     if (!owner_access_allowed(master)) return;
++    if (master != NULL) master->drive_command_permission = false;
+     if (
+         master == NULL ||
+         !master->initialized
+@@ -217,5 +218,13 @@ void canopen_master_clear_runtime(
+     );
+ }
+ 
++void canopen_master_set_drive_permission(CanopenMaster *master,
++                                         bool permitted)
++{
++    if (!owner_access_allowed(master)) return;
++    if (master != NULL)
++        master->drive_command_permission = master->initialized && permitted;
++}
++
+ void canopen_master_set_heartbeat_timeout(
+     CanopenMaster *master,
+@@ -527,6 +536,10 @@ bool canopen_master_send_nmt_all(
+ )
+ {
+     if (!owner_access_allowed(master)) return false;
++    if (master != NULL &&
++        (command == CANOPEN_NMT_RESET_COMMUNICATION ||
++         command == CANOPEN_NMT_RESET_APPLICATION))
++        master->drive_command_permission = false;
+     if (
+         master == NULL ||
+         !master->initialized
+@@ -558,5 +571,6 @@ bool canopen_master_send_sync(
+ {
+     if (!owner_access_allowed(master)) return false;
+     if (
+         master == NULL ||
++        !master->drive_command_permission ||
+         !master->initialized
+@@ -595,5 +609,6 @@ bool canopen_master_send_target_cycle(
+ {
+     if (!owner_access_allowed(master)) return false;
+     if (
+         master == NULL ||
++        !master->drive_command_permission ||
+         !master->initialized ||
+@@ -1170,5 +1185,12 @@ bool canopen_master_begin_write_controlword(
+ {
+     if (!owner_access_allowed(master)) return false;
++    /* Permit attempts to disable voltage / quick-stop without approval;
++     * these commands are not a substitute for a physical STO channel.
++     * Every other controlword is denied before building/sending an SDO. */
++    if (master == NULL ||
++        (!master->drive_command_permission &&
++         controlword != 0x0000U && controlword != 0x0002U))
++        return false;
+     if (
+         master == NULL ||
+         node_index >= master->node_count
+diff --git a/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.h b/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.h
+--- a/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.h
++++ b/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.h
+@@ -21,4 +21,5 @@
+ 
+ #include "ipc_mailbox.h"
+ #include "../../../Common/Inc/supervision_progress.h"
++#include "../../../Common/Inc/drive_restart_gate.h"
+ _Static_assert(IPC_ABI_VERSION == 2U, "Incorrect STM32 IPC ABI");
+@@ -145,4 +146,8 @@ typedef struct
+     /* Optional board adapter; NULL callbacks allow incremental integration. */
+     SupervisorIoServices io;
+     SupervisorTimingPort timing;
++    /* Explicit, live physical-board source; NULL always denies enablement.
++     * NOT part of IPC ABI; independent of HMI commands. */
++    DriveRestartBoardPort drive_restart_board;
++    ResetDiagnostics reset_diagnostics;
+ } SupervisorTaskConfig;
+diff --git a/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c b/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
+--- a/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
++++ b/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
+@@ -113,4 +113,5 @@ typedef struct
+     bool previous_timing_wake_valid;
+     bool fault_response_step_ok;
+     SupervisionProgressSample progress;
++    DriveRestartGate restart_gate;
+ 
+@@ -479,4 +480,26 @@ static void handle_policy_event(
+         }
+     }
+ 
++    if (event->type == SUPERVISOR_EVENT_RESET &&
++        (context->machine.activeState == ROBOT_STATE_FAULT ||
++         context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP) &&
++        !context->restart_gate.authorized)
++    {
++        /* A state-machine RESET cannot clear a revoked boot authorization. */
++        return;
++    }
++
++    /* Revoke synchronously, before a later RESET/HMI queue message can
++     * restore a motion state in this same 500 Hz Supervisor cycle. */
++    if (event->type == SUPERVISOR_EVENT_PROTECTIVE_STOP_ASSERTED ||
++        event->type == SUPERVISOR_EVENT_ESTOP_ASSERTED ||
++        event->type == SUPERVISOR_EVENT_FAULT_DETECTED ||
++        event->type == SUPERVISOR_EVENT_STATE_FAILED)
++    {
++        drive_restart_gate_inhibit(&context->restart_gate);
++        context->boot.drive_enable_authorized = false;
++        canopen_master_set_drive_permission(context->config.canopen_master,
++                                            false);
++    }
++
+     RobotStateId before = context->machine.activeState;
+@@ -644,3 +667,4 @@ static void handle_message(
+              * Apply only in TEACHING with fresh motion authorization. */
+             if (context->machine.activeState == ROBOT_STATE_TEACHING &&
++                context->restart_gate.authorized &&
+                 context->machine.safety.statusValid &&
+@@ -659,7 +683,19 @@ static void handle_message(
+             state_machine_update_safety(
+                 &context->machine,
+                 &message->data.safety
+             );
++            /* A bad safety update is revocation now, not at the next tick:
++             * another queued command in this cycle must not bypass it. */
++            if (context->restart_gate.authorized &&
++                (!context->machine.safety.statusValid ||
++                 context->machine.safety.estopActive ||
++                 context->machine.safety.protectiveStopActive ||
++                 context->machine.safety.globalFaultActive)) {
++                drive_restart_gate_inhibit(&context->restart_gate);
++                context->boot.drive_enable_authorized = false;
++                canopen_master_set_drive_permission(
++                    context->config.canopen_master, false);
++            }
+             break;
+ 
+         case SUPERVISOR_MESSAGE_TEACHING_EVENT:
+@@ -1163,5 +1199,42 @@ static void supervisor_task_entry(void *argument)
+         }
+         /* Retries a deferred validation entry without waiting or sleeping.
+          * No-op in an already entered state. */
+         enter_active_state(context);
++        const bool was_authorized = context->restart_gate.authorized;
++        bool drive_permission = false;
++        if (context->machine.activeState == ROBOT_STATE_FAULT ||
++            context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)
++        {
++            drive_restart_gate_inhibit(&context->restart_gate);
++        }
++        else if (context->restart_gate.authorized ||
++            (context->machine.activeState == ROBOT_STATE_BOOT &&
++             context->boot.phase == BOOT_PHASE_WAIT_AUTHORIZATION))
++        {
++            /* Safety snapshot must be independently produced and current.
++             * Board provider is responsible for live input freshness. */
++            const RobotSafetySnapshot *s = &context->machine.safety;
++            const DriveRestartSystemSample input = {
++                .communication_ready = canopen_master_all_heartbeats_operational(
++                    context->config.canopen_master),
++                .state_ready = true,
++                .safety_valid = s->statusValid,
++                .estop_clear = !s->estopActive,
++                .protective_stop_clear = !s->protectiveStopActive,
++                .fault_clear = !s->globalFaultActive,
++                .ipc_valid = context->config.ipc != NULL &&
++                             ipc_valid(context->config.ipc),
++                .preenable_status_checked = context->boot.preenable_status_checked
++            };
++            drive_permission = drive_restart_gate_tick(
++                &context->restart_gate, &context->config.reset_diagnostics,
++                &context->config.drive_restart_board, &input);
++        }
++        context->boot.drive_enable_authorized = drive_permission;
++        canopen_master_set_drive_permission(context->config.canopen_master,
++                                           drive_permission);
++        if (was_authorized && !drive_permission &&
++            context->machine.activeState != ROBOT_STATE_FAULT &&
++            context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
++            emit_step_failure(context, 0xE0B1U);
+         if (controller_hb_ok ||
+@@ -1306,3 +1379,4 @@ bool supervisor_task_init(const SupervisorTaskConfig *config)
+ 
+     memset(&g_supervisor, 0, sizeof(g_supervisor));
++    drive_restart_gate_init(&g_supervisor.restart_gate);
+     g_supervisor.config = *config;
+diff --git a/Firmware/STM32H745/CM7/Core/Inc/application_supervisor.h b/Firmware/STM32H745/CM7/Core/Inc/application_supervisor.h
+--- a/Firmware/STM32H745/CM7/Core/Inc/application_supervisor.h
++++ b/Firmware/STM32H745/CM7/Core/Inc/application_supervisor.h
+@@ -10,4 +10,7 @@
+ bool application_supervisor_board_configure(SupervisorTaskConfig *config);
+ /* Target-specific composition of the existing supervisor, not a new RTOS. */
+ bool application_supervisor_start(const SupervisorTaskConfig *config);
++/* CM7 startup owns the capture and stores evidence before clearing RCC flags. */
++const ResetDiagnostics *application_supervisor_reset_info(void);
++
+ /* Called from CubeMX HAL_TIM_PeriodElapsedCallback; ignores TIM6. */
+diff --git a/Firmware/STM32H745/CM7/Core/Src/application_supervisor.c b/Firmware/STM32H745/CM7/Core/Src/application_supervisor.c
+--- a/Firmware/STM32H745/CM7/Core/Src/application_supervisor.c
++++ b/Firmware/STM32H745/CM7/Core/Src/application_supervisor.c
+@@ -296,4 +296,7 @@ bool application_supervisor_board_configure(SupervisorTaskConfig *config)
+     }
+ 
+     *config = board->supervisor;
++    /* Board cannot forge the captured reset evidence. CM7 is the only owner. */
++    config->reset_diagnostics = *application_supervisor_reset_info();
++
+     /* Replace any board-supplied observer function pointers with the
+diff --git a/Firmware/STM32H745/CM7/Core/Src/main.c b/Firmware/STM32H745/CM7/Core/Src/main.c
+--- a/Firmware/STM32H745/CM7/Core/Src/main.c
++++ b/Firmware/STM32H745/CM7/Core/Src/main.c
+@@ -75,4 +75,5 @@ const osThreadAttr_t defaultTask_attributes = {
+ };
+ /* USER CODE BEGIN PV */
++static ResetDiagnostics g_cm7_reset_evidence;
+ 
+ /* USER CODE END PV */
+@@ -96,4 +97,8 @@ void StartDefaultTask(void *argument);
+ /* Private user code ---------------------------------------------------------*/
+ /* USER CODE BEGIN 0 */
++const ResetDiagnostics *application_supervisor_reset_info(void)
++{
++  return &g_cm7_reset_evidence;
++}
+ 
+ /* USER CODE END 0 */
+@@ -106,5 +111,10 @@ int main(void)
+ {
+ 
+   /* USER CODE BEGIN 1 */
++  /* CM7 owns RCC reset evidence. Capture BEFORE HAL/clock startup and BEFORE
++   * CM7 releases CM4 through HSEM. Do not read cleared flags on CM4. */
++  const uint32_t raw_reset = RCC->RSR;
++  g_cm7_reset_evidence = reset_diagnostics_from_raw(raw_reset);
++  __HAL_RCC_CLEAR_RESET_FLAGS();
+ 
+   /* USER CODE END 1 */
+diff --git a/.github/workflows/stm32-firmware.yml b/.github/workflows/stm32-firmware.yml
+--- a/.github/workflows/stm32-firmware.yml
++++ b/.github/workflows/stm32-firmware.yml
+@@ -39,6 +39,8 @@ jobs:
+           python3 Firmware/Tests/check_stage_a_configuration.py --self-test
+           python3 Firmware/Tests/run_supervision_policy_tests.py
+           python3 Firmware/Tests/check_c2a_wiring.py
++          python3 Firmware/Tests/run_drive_restart_gate_tests.py
++          python3 Firmware/Tests/check_c2b_wiring.py
+           bash Firmware/Tests/check_shared_layout.sh
+           bash Firmware/Tests/check_sram4_linkers.sh
+           bash Firmware/Tests/check_intercore_startup_compile.sh
+diff --git a/Firmware/STM32H745/Common/Inc/reset_diagnostics.h b/Firmware/STM32H745/Common/Inc/reset_diagnostics.h
+new file mode 100644
+index 0000000..88db447
+--- /dev/null
++++ b/Firmware/STM32H745/Common/Inc/reset_diagnostics.h
+@@ -0,0 +1,85 @@
++#ifndef RESET_DIAGNOSTICS_H
++#define RESET_DIAGNOSTICS_H
++/* STM32H745 RM0399, RCC_RSR (0x0D0), RCC_C1_RSR (0x130),
++ * RCC_C2_RSR (0x190). RMVF is bit 16. Masks are for read-only diagnosis;
++ * only the CM7 early-startup owner may clear flags after capture. */
++#include <stdbool.h>
++#include <stdint.h>
++
++enum {
++    RESET_FLAG_C1 = UINT32_C(1) << 17,
++    RESET_FLAG_C2 = UINT32_C(1) << 18,
++    RESET_FLAG_D1 = UINT32_C(1) << 19,
++    RESET_FLAG_D2 = UINT32_C(1) << 20,
++    RESET_FLAG_BOR = UINT32_C(1) << 21,
++    RESET_FLAG_PIN = UINT32_C(1) << 22,
++    RESET_FLAG_POR = UINT32_C(1) << 23,
++    RESET_FLAG_SOFT1 = UINT32_C(1) << 24,
++    RESET_FLAG_SOFT2 = UINT32_C(1) << 25,
++    RESET_FLAG_IWDG1 = UINT32_C(1) << 26,
++    RESET_FLAG_IWDG2 = UINT32_C(1) << 27,
++    RESET_FLAG_WWDG1 = UINT32_C(1) << 28,
++    RESET_FLAG_WWDG2 = UINT32_C(1) << 29,
++    RESET_FLAG_LPWR1 = UINT32_C(1) << 30,
++    RESET_FLAG_LPWR2 = UINT32_C(1) << 31
++};
++#define RESET_FLAG_ALL (UINT32_C(0xFFFE0000))
++#define RESET_FLAG_RMVF (UINT32_C(1) << 16)
++
++typedef enum {
++    RESET_CAUSE_UNKNOWN = 0,
++    RESET_CAUSE_POWER_ON,
++    RESET_CAUSE_BROWNOUT,
++    RESET_CAUSE_SOFTWARE,
++    RESET_CAUSE_WATCHDOG,
++    RESET_CAUSE_PIN,
++    RESET_CAUSE_CPU_OR_DOMAIN,
++    RESET_CAUSE_MULTIPLE
++} ResetCause;
++
++typedef struct {
++    uint32_t raw_rsr;
++    ResetCause cause;
++    bool captured;
++} ResetDiagnostics;
++
++static inline ResetCause reset_diagnostics_classify(uint32_t raw)
++{
++    const uint32_t flags = raw & ~RESET_FLAG_RMVF;
++    const uint32_t watchdog = RESET_FLAG_IWDG1 | RESET_FLAG_IWDG2 |
++        RESET_FLAG_WWDG1 | RESET_FLAG_WWDG2;
++    const uint32_t software = RESET_FLAG_SOFT1 | RESET_FLAG_SOFT2;
++    if (flags == 0U || (flags & ~RESET_FLAG_ALL) != 0U)
++        return RESET_CAUSE_UNKNOWN;
++    /* These groups may include PIN/C1/C2/D1/D2 as secondary evidence.
++     * POR/BOR may coexist on a normal power-on reset. */
++    if ((flags & watchdog) != 0U)
++        return ((flags & (RESET_FLAG_POR | RESET_FLAG_BOR | software)) != 0U)
++            ? RESET_CAUSE_MULTIPLE : RESET_CAUSE_WATCHDOG;
++    if ((flags & software) != 0U)
++        return ((flags & (RESET_FLAG_POR | RESET_FLAG_BOR)) != 0U)
++            ? RESET_CAUSE_MULTIPLE : RESET_CAUSE_SOFTWARE;
++    if ((flags & RESET_FLAG_POR) != 0U)
++        return RESET_CAUSE_POWER_ON;
++    if ((flags & RESET_FLAG_BOR) != 0U)
++        return RESET_CAUSE_BROWNOUT;
++    if ((flags & (RESET_FLAG_LPWR1 | RESET_FLAG_LPWR2)) != 0U)
++        return RESET_CAUSE_CPU_OR_DOMAIN;
++    if ((flags & RESET_FLAG_PIN) != 0U)
++        return RESET_CAUSE_PIN;
++    if ((flags & (RESET_FLAG_C1 | RESET_FLAG_C2 |
++                  RESET_FLAG_D1 | RESET_FLAG_D2)) != 0U)
++        return RESET_CAUSE_CPU_OR_DOMAIN;
++    return RESET_CAUSE_UNKNOWN;
++}
++
++static inline ResetDiagnostics reset_diagnostics_from_raw(uint32_t raw)
++{
++    const ResetDiagnostics snapshot = {
++        .raw_rsr = raw,
++        .cause = reset_diagnostics_classify(raw),
++        .captured = true
++    };
++    return snapshot;
++}
++#endif
+diff --git a/Firmware/STM32H745/Common/Inc/drive_restart_gate.h b/Firmware/STM32H745/Common/Inc/drive_restart_gate.h
+new file mode 100644
+index 0000000..ba0285b
+--- /dev/null
++++ b/Firmware/STM32H745/Common/Inc/drive_restart_gate.h
+@@ -0,0 +1,117 @@
++#ifndef DRIVE_RESTART_GATE_H
++#define DRIVE_RESTART_GATE_H
++/* Pure C2B policy. Software decision only: NOT a functional-safety channel.
++ * `operator_pressed` MUST be a live physical-board input, never an HMI,
++ * retained memory or IPC command. Missing callback is always denied. */
++#include <stdbool.h>
++#include <stdint.h>
++#include "reset_diagnostics.h"
++#include "supervision_progress.h"
++
++typedef struct {
++    /* All fields must refer to the CURRENT boot/session and CURRENT cycle. */
++    bool valid;
++    bool operator_pressed;
++    bool board_ready;
++    bool reset_reviewed;
++    bool ipc_session_fresh;
++    bool old_commands_discarded;
++    bool feedback_revalidated;
++} DriveRestartBoardSample;
++
++typedef struct {
++    bool (*read)(void *context, DriveRestartBoardSample *out);
++    void *context;
++} DriveRestartBoardPort;
++
++typedef struct {
++    bool authorized;
++    bool inhibited;
++    bool observed_release;
++    bool previous_pressed;
++} DriveRestartGate;
++
++typedef struct {
++    bool communication_ready;
++    bool state_ready;
++    bool safety_valid;
++    bool estop_clear;
++    bool protective_stop_clear;
++    bool fault_clear;
++    bool ipc_valid;
++    bool preenable_status_checked;
++} DriveRestartSystemSample;
++
++static inline void drive_restart_gate_init(DriveRestartGate *gate)
++{
++    if (gate == NULL) return;
++    *gate = (DriveRestartGate){0};
++}
++
++static inline void drive_restart_gate_inhibit(DriveRestartGate *gate)
++{
++    if (gate == NULL) return;
++    gate->authorized = false;
++    gate->inhibited = true; /* Latch until NEW BOOT: RESET is not approval. */
++    gate->observed_release = false;
++    gate->previous_pressed = false;
++}
++
++static inline bool drive_restart_gate_tick(
++    DriveRestartGate *gate, const ResetDiagnostics *reset,
++    const DriveRestartBoardPort *port,
++    const DriveRestartSystemSample *system)
++{
++    if (gate == NULL || gate->inhibited) return false;
++    DriveRestartBoardSample board = {0};
++    if (reset == NULL || !reset->captured ||
++        port == NULL || port->read == NULL ||
++        system == NULL || !port->read(port->context, &board) ||
++        !board.valid || !board.board_ready ||
++        !system->communication_ready || !system->state_ready ||
++        !system->safety_valid || !system->estop_clear ||
++        !system->protective_stop_clear || !system->fault_clear ||
++        !system->ipc_valid || !system->preenable_status_checked)
++    {
++        if (gate->authorized) drive_restart_gate_inhibit(gate);
++        else { gate->observed_release = false; gate->previous_pressed = false; }
++        return false;
++    }
++    SupervisionResetReason reason = SUP_RESET_OTHER;
++    switch (reset->cause) {
++        case RESET_CAUSE_POWER_ON:
++            reason = SUP_RESET_EXPECTED_POWER_ON; break;
++        case RESET_CAUSE_BROWNOUT:
++            reason = SUP_RESET_BROWNOUT; break;
++        case RESET_CAUSE_WATCHDOG:
++            reason = SUP_RESET_WATCHDOG; break;
++        default: reason = SUP_RESET_OTHER; break;
++    }
++    /* C2A restart policy additionally blocks stale IPC and no-approval cases. */
++    const bool policy_without_operator = supervision_restart_authorized(
++        &(SupervisionRestartInputs){
++            .reason = reason,
++            .reset_cause_reviewed = board.reset_reviewed,
++            .fresh_ipc_session = board.ipc_session_fresh,
++            .stale_commands_discarded = board.old_commands_discarded,
++            .independent_safety_ready = board.board_ready,
++            .drive_feedback_revalidated = board.feedback_revalidated,
++            .operator_reauthorized = true
++        });
++    if (!policy_without_operator) {
++        if (gate->authorized) drive_restart_gate_inhibit(gate);
++        else { gate->observed_release = false; gate->previous_pressed = false; }
++        return false;
++    }
++    if (!gate->authorized) {
++        /* A held-high input at startup does NOT authorize. A low sample must
++         * occur AFTER all required startup conditions became valid. */
++        if (!board.operator_pressed) gate->observed_release = true;
++        if (gate->observed_release && !gate->previous_pressed &&
++            board.operator_pressed)
++            gate->authorized = true;
++    }
++    gate->previous_pressed = board.operator_pressed;
++    return gate->authorized;
++}
++#endif
+diff --git a/Firmware/Tests/test_drive_restart_gate.c b/Firmware/Tests/test_drive_restart_gate.c
+new file mode 100644
+index 0000000..56886ec
+--- /dev/null
++++ b/Firmware/Tests/test_drive_restart_gate.c
+@@ -0,0 +1,122 @@
++#include "drive_restart_gate.h"
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++
++static DriveRestartBoardSample board;
++static unsigned reads;
++static bool read_board(void *ctx, DriveRestartBoardSample *out)
++{
++    (void)ctx;
++    ++reads;
++    *out = board;
++    return true;
++}
++static bool denied_board(void *ctx, DriveRestartBoardSample *out)
++{ (void)ctx; (void)out; return false; }
++static const DriveRestartBoardPort provider = {read_board, 0};
++static const DriveRestartBoardPort denied_provider = {denied_board, 0};
++static DriveRestartSystemSample good = {true,true,true,true,true,true,true,true};
++#define DENIED(g,r,p,s) assert(!drive_restart_gate_tick((g),(r),(p),(s)))
++#define ALLOWED(g,r,p,s) assert(drive_restart_gate_tick((g),(r),(p),(s)))
++
++static void base(void)
++{
++    board = (DriveRestartBoardSample){true,false,true,false,true,true,true};
++    reads = 0;
++}
++static void startup_case(uint32_t raw, bool reviewed)
++{
++    ResetDiagnostics reset = reset_diagnostics_from_raw(raw);
++    DriveRestartGate g;
++    drive_restart_gate_init(&g);
++    base(); board.reset_reviewed = reviewed;
++    DENIED(&g,&reset,&provider,&good);
++    board.operator_pressed = true;
++    ALLOWED(&g,&reset,&provider,&good);
++    assert(g.authorized && reads == 2);
++}
++int main(void)
++{
++    /* Power-on flags can include BOR/PIN/core/domain flags concurrently. */
++    startup_case(RESET_FLAG_POR | RESET_FLAG_BOR | RESET_FLAG_PIN |
++                 RESET_FLAG_C1 | RESET_FLAG_C2, false);
++    startup_case(RESET_FLAG_IWDG1 | RESET_FLAG_PIN, true);
++    startup_case(RESET_FLAG_WWDG2 | RESET_FLAG_C2, true);
++    startup_case(RESET_FLAG_BOR | RESET_FLAG_PIN, true);
++    startup_case(RESET_FLAG_SOFT1 | RESET_FLAG_PIN, true);
++    startup_case(RESET_FLAG_SOFT2 | RESET_FLAG_C2, true);
++    startup_case(RESET_FLAG_C1, true);
++    startup_case(RESET_FLAG_POR | RESET_FLAG_SOFT1, true);
++    assert(reset_diagnostics_classify(RESET_FLAG_POR) == RESET_CAUSE_POWER_ON);
++    assert(reset_diagnostics_classify(RESET_FLAG_BOR) == RESET_CAUSE_BROWNOUT);
++    assert(reset_diagnostics_classify(RESET_FLAG_IWDG1) == RESET_CAUSE_WATCHDOG);
++    assert(reset_diagnostics_classify(RESET_FLAG_SOFT1) == RESET_CAUSE_SOFTWARE);
++    assert(reset_diagnostics_classify(RESET_FLAG_C2) == RESET_CAUSE_CPU_OR_DOMAIN);
++    assert(reset_diagnostics_classify(0U) == RESET_CAUSE_UNKNOWN);
++    assert(reset_diagnostics_classify(RESET_FLAG_POR | RESET_FLAG_SOFT1) == RESET_CAUSE_MULTIPLE);
++
++    ResetDiagnostics r = reset_diagnostics_from_raw(RESET_FLAG_POR);
++    DriveRestartGate g;
++    drive_restart_gate_init(&g);
++    base();
++    DENIED(&g,&r,NULL,&good); /* absent production provider */
++    DENIED(&g,&r,&denied_provider,&good);
++    board.operator_pressed = true; /* stale/held input from prior boot */
++    DENIED(&g,&r,&provider,&good);
++    DENIED(&g,&r,&provider,&good);
++    board.operator_pressed = false;
++    DENIED(&g,&r,&provider,&good);
++    board.operator_pressed = true;
++    ALLOWED(&g,&r,&provider,&good);
++    /* Falling edge is not withdrawal; independent readiness is. */
++    board.operator_pressed = false;
++    ALLOWED(&g,&r,&provider,&good);
++    board.board_ready = false;
++    DENIED(&g,&r,&provider,&good);
++    board.board_ready = true;
++    board.operator_pressed = false;
++    DENIED(&g,&r,&provider,&good); /* latched inhibition */
++    board.operator_pressed = true;
++    DENIED(&g,&r,&provider,&good);
++    drive_restart_gate_init(&g);
++    base(); board.ipc_session_fresh = false;
++    DENIED(&g,&r,&provider,&good);
++    board.ipc_session_fresh = true;
++    board.old_commands_discarded = false;
++    DENIED(&g,&r,&provider,&good);
++    board.old_commands_discarded = true;
++    board.feedback_revalidated = false;
++    DENIED(&g,&r,&provider,&good);
++    board.feedback_revalidated = true;
++    DriveRestartSystemSample broken = good;
++    broken.estop_clear = false;
++    DENIED(&g,&r,&provider,&broken);
++    board.operator_pressed = true; /* never observed release while ready */
++    DENIED(&g,&r,&provider,&good);
++    board.operator_pressed = false;
++    DENIED(&g,&r,&provider,&good);
++    board.operator_pressed = true;
++    ALLOWED(&g,&r,&provider,&good);
++    broken = good;
++    broken.fault_clear = false;
++    DENIED(&g,&r,&provider,&broken);
++    DENIED(&g,&r,&provider,&good); /* reset cannot bypass */
++    drive_restart_gate_init(&g);
++    base();
++    ResetDiagnostics missing = {0};
++    DENIED(&g,&missing,&provider,&good);
++    r = reset_diagnostics_from_raw(RESET_FLAG_IWDG1);
++    board.reset_reviewed = false;
++    DENIED(&g,&r,&provider,&good);
++    board.operator_pressed = true;
++    DENIED(&g,&r,&provider,&good);
++    board.reset_reviewed = true;
++    DENIED(&g,&r,&provider,&good); /* held approval cannot become fresh */
++    board.operator_pressed = false;
++    DENIED(&g,&r,&provider,&good);
++    board.operator_pressed = true;
++    ALLOWED(&g,&r,&provider,&good);
++    puts("PASS: C2B reset classification and live-edge default-deny policy");
++    return 0;
++}
+diff --git a/Firmware/Tests/run_drive_restart_gate_tests.py b/Firmware/Tests/run_drive_restart_gate_tests.py
+new file mode 100644
+index 0000000..5182608
+--- /dev/null
++++ b/Firmware/Tests/run_drive_restart_gate_tests.py
+@@ -0,0 +1,94 @@
++#!/usr/bin/env python3
++"""Execute genuine CM7-portable C2B policy and deliberate mutations.
++
++This does NOT claim a CM7/CM4 link, a full BOOT integration test, or real STO.
++Uses the production C2A header from the repository, unchanged.
++"""
++from pathlib import Path
++import subprocess
++import tempfile
++import shutil
++
++root = Path(__file__).resolve().parents[2]
++include_dir = root / "Firmware/STM32H745/Common/Inc"
++source = root / "Firmware/Tests/test_drive_restart_gate.c"
++policy = include_dir / "drive_restart_gate.h"
++reset = include_dir / "reset_diagnostics.h"
++supervision = include_dir / "supervision_progress.h"
++mutations = {
++    "require released input before rise": (
++        "gate->observed_release && !gate->previous_pressed &&",
++        "true &&"),
++    "revocation latch": (
++        "if (gate->authorized) drive_restart_gate_inhibit(gate);",
++        "if (false) drive_restart_gate_inhibit(gate);"),
++    "current reset/IPC policy": (
++        "if (!policy_without_operator) {",
++        "if (policy_without_operator && false) {"),
++    "live input provider": (
++        "port == NULL || port->read == NULL ||",
++        "false ||"),
++    "permanent restart inhibition": (
++        "if (gate == NULL || gate->inhibited) return false;",
++        "if (gate == NULL) return false;"),
++}
++
++def run_variant(header: str, label: str, should_pass: bool):
++    with tempfile.TemporaryDirectory(prefix="c2b_gate_") as d:
++        d = Path(d)
++        for h in (supervision, reset):
++            shutil.copyfile(h, d / h.name)
++        (d / "drive_restart_gate.h").write_text(header)
++        binary = d / "test"
++        compile_result = subprocess.run(
++            ["gcc", "-std=c11", "-O0", "-g", "-Wall", "-Wextra", "-Werror",
++             "-I", str(d), str(source), "-o", str(binary)],
++            capture_output=True, text=True)
++        if compile_result.returncode:
++            raise RuntimeError(label + ": C compilation failed:\n" + compile_result.stderr)
++        res = subprocess.run([str(binary)], capture_output=True, text=True)
++        if (res.returncode == 0) != should_pass:
++            raise AssertionError(f"{label}: unexpected exit {res.returncode}: {res.stdout} {res.stderr}")
++        print("PASS:", label, "baseline" if should_pass else "mutation rejected")
++
++original = policy.read_text()
++run_variant(original, "live policy", True)
++for label, (before, after) in mutations.items():
++    assert original.count(before) >= 1, f"mutation target absent: {label}"
++    run_variant(original.replace(before, after), label, False)
++print("PASS: all C2B host policy mutations killed")
++
++# Also exercise actual firmware BOOT decision code through a mock commissioning
++# port, not just a self-contained policy header. Do not weaken on failure.
++boot_src = root / "Firmware/STM32H745/CM7/Application/StateMachine/States/state_boot.c"
++cia_src = root / "ServoDrive/CiA402/cia402.c"
++boot_test = root / "Firmware/Tests/test_c2b_boot_path.c"
++with tempfile.TemporaryDirectory(prefix="c2b_boot_") as tmp:
++    cmd = ["gcc", "-std=c11", "-O0", "-g", "-Wall", "-Wextra", "-Werror",
++           "-I", str(root / "Firmware/STM32H745/CM7/Application/StateMachine/States"),
++           "-I", str(root / "StateMachine/States"),
++           "-I", str(root / "ServoDrive/CiA402"),
++           str(boot_src), str(cia_src), str(boot_test), "-o", str(Path(tmp)/"boot")]
++    compile_result = subprocess.run(cmd, capture_output=True, text=True)
++    if compile_result.returncode != 0:
++        raise RuntimeError("actual BOOT compile failed:\n" + compile_result.stderr)
++    result = subprocess.run([str(Path(tmp)/"boot")], capture_output=True, text=True)
++    if result.returncode != 0:
++        raise AssertionError("actual BOOT test failed: " + result.stderr)
++    print(result.stdout.strip())
++    # Deliberately remove the mandatory approval in the ENABLE path. The
++    # production test must then fail; no success-only mock is acceptable.
++    source = boot_src.read_text()
++    target = "if (!boot->drive_enable_authorized)"
++    assert source.count(target) >= 2, "must have wait and emission gate"
++    mutated = source.replace(target, "if (false)")
++    mutant_path = Path(tmp)/"state_boot.c"
++    mutant_path.write_text(mutated)
++    cmd[cmd.index(str(boot_src))] = str(mutant_path)
++    compile_result = subprocess.run(cmd, capture_output=True, text=True)
++    if compile_result.returncode != 0:
++        raise RuntimeError("BOOT mutant failed compilation:\n" + compile_result.stderr)
++    result = subprocess.run([str(Path(tmp)/"boot")], capture_output=True, text=True)
++    if result.returncode == 0:
++        raise AssertionError("BOOT emission gate mutation survived")
++    print("PASS: BOOT enable-gate removal mutation rejected")
+diff --git a/Firmware/Tests/check_c2b_wiring.py b/Firmware/Tests/check_c2b_wiring.py
+new file mode 100644
+index 0000000..b4d3c11
+--- /dev/null
++++ b/Firmware/Tests/check_c2b_wiring.py
+@@ -0,0 +1,30 @@
++#!/usr/bin/env python3
++"""Supplementary source-graph integration assertions; not executable safety proof.
++
++The live portable policy and mutations run separately in
++run_drive_restart_gate_tests.py; this rejects accidental deletion of the
++production call sites that those portable tests cannot directly observe.
++"""
++from pathlib import Path
++root = Path(__file__).resolve().parents[2]
++cm7 = root / 'Firmware/STM32H745/CM7'
++boot = (cm7 / 'Application/StateMachine/States/state_boot.c').read_text()
++bh = (cm7 / 'Application/StateMachine/States/state_boot.h').read_text()
++master = (cm7 / 'Application/CANComm/CANopen/canopen_master.c').read_text()
++sup = (cm7 / 'Application/StateMachine/supervisor_task.c').read_text()
++main = (cm7 / 'Core/Src/main.c').read_text()
++app = (cm7 / 'Core/Src/application_supervisor.c').read_text()
++assert 'BOOT_PHASE_WAIT_AUTHORIZATION' in bh
++assert 'case BOOT_PHASE_PRE_ENABLE_STATUS:' in boot
++assert 'case BOOT_PHASE_WAIT_AUTHORIZATION:' in boot
++assert 'if (!boot->drive_enable_authorized)' in boot
++assert boot.index('case BOOT_PHASE_WAIT_AUTHORIZATION:') < boot.index('case BOOT_PHASE_ENABLE_DRIVES:')
++assert master.count('!master->drive_command_permission') >= 3
++assert 'controlword != 0x0000U && controlword != 0x0002U' in master
++assert 'drive_restart_gate_tick(' in sup
++assert 'canopen_master_set_drive_permission(' in sup
++assert 'drive_restart_gate_inhibit(&context->restart_gate);' in sup
++assert 'context->restart_gate.authorized &&' in sup
++assert main.index('g_cm7_reset_evidence = reset_diagnostics_from_raw(raw_reset)') < main.index('__HAL_RCC_CLEAR_RESET_FLAGS()')
++assert 'config->reset_diagnostics = *application_supervisor_reset_info();' in app
++print('PASS: C2B production wiring anchors (supplementary, non-executable)')
+diff --git a/Firmware/Tests/test_c2b_boot_path.c b/Firmware/Tests/test_c2b_boot_path.c
+new file mode 100644
+index 0000000..7d85144
+--- /dev/null
++++ b/Firmware/Tests/test_c2b_boot_path.c
+@@ -0,0 +1,106 @@
++/* Executes the PRODUCTION firmware state_boot.c with mocked ports.
++ * No hardware is connected, and no physical stop claim is implied. */
++#include "state_boot.h"
++#include "cia402.h"
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++
++typedef struct {
++    uint32_t reads;
++    uint32_t writes;
++    uint32_t targets;
++    DriveCommissionOperation last_operation;
++    uint16_t returned_status;
++} Mock;
++static bool yes(void *ctx) { return ctx != NULL; }
++static void reset_runtime(void *ctx, uint32_t ms) {(void)ctx; (void)ms;}
++static bool nmt(void *ctx, DriveNetworkCommand c) {(void)c; return ctx != NULL;}
++static bool heartbeat(void *ctx, DriveNodeHeartbeatState s)
++{ (void)s; return ctx != NULL; }
++static bool start_sdo(void *ctx, DriveCommissionOperation op,
++                      size_t axis, uint32_t arg, uint32_t now)
++{
++    Mock *m = (Mock*)ctx;
++    (void)axis; (void)arg; (void)now;
++    m->last_operation = op;
++    if (op == DRIVE_COMMISSION_WRITE_CONTROLWORD) ++m->writes;
++    if (op == DRIVE_COMMISSION_READ_STATUSWORD) ++m->reads;
++    return true;
++}
++static DriveOperationResult sdo_result(void *ctx)
++{
++    Mock *m = (Mock*)ctx;
++    DriveOperationResult r = {0};
++    r.status = DRIVE_OPERATION_COMPLETE;
++    r.has_response = true;
++    r.is_read = m->last_operation == DRIVE_COMMISSION_READ_STATUSWORD;
++    r.is_write_ok = !r.is_read;
++    r.data_size = r.is_read ? 2U : 0U;
++    r.value = m->returned_status;
++    return r;
++}
++static void sdo_clear(void *ctx) {(void)ctx;}
++static bool jp(void *ctx, uint32_t now) {(void)now; return ctx != NULL;}
++static bool jr(void *ctx, size_t axis, JointDriveAxisFeedback *feedback)
++{ (void)axis; (void)ctx; *feedback = (JointDriveAxisFeedback){0}; return true; }
++static bool jt(void *ctx, const int32_t *target, size_t n)
++{ (void)target; (void)n; ++((Mock*)ctx)->targets; return true; }
++static uint32_t js(void *ctx, size_t axis)
++{(void)ctx; (void)axis; return 0U;}
++static DriveCommissioningPort make_commissioning(Mock *m)
++{
++    DriveCommissioningPort p = {0};
++    p.context=m; p.is_initialized=yes; p.is_configured=yes;
++    p.reset_runtime=reset_runtime; p.send_network_command=nmt;
++    p.all_heartbeat_state=heartbeat; p.begin_operation=start_sdo;
++    p.operation_result=sdo_result; p.clear_operation=sdo_clear;
++    return p;
++}
++static JointDrivePort make_joint(Mock *m)
++{
++    JointDrivePort p={0}; p.context=m; p.is_configured=yes;
++    p.poll=jp; p.ready_for_motion=jp; p.healthy=jp;
++    p.all_feedback_valid=yes; p.read_axis=jr;
++    p.send_targets=jt; p.feedback_sequence=js; return p;
++}
++int main(void)
++{
++    Mock m={0}; m.returned_status=CIA402_STATE_SWITCH_ON_DISABLED;
++    DriveCommissioningPort c=make_commissioning(&m);
++    JointDrivePort d=make_joint(&m);
++    BootState b;
++    state_boot_enter(&b);
++    /* Read six pre-enable statuswords and stop before any 6040 write. */
++    b.phase=BOOT_PHASE_PRE_ENABLE_STATUS;
++    for (unsigned i=0;i<13U;i++)
++        assert(state_boot_step(&b,&c,&d,i*2U)==STATE_STEP_RUNNING);
++    assert(b.phase==BOOT_PHASE_WAIT_AUTHORIZATION);
++    assert(b.preenable_status_checked && m.reads==6U && m.writes==0U);
++    for (unsigned i=0;i<100U;i++)
++        assert(state_boot_step(&b,&c,&d,50U+i*2U)==STATE_STEP_RUNNING);
++    assert(b.phase==BOOT_PHASE_WAIT_AUTHORIZATION && m.writes==0U);
++    /* Only a fresh external gate decision may advance BOOT. */
++    b.drive_enable_authorized=true;
++    assert(state_boot_step(&b,&c,&d,300U)==STATE_STEP_RUNNING);
++    assert(b.phase==BOOT_PHASE_ENABLE_DRIVES);
++    assert(state_boot_step(&b,&c,&d,302U)==STATE_STEP_RUNNING); /* read begin */
++    assert(state_boot_step(&b,&c,&d,304U)==STATE_STEP_RUNNING); /* read complete */
++    assert(state_boot_step(&b,&c,&d,306U)==STATE_STEP_RUNNING); /* write begin */
++    assert(m.writes==1U);
++    b.drive_enable_authorized=false;
++    assert(state_boot_step(&b,&c,&d,308U)==STATE_STEP_FAILED);
++    assert(m.writes==1U && m.targets==0U);
++    /* Directly entering the ENABLE phase with no auth must fail closed. */
++    state_boot_enter(&b); b.phase=BOOT_PHASE_ENABLE_DRIVES;
++    assert(state_boot_step(&b,&c,&d,320U)==STATE_STEP_FAILED);
++    assert(m.writes==1U);
++    /* An already-operation-enabled drive on controller startup is rejected. */
++    state_boot_enter(&b); b.phase=BOOT_PHASE_PRE_ENABLE_STATUS;
++    m.returned_status=CIA402_STATE_OPERATION_ENABLED;
++    assert(state_boot_step(&b,&c,&d,322U)==STATE_STEP_RUNNING);
++    assert(state_boot_step(&b,&c,&d,324U)==STATE_STEP_FAILED);
++    assert(m.writes==1U);
++    puts("PASS: production BOOT path requires authorization before 6040 SDO writes");
++    return 0;
++}

@@ -1,0 +1,1045 @@
+--- /dev/null
++++ b/Firmware/P02_FAULT_CONTAINMENT_REPORT.md
+@@ -0,0 +1,100 @@
++# P02 — Final Director Corrections: Queue Saturation and Guided-Target Quarantine
++
++**Status:** FINAL SOURCE-ONLY UNCOMMITTED CANDIDATE, NOT EXECUTED OR PRODUCTION-VERIFIED. Based on immutable P01 ref `cdd908ed50af780f3d9bbc24b3f2c71e5db3c459`. GitHub `fix/p02-fault-containment` was created at that ref, but **no changes have been committed, pushed, or applied to the branch**. The attached unified patch must be applied locally for execution and independent review.
++
++## Actual production source ownership
++
++- CM7 Supervisor and state dispatch: `Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c`, `state_machine.c`, and `States/*.c`.
++- CM7 CANopen coordinator: `Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c`, with shared `ServoDrive/JointDrive/canopen_joint_drive_port.c` adapter. The top-level `StateMachine` and `CANComm` copies are desktop implementations, not the firmware source-of-truth.
++- CM7 board/timers: `Firmware/STM32H745/CM7/Core/Src/application_supervisor.c`, `main.c`; CM4 IPC/storage: `Firmware/STM32H745/CM4/Core/Src/application_ipc_service.c`, `application_validation_service.c`.
++- The `CM7/.project` and `CM4/.project` linked-source graphs and linked ARM ELFs **must still be checked locally** after patch application.
++
++## Corrected containment matrix
++
++| Priority | Source/detection in production | Intended containment | Recovery | Remaining dependencies |
++|---|---|---|---|---|
++| P0 | BOOT C2B permission: `DriveRestartSystemSample` and `drive_restart_gate_tick` | Require valid motion permission, external communication health, fresh motor heartbeats, pre-enable CiA-402 status, board release/rising edge, IPC, and safety input validity; **do not** require `drivesReady` until BOOT has finished enabling | Original C2B inhibit latch/new BOOT, not ordinary RESET | Safety producer freshness, actual drive enable state uncommissioned |
++| P0 | Partial RPDO4 send failure / failed SYNC in production master | Revoke software CANopen permission in the same call; no later RPDO/SYNC allowed merely because CAN transport recovers | Explicit C2B authorization | Already-sent RPDO cannot be recalled; no physical stopping guarantee |
++| P0 | Unsafe SAFETY snapshot / denied external guided command | Immediate E-stop/protective/fault event and C2B inhibition; capture state-coded error; guided command rejected without any CAN dispatch | New operator session, verified conditions | Physical independent safety chain required |
++| P1 | Guided target queued before unsafe safety update | Retain the bounded deferral/ordering barrier; reject all external guided targets because the physical source is uncommissioned and the message carries no authenticated freshness or origin | No automatic replay of discarded targets | Concurrent post after empty observation is not a hardware safety interlock |
++| P1 | Authorized session, failed `io.read_inputs()` acquisition or an invalid returned snapshot | Fault and revoke before queue handling; no stale raw input reuse | C2B reauthorization | Board adapter is observation-only, not certified E-stop input |
++| P1 | Six-axis feedback/heartbeat lost while active | Poll CAN before software preflight, check health, CiA-402/feedback validity and per-axis age for HOMING/APPROACH; external guided-target commands are denied | Fault with stored state/axis code | Double bounded poll in some states; measure worst-case cycle time |
++| P1 | PATH_EXECUTION feedback freshness | Preserve **existing state-owned 20,000 us** watchdog, with poll before watchdog evaluation; no added approximate 20 ms competing guard | Fault; no automatic restart | TIM2/TPDO timestamps require commissioning |
++| P1 | PAUSED/PATH_VALIDATION/IDLE intervals without SYNC | Continue bounded RX poll and heartbeat/drive validity checks; *do not* fault just because TPDO age exceeds 100 ms where cyclic feedback is not required | Revalidate fresh data before active motion resumes | Servo PDO scheduling configuration unverified |
++| P1 | RESET/HOME during Approach or PathExecution stop | Preserve P01 state-owned controlled-stop acknowledgment and reset arbitration | Fault cannot exit through RESET without C2B gate | Stop callback not physical safety rated |
++| P1 open | CM4 progress stall, IPC session timeout, stale external safety producer | Existing structural `ipc_valid` and `statusValid` checks are insufficient to prove liveness/freshness | Do not automatically reauthorize | Requires validated producer-specific age/session contract |
++| P2 open | First-fault diagnostic overwritten by later events | Future latched first-fault record and trace; unchanged here | Engineering review | No durable log yet |
++
++## BOOT dependency and fix
++
++`state_boot.c` phases `WAIT_OPERATIONAL_HEARTBEAT` -> `PRE_ENABLE_STATUS` -> `WAIT_AUTHORIZATION` -> `ENABLE_DRIVES` -> `READ_POSITION_FEEDBACK` -> `INITIAL_PDO_EXCHANGE` -> `VERIFY_CYCLIC_COMMUNICATION`. The original `DriveRestartSystemSample` only assigned `safety_valid = s->statusValid` and used the operational-heartbeat state without checking the independent snapshot's `motionPermitted` and `communicationHealthy` or heartbeat freshness in that C2B sample. The revision constructs `.safety_valid = statusValid && motionPermitted`; `.communication_ready = canopen_master_healthy(now_ms) && communicationHealthy`; `.state_ready` requires `drivesReady` only **after BOOT**, not during authorization/drive enabling. The BOOT SAFETY message handler also excludes `drivesReady=false` from fault triggers until leaving BOOT; loss of motion permission, communication, or snapshot validity after authorization still faults. Actual drive feedback/CiA-402 readiness is still checked in BOOT and motion states. The existing C2B board release/rising edge and reset evidence remain unchanged.
++
++## CAN monitoring and queue ordering
++
++`supervisor_motion_containment_check` polls the real `JointDrivePort` (production adapter -> CANopen coordinator) before reading heartbeat/axis status. It does not call flash/storage, wait, retry or change physical pins. Existing state modules may also call poll; each call is bounded by `CANOPEN_MASTER_MAX_RX_PER_POLL`. This is an operation-count bound, **not a demonstrated 2-ms WCET**. No new polling occurs before a BOOT authorization is established. PAUSED/PATH_VALIDATION do not require cyclic feedback age without an explicit SYNC producer. On transition back into HOMING/APPROACH, the active freshness check must pass before new state-issued motion targets. TEACHING, like PAUSED/PATH_VALIDATION, may record without SYNC; external guided-target dispatch is uncommissioned and categorically denied. PathExecution performs its own 20,000-us watchdog after its poll; the preflight checks communication/validity but does not change this deadline.
++
++`supervisor_drain_messages` processes up to 16 messages, defers untrusted GUIDED_TARGET until a genuinely complete drain (but **never dispatches it**, only records rejection), and preserves FIFO order for all other messages. `uxQueueMessagesWaiting` distinguishes an **exactly full 16-message batch** with no remainder from genuine overload. A pending Teaching Record causes a distinct `SUPERVISOR_DRAIN_TEACHING_EVENT` break so the existing single event slot cannot be overwritten. On overload, `supervisor_process_message_batch` transitions to FAULT with E016, immediately revokes authorization and allows `run_active_state()` to execute the FAULT safe-output service on that very cycle and subsequent cycles. It does **not** try to run an Approach/PathExecution controlled-stop callback before reading pending safety, because that could require an unvalidated drive command. This is a software containment trade-off, **not proof of physical stop**, and the unsafe message remaining queued is not relied upon for detection.
++
++## Source changes and tests added (proposed, not executed)
++
++1. `supervisor_task.c`: modified containment poll/age policy; extracted board-input acquisition for production test; corrected C2B sample; bounded queue overload faulting, guided-target quarantine; preserved C2B `was_authorized` revocation and P01 reset/stop logic.
++2. `canopen_master.c`: permission revocation when RPDO frame build, RPDO send, or SYNC fails.
++3. `test_production_supervisor.c`: BOOT negative prerequisite and legitimate `drivesReady=false` cases; held-button recovery; stale heartbeat; PAUSED/PATH_VALIDATION at 501 ms; stale active TPDO, modulo-time wrap, PathExecution delayed feedback at 20 ms and stale at 21 ms later; actual queue `GUIDED_TARGET -> unsafe SAFETY`; sustained Approach/PathExecution backlog; exact-full-batch and Teaching-event boundary; actual board-input callback returning false **or returning true with an invalid snapshot**.
++4. `test_c2b_canopen_master.c`: partial RPDO 3/6 failure, SYNC failure, and no restart on simulated transport recovery.
++5. `run_state_machine_alignment_tests.py`: four P02 negative mutations (watchdog, BOOT motion permission, overload containment, forbidden guided send) extending P01 checks.
++6. `run_c2b_canopen_master_tests.py`: two additional TX-latch mutations extending prior C2B tests. Prior P01/C2B mutations are retained.
++
++## Verification: not executed
++
++A complete local checkout, native runtime, ARM toolchain, and physical hardware were unavailable in this session. **No runtime assertion, CTest, mutation, ARM build, source graph, or physical stop result is claimed.** The unified patch was constructed from exact GitHub P01 excerpts and checked only against a sparse synthetic baseline; this does not substitute for `git apply --check` against the actual WSL checkout. All results remain PENDING.
++
++## Director/WSL verification commands
++
++```sh
++# With a clean checkout at the actual cdd908e baseline and no commits:
++git rev-parse HEAD
++git status --short
++git apply --check /path/to/P02_fault_containment_FINAL_cdd908e.patch
++git apply /path/to/P02_fault_containment_FINAL_cdd908e.patch
++python3 Firmware/Tests/run_state_machine_alignment_tests.py
++python3 Firmware/Tests/run_c2b_canopen_master_tests.py
++python3 Firmware/Tests/run_a02_1_canopen_adapter_abi.py
++python3 Firmware/Tests/run_drive_restart_gate_tests.py
++python3 Firmware/Tests/run_supervision_policy_tests.py
++python3 Firmware/Tests/check_c2a_wiring.py
++python3 Firmware/Tests/check_c2b_wiring.py
++cmake -S . -B build/p02 && cmake --build build/p02 -j4
++ctest --test-dir build/p02 --output-on-failure
++for core in CM7 CM4; do
++  for cfg in Debug Release; do
++    python3 Firmware/Tests/build_stm32.py --core "$core" --config "$cfg"
++  done
++done
++python3 Firmware/Tests/check_firmware_integration.py --build-root build/stm32/Debug
++# Inspect CM7 .project source graph and ARM ELF objects for the changed units.
++git diff --check
++git diff --stat
++```
++
++## Explicit untested assumptions and open issues
++
++**Software assumptions requiring targeted validation:** `canopen_master_healthy` heartbeat timestamps use the same monotonic `now_ms` epoch; all six `CanopenMaster` nodes are configured before motion; HAL CAN RX poll is nonblocking; each state-owned polling call remains bounded; 500 Hz budget tolerates at most one new preflight poll plus existing state polls; the previously reviewed Teaching state does not issue motor targets; successful `io.read_inputs()` means a valid coherent board snapshot, not an actual E-stop chain; the application is the only CANopen runtime owner; HMI messages in a full queue cannot bypass the deferred target policy; and late raw safety producers cannot override current authoritative interlocks.
++
++**Confirmed software gaps left open:** CM4 progress liveness not fully motion-gated; unsafe external snapshot age/sequence not independently validated; runtime fault diagnostic retains only current code rather than durable first cause; forced fault entry does not independently confirm motor deceleration; there is no board-provided physical stop confirmation handshake; SYNC-delivered cached RPDO behavior after an interrupted send remains a commissioning unknown.
++
++**Hardware requirements:** test physical E-stop, protective stop, STO, drive bus-off reaction, CiA-402 quick-stop semantics, watchdog architecture, FDCAN error callbacks, CAN isolation/transceiver fail-safe and servo heartbeat supervision in an engineered commissioning procedure. This patch is **not** functional-safety certification or proof of physical stopping.
++
++## Final director corrections: external target authorization contract
++
++`SupervisorMessage` defines `SUPERVISOR_MESSAGE_GUIDED_TARGET` only as an array of six `int32_t` motor positions (`supervisor_task.h`). It has no authoritative producer identity, timestamp, sequence, replay/session marker, or verified source authorization. `TeachingRuntimeInputs` *separately* has `manual_guidance_active`, `motion_permitted`, `robot_homed`, and `timestamp_ms`, but they cannot securely authenticate an unrelated queued position envelope or demonstrate source freshness. `application_supervisor.c` configures an observation-only guidance port; it explicitly does not commission target dispatch. Consequently the production guided-target case **always rejects** and increments the saturated rejected-event counter. Neither current TEACHING state nor homing/motion flags can override this. Enabling future physical hand-guiding needs a separately reviewed source-authentication and freshness contract, not a hidden conditional in this patch.
++
++## Final director corrections: bounded overload containment
++
++- `SUPERVISOR_MAX_MESSAGES_CYCLE` is 16; the production FreeRTOS queue capacity is 32. After 16 dequeues, `uxQueueMessagesWaiting(g_queue)==0` is a complete batch; nonzero is overload. A producer enqueue after that observation belongs to the next cycle and is **not** a real-time atomic safety guarantee. External guided targets stay disabled irrespective of timing.
++- `SUPERVISOR_DRAIN_TEACHING_EVENT` is distinct from `SUPERVISOR_DRAIN_OVERLOAD`. Only TEACHING may intentionally stop early for a pending Record/teaching event; an event in any other state cannot suppress state servicing.
++- Overload forces recoverable FAULT E016 through the existing fault transition, including restart-gate inhibit and CAN drive permission revocation. The Supervisor continues into FAULT servicing *on the same 2-ms cycle*, rather than waiting for queue exhaustion. This avoids backlog starvation of FAULT handling. It intentionally does not claim completed controlled-stop acknowledgment during that fault: physical drive containment requires independently commissioned STO/quick-stop and hardware testing.
++- The executable production Supervisor fixture includes sustained backlog during Approach and PathExecution controlled-stop phases, no-resume attempts, exact-full batch, adverse SAFETY behind queued target, Teaching Record break, and default-deny negative combinations (manual guiding, homed, runtime permission, timestamp, wrong state). All require the Director's local WSL execution.
++
++## Additional specific unverified assumptions
++
++`uxQueueMessagesWaiting` is available as the ordinary FreeRTOS task-context API and has bounded cost; queue producers can race the zero-depth observation; `run_active_state()` FAULT service is safe and nonblocking; the high-rate command sender does not bypass this Supervisor owner; and the physical E-stop/STO/quick-stop behavior remains outside this software-only patch. A FAULT on queue congestion aborts any in-progress application-level controlled-stop acknowledgment; this is explicitly the fail-closed policy, not validation of physical halt.
+--- a/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c
++++ b/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c
+@@ -640,6 +640,7 @@
+                 target_positions[i],
+                 &frame))
+         {
++            canopen_master_set_drive_permission(master, false);
+             TRACE_CAN_END(false);
+             return false;
+         }
+@@ -648,12 +649,16 @@
+                 master,
+                 &frame))
+         {
++            /* Some RPDOs may have been sent; do not send SYNC or allow
++             * further cycles until the supervisor's C2B recovery path. */
++            canopen_master_set_drive_permission(master, false);
+             TRACE_CAN_END(false);
+             return false;
+         }
+     }
+ 
+     const bool success = canopen_master_send_sync(master);
++    if (!success) canopen_master_set_drive_permission(master, false);
+     TRACE_CAN_END(success);
+     return success;
+ }
+--- a/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
++++ b/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
+@@ -778,6 +778,175 @@
+     context->last_m7_ipc_status_ms = now;
+     context->m7_ipc_status_sent = true;
+ }
++/* P02: monitor after bounded CAN reception, before any motion-state step.
++ * PathExecution owns the exact 20-ms/20,000-us cyclic watchdog. PAUSED and
++ * PATH_VALIDATION do not command cyclic motion: PDO age alone is not a fault
++ * while SYNC traffic is absent, but network/drive validity is still checked.
++ * Application-level containment does not prove that a drive has stopped. */
++static bool supervisor_motion_containment_check(
++    SupervisorTaskContext *context, uint32_t now_ms,
++    bool guided_dispatch)
++{
++    const RobotStateId state = context->machine.activeState;
++    if (state == ROBOT_STATE_BOOT || state == ROBOT_STATE_FAULT ||
++        state == ROBOT_STATE_EMERGENCY_STOP)
++        return true;
++    if (!context->restart_gate.authorized &&
++        !context->restart_gate.inhibited)
++        return true;
++
++    uint32_t detail = 0U;
++    if (!context->restart_gate.authorized ||
++        !context->config.canopen_master->drive_command_permission)
++        detail = 0xE0B1U;
++    else if (!state_machine_can_move(&context->machine))
++        detail = 0xE110U;
++    else if (!joint_drive_port_poll(&context->joint_drive, now_ms))
++        detail = 0xE113U;
++    else if (!joint_drive_port_healthy(&context->joint_drive, now_ms))
++        detail = 0xE111U;
++    else if (!joint_drive_port_ready(&context->joint_drive, now_ms))
++        detail = 0xE112U;
++    else {
++        const bool require_fresh_tpdo =
++            state == ROBOT_STATE_HOMING ||
++            (state == ROBOT_STATE_TEACHING && guided_dispatch) ||
++            state == ROBOT_STATE_APPROACH;
++        for (size_t axis = 0U; axis < JOINT_DRIVE_AXES; ++axis) {
++            JointDriveAxisFeedback feedback = {0};
++            if (!joint_drive_port_read_axis(&context->joint_drive,
++                                            axis, &feedback) ||
++                !feedback.feedback_valid || !feedback.operation_enabled ||
++                (require_fresh_tpdo &&
++                 (uint32_t)(now_ms -
++                    (uint32_t)(feedback.timestamp_us / UINT64_C(1000))) >
++                    100U)) {
++                detail = 0xE200U + (uint32_t)axis;
++                break;
++            }
++        }
++    }
++    if (detail == 0U) return true;
++    const SupervisorEvent fault = make_result_event(
++        SUPERVISOR_EVENT_FAULT_DETECTED, state,
++        ROBOT_FAULT_SEVERITY_RECOVERABLE, state_error_code(state, detail));
++    handle_policy_event(context, &fault);
++    return false;
++}
++
++/* Forward declarations for helpers called by the bounded cycle path. */
++static void handle_message(SupervisorTaskContext *context,
++                           const SupervisorMessage *message);
++static void emit_step_failure(SupervisorTaskContext *context, uint32_t detail);
++
++/* Production cycle and host fixture share this actual acquisition path.
++ * A missing/failed board callback during an authorized session is a fault;
++ * this is still an observation channel, not a safety-rated E-stop input. */
++static void supervisor_sample_inputs(SupervisorTaskContext *context)
++{
++    SupervisorInputSnapshot sampled = {0};
++    if (context->config.io.read_inputs != NULL) {
++        const bool acquired = context->config.io.read_inputs(
++            context->config.io.context, &sampled);
++        sampled.valid = acquired && sampled.valid;
++    }
++    taskENTER_CRITICAL();
++    context->gpio_inputs = sampled;
++    taskEXIT_CRITICAL();
++    if (!sampled.valid && context->restart_gate.authorized &&
++        context->machine.activeState != ROBOT_STATE_FAULT &&
++        context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
++        emit_step_failure(context, 0xE015U);
++}
++
++/* BOOT must not require drivesReady before enabling the drives: that is
++ * a circular prerequisite. Enforce the independent safety and communication
++ * fields before enable; require drivesReady after BOOT for any motion state.
++ * The existing C2B board release/press and pre-enable checks remain intact. */
++static DriveRestartSystemSample supervisor_restart_system_sample(
++    const SupervisorTaskContext *context, uint32_t now_ms)
++{
++    const RobotSafetySnapshot *s = &context->machine.safety;
++    const bool boot = context->machine.activeState == ROBOT_STATE_BOOT;
++    const DriveRestartSystemSample sample = {
++        .communication_ready =
++            canopen_master_healthy(context->config.canopen_master, now_ms) &&
++            s->communicationHealthy,
++        .state_ready = context->machine.initialized &&
++            context->machine.activeState != ROBOT_STATE_FAULT &&
++            context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP &&
++            context->machine.faultSeverity == ROBOT_FAULT_SEVERITY_NONE &&
++            (boot || s->drivesReady),
++        .safety_valid = s->statusValid && s->motionPermitted,
++        .estop_clear = !s->estopActive,
++        .protective_stop_clear = !s->protectiveStopActive,
++        .fault_clear = !s->globalFaultActive,
++        .ipc_valid = context->config.ipc != NULL &&
++                     ipc_valid(context->config.ipc),
++        .preenable_status_checked = context->boot.preenable_status_checked
++    };
++    return sample;
++}
++
++/* A complete drain is confirmed by a failed receive OR a zero-depth check
++ * after the exact 16-message boundary. This check is a bounded snapshot, not
++ * a concurrency barrier against future enqueues. Never dispatch queued motion
++ * targets. A Teaching event intentionally stops the drain to protect the
++ * existing single pending event slot; it is NOT queue overload. */
++typedef enum {
++    SUPERVISOR_DRAIN_COMPLETE = 0,
++    SUPERVISOR_DRAIN_TEACHING_EVENT,
++    SUPERVISOR_DRAIN_OVERLOAD
++} SupervisorDrainResult;
++
++static SupervisorDrainResult supervisor_drain_messages(
++    SupervisorTaskContext *context)
++{
++    SupervisorMessage message;
++    SupervisorMessage deferred_target = {0};
++    bool have_target = false;
++    for (uint32_t count = 0U; count < SUPERVISOR_MAX_MESSAGES_CYCLE;
++         ++count) {
++        if (xQueueReceive(g_queue, &message, 0U) != pdPASS) {
++            if (have_target) handle_message(context, &deferred_target);
++            return SUPERVISOR_DRAIN_COMPLETE;
++        }
++        if (message.type == SUPERVISOR_MESSAGE_GUIDED_TARGET) {
++            deferred_target = message;
++            have_target = true;
++        } else {
++            handle_message(context, &message);
++        }
++        if (context->pending_teaching_event != TEACH_EVENT_NONE) {
++            /* Preserve P01: let TEACHING consume Record before dequeuing
++             * another event. Any event in a motion state is not exempt. */
++            return context->machine.activeState == ROBOT_STATE_TEACHING
++                ? SUPERVISOR_DRAIN_TEACHING_EVENT
++                : SUPERVISOR_DRAIN_OVERLOAD;
++        }
++    }
++    /* Exactly 16 messages with no remainder is NOT an overload. Querying
++     * queue depth is O(1) and does not consume the next SAFETY snapshot. */
++    if (uxQueueMessagesWaiting(g_queue) == 0U) {
++        if (have_target) handle_message(context, &deferred_target);
++        return SUPERVISOR_DRAIN_COMPLETE;
++    }
++    return SUPERVISOR_DRAIN_OVERLOAD;
++}
++
++/* A saturated queue must not starve Approach/PathExecution stop services or
++ * the 500-Hz fault watchdog. Do not step a motion state while safety updates
++ * are unread: latch FAULT immediately and run its safe-output service in the
++ * same cycle. Physical stopping remains unverified. */
++static void supervisor_process_message_batch(SupervisorTaskContext *context)
++{
++    const SupervisorDrainResult result = supervisor_drain_messages(context);
++    if (result == SUPERVISOR_DRAIN_OVERLOAD &&
++        context->machine.activeState != ROBOT_STATE_FAULT &&
++        context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
++        emit_step_failure(context, 0xE016U);
++}
++
+ static void handle_message(
+     SupervisorTaskContext *context,
+     const SupervisorMessage *message
+@@ -790,40 +959,60 @@
+             break;
+ 
+         case SUPERVISOR_MESSAGE_GUIDED_TARGET:
+-            /* NEVER let an external producer call the CANopen coordinator.
+-             * Apply only in TEACHING with fresh motion authorization. */
+-            if (context->machine.activeState == ROBOT_STATE_TEACHING &&
+-                context->restart_gate.authorized &&
+-                context->machine.safety.statusValid &&
+-                context->machine.safety.motionPermitted &&
+-                canopen_master_ready_for_motion(context->config.canopen_master,
+-                                                supervisor_now_ms())) {
+-                (void)joint_drive_port_send_targets(
+-                    &context->joint_drive, message->data.guided_target_units);
+-            }
++            /* P02 default-deny: this envelope has only six position values.
++             * No trusted producer identity, freshness, homing evidence or
++             * teaching-runtime consent can be authenticated here. The board
++             * explicitly commissions hand-guiding in observation-only mode.
++             * Do not silently convert an HMI/IPC message into motor motion. */
++            (void)message->data.guided_target_units;
++            if (context->machine.rejectedEventCount != UINT32_MAX)
++                ++context->machine.rejectedEventCount;
+             break;
+         case SUPERVISOR_MESSAGE_EVENT:
+             handle_policy_event(context, &message->data.event);
+             break;
+ 
+         case SUPERVISOR_MESSAGE_SAFETY:
+-            state_machine_update_safety(
+-                &context->machine,
+-                &message->data.safety
+-            );
+-            /* A bad safety update is revocation now, not at the next tick:
+-             * another queued command in this cycle must not bypass it. */
+-            if (context->restart_gate.authorized &&
+-                (!context->machine.safety.statusValid ||
+-                 context->machine.safety.estopActive ||
+-                 context->machine.safety.protectiveStopActive ||
+-                 context->machine.safety.globalFaultActive)) {
+-                drive_restart_gate_inhibit(&context->restart_gate);
+-                context->boot.drive_enable_authorized = false;
+-                canopen_master_set_drive_permission(
+-                    context->config.canopen_master, false);
++        {
++            state_machine_update_safety(&context->machine,
++                                        &message->data.safety);
++            const RobotSafetySnapshot *s = &context->machine.safety;
++            const RobotStateId state = context->machine.activeState;
++            SupervisorEvent event = {0};
++            /* E-stop has highest priority; do not downgrade an existing
++             * emergency to an ordinary recoverable fault. Input snapshots
++             * are not hardware safety functions. */
++            if (s->estopActive && state != ROBOT_STATE_EMERGENCY_STOP) {
++                event = make_result_event(SUPERVISOR_EVENT_ESTOP_ASSERTED,
++                    state, ROBOT_FAULT_SEVERITY_EMERGENCY,
++                    ROBOT_FAULT_CODE_EMERGENCY_STOP);
++            } else if (state != ROBOT_STATE_EMERGENCY_STOP &&
++                       state != ROBOT_STATE_FAULT &&
++                       s->protectiveStopActive) {
++                event = make_result_event(
++                    SUPERVISOR_EVENT_PROTECTIVE_STOP_ASSERTED, state,
++                    ROBOT_FAULT_SEVERITY_PROTECTIVE_STOP,
++                    ROBOT_FAULT_CODE_PROTECTIVE_STOP);
++            } else if (state != ROBOT_STATE_EMERGENCY_STOP &&
++                       state != ROBOT_STATE_FAULT &&
++                       (state != ROBOT_STATE_BOOT ||
++                        context->restart_gate.authorized) &&
++                       (!s->statusValid || !s->motionPermitted ||
++                        (state != ROBOT_STATE_BOOT && !s->drivesReady) ||
++                        !s->communicationHealthy ||
++                        s->globalFaultActive)) {
++                const uint32_t detail = !s->statusValid ? 0xE010U :
++                    !s->motionPermitted ? 0xE011U :
++                    (state != ROBOT_STATE_BOOT && !s->drivesReady) ? 0xE012U :
++                    !s->communicationHealthy ? 0xE013U : 0xE014U;
++                event = make_result_event(SUPERVISOR_EVENT_FAULT_DETECTED,
++                    state, ROBOT_FAULT_SEVERITY_RECOVERABLE,
++                    state_error_code(state, detail));
+             }
++            if (event.type != SUPERVISOR_EVENT_NONE)
++                handle_policy_event(context, &event);
+             break;
++        }
+ 
+         case SUPERVISOR_MESSAGE_TEACHING_EVENT:
+             context->pending_teaching_event =
+@@ -1228,7 +1417,6 @@
+ {
+     SupervisorTaskContext *context = argument;
+     TickType_t last_wake = xTaskGetTickCount();
+-    SupervisorMessage message;
+     if (context->config.canopen_master->initialized) {
+         /* Initialization is pre-scheduler; bind only from the true owner. */
+         const bool owner_bound = canopen_master_bind_runtime_owner(
+@@ -1286,32 +1474,15 @@
+         const uint64_t cycle_start_us =
+             hardware_timed ? supervisor_now_us() : UINT64_C(0);
+         TRACE_BEGIN(TIMING_SUPERVISOR);
+-        /* Acquisition only: raw inputs do not authorize motion or create HMI
+-         * events until a separately tested input adapter is connected. */
+-        SupervisorInputSnapshot sampled = {0};
+-        if (context->config.io.read_inputs != NULL)
+-        {
+-            sampled.valid = context->config.io.read_inputs(
+-                context->config.io.context, &sampled);
+-        }
+-        taskENTER_CRITICAL();
+-        context->gpio_inputs = sampled;
+-        taskEXIT_CRITICAL();
+-        for (uint32_t count = 0U;
+-             count < SUPERVISOR_MAX_MESSAGES_CYCLE;
+-             ++count)
+-        {
+-            if (xQueueReceive(g_queue, &message, 0U) != pdPASS)
+-            {
+-                break;
+-            }
+-            handle_message(context, &message);
+-            /* Consume Teaching commands before another can overwrite the
+-             * single pending event slot (Record must never be coalesced). */
+-            if (context->pending_teaching_event != TEACH_EVENT_NONE) break;
+-        }
++        /* Read and validate inputs before consuming queued motion messages. */
++        supervisor_sample_inputs(context);
++        supervisor_process_message_batch(context);
+ 
+         consume_m4_ipc(context);
++        /* One bounded preflight per cycle: no state module may issue a new
++         * coordinated motion command after a monitored network/axis loss. */
++        (void)supervisor_motion_containment_check(
++            context, supervisor_now_ms(), false);
+ 
+         /*
+          * Keep producing Node 127's heartbeat even while PAUSED, FAULT,
+@@ -1354,23 +1525,8 @@
+         {
+             /* Safety snapshot must be independently produced and current.
+              * Board provider is responsible for live input freshness. */
+-            const RobotSafetySnapshot *s = &context->machine.safety;
+-            const DriveRestartSystemSample input = {
+-                .communication_ready = canopen_master_all_heartbeats_operational(
+-                    context->config.canopen_master),
+-                .state_ready = context->machine.initialized &&
+-                    context->machine.activeState != ROBOT_STATE_FAULT &&
+-                    context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP &&
+-                    context->machine.faultSeverity ==
+-                        ROBOT_FAULT_SEVERITY_NONE,
+-                .safety_valid = s->statusValid,
+-                .estop_clear = !s->estopActive,
+-                .protective_stop_clear = !s->protectiveStopActive,
+-                .fault_clear = !s->globalFaultActive,
+-                .ipc_valid = context->config.ipc != NULL &&
+-                             ipc_valid(context->config.ipc),
+-                .preenable_status_checked = context->boot.preenable_status_checked
+-            };
++            const DriveRestartSystemSample input =
++                supervisor_restart_system_sample(context, supervisor_now_ms());
+             drive_permission = drive_restart_gate_tick(
+                 &context->restart_gate, &context->config.reset_diagnostics,
+                 &context->config.drive_restart_board, &input);
+@@ -1382,6 +1538,8 @@
+             context->machine.activeState != ROBOT_STATE_FAULT &&
+             context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
+             emit_step_failure(context, 0xE0B1U);
++        /* Complete, intentional Teaching break, or overload->FAULT: never
++         * suspend state/fault stepping merely because messages arrived. */
+         if (controller_hb_ok ||
+             context->machine.activeState == ROBOT_STATE_FAULT ||
+             context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)
+--- a/Firmware/Tests/run_c2b_canopen_master_tests.py
++++ b/Firmware/Tests/run_c2b_canopen_master_tests.py
+@@ -49,6 +49,17 @@
+         'return master == NULL || master->initialized;'),
+ }
+ 
++MUTANTS.update({
++    'P02 partial RPDO fails without permission revocation': (
++        '             * further cycles until the supervisor\'s C2B recovery path. */\n'
++        '            canopen_master_set_drive_permission(master, false);',
++        '             * further cycles until the supervisor\'s C2B recovery path. */\n'
++        '            (void)master;'),
++    'P02 failed SYNC leaves permission granted': (
++        'if (!success) canopen_master_set_drive_permission(master, false);',
++        'if (!success) (void)master;'),
++})
++
+ def compile_run(tmp: Path, source: Path, label: str):
+     binary = tmp / 'bin'
+     cmd = [os.environ.get('CC', 'cc'), '-std=c11', '-O1', '-g',
+@@ -91,7 +102,7 @@
+             if 'FAIL ' not in result.stderr:
+                 raise RuntimeError(f'MUTATION ABNORMAL TERMINATION: {label}: {result.stderr}')
+             print(f'PASS: mutation rejected at runtime: {label}')
+-    print('PASS: 7/7 executable production-master mutations rejected')
++    print(f'PASS: {len(MUTANTS)}/{len(MUTANTS)} executable production-master mutations rejected')
+ 
+ if __name__ == '__main__':
+     try:
+--- a/Firmware/Tests/run_state_machine_alignment_tests.py
++++ b/Firmware/Tests/run_state_machine_alignment_tests.py
+@@ -202,6 +202,24 @@
+                 "case TEACH_EVENT_SPEED_HIGH:\n        {\n            accepted =\n                change_speed(\n                    state,\n                    state->config.speed_high_mps",
+                 "case TEACH_EVENT_SPEED_HIGH:\n        {\n            accepted =\n                change_speed(\n                    state,\n                    state->config.default_speed_mps"),
+         })
++        mutations.update({
++            "P02 stale axis watchdog bypassed": (
++                SM / "supervisor_task.c",
++                "                    100U)) {",
++                "                    10000U)) {"),
++            "P02 BOOT ignores motion permission": (
++                SM / "supervisor_task.c",
++                ".safety_valid = s->statusValid && s->motionPermitted,",
++                ".safety_valid = s->statusValid,"),
++            "P02 queue overload fault omitted": (
++                SM / "supervisor_task.c",
++                "        emit_step_failure(context, 0xE016U);",
++                "        (void)context;"),
++            "P02 unauthenticated guided target dispatched": (
++                SM / "supervisor_task.c",
++                "            (void)message->data.guided_target_units;",
++                "            (void)joint_drive_port_send_targets(&context->joint_drive, message->data.guided_target_units);"),
++        })
+         for i, (label, (source, needle, replacement)) in enumerate(mutations.items()):
+             original = source.read_text()
+             assert original.count(needle) == 1, (label, original.count(needle))
+--- a/Firmware/Tests/test_c2b_canopen_master.c
++++ b/Firmware/Tests/test_c2b_canopen_master.c
+@@ -19,6 +19,8 @@
+     CanFrame incoming[32];
+     size_t sent_count, rx_head, rx_tail;
+     bool fail_next_send;
++    bool fail_at_send_enabled;
++    size_t fail_at_send;
+ } FakeBus;
+ 
+ typedef struct {
+@@ -31,6 +33,8 @@
+ static CanBackendResult fake_send(void *ctx, const CanFrame *frame)
+ {
+     FakeBus *b = (FakeBus *)ctx;
++    if (b->fail_at_send_enabled && b->sent_count == b->fail_at_send)
++        return CAN_BACKEND_ERROR;
+     if (b->fail_next_send) {
+         b->fail_next_send = false;
+         return CAN_BACKEND_ERROR;
+@@ -218,6 +222,39 @@
+     canopen_master_set_drive_permission(&f.master,false);
+     CHECK(!f.master.drive_command_permission);
+ }
++static void test_p02_target_cycle_partial_failure(void)
++{
++    int32_t q[JOINT_DRIVE_AXES];
++    targets(q);
++    Fixture partial;
++    fixture_init(&partial);
++    approved(&partial);
++    partial.bus.fail_at_send_enabled = true;
++    partial.bus.fail_at_send = 3U;
++    CHECK(!canopen_master_send_target_cycle(&partial.master, q,
++                                            JOINT_DRIVE_AXES));
++    CHECK(partial.bus.sent_count == 3U); /* no SYNC after partial RPDO */
++    CHECK(!partial.master.drive_command_permission);
++    partial.bus.fail_at_send_enabled = false; /* transport recovers */
++    CHECK(!canopen_master_send_target_cycle(&partial.master, q,
++                                            JOINT_DRIVE_AXES));
++    CHECK(!canopen_master_send_sync(&partial.master));
++    CHECK(partial.bus.sent_count == 3U); /* never silently re-enabled */
++
++    Fixture sync;
++    fixture_init(&sync);
++    approved(&sync);
++    sync.bus.fail_at_send_enabled = true;
++    sync.bus.fail_at_send = JOINT_DRIVE_AXES;
++    CHECK(!canopen_master_send_target_cycle(&sync.master, q,
++                                            JOINT_DRIVE_AXES));
++    CHECK(sync.bus.sent_count == JOINT_DRIVE_AXES);
++    CHECK(!sync.master.drive_command_permission);
++    sync.bus.fail_at_send_enabled = false;
++    CHECK(!canopen_master_send_sync(&sync.master));
++    puts("PASS: P02 partial-RPDO and failed-SYNC permission latches");
++}
++
+ int main(void)
+ {
+     test_cold_and_prebind_denial();
+@@ -225,6 +262,7 @@
+     test_revocation_and_stale_sdo_ack();
+     test_nmt_reset_revokes_and_cancels();
+     test_runtime_owner_enforcement();
++    test_p02_target_cycle_partial_failure();
+     puts("PASS: production STM32 CANopen master authorization, revocation, NMT, SDO and owner checks");
+     return 0;
+ }
+--- a/Firmware/Tests/test_production_supervisor.c
++++ b/Firmware/Tests/test_production_supervisor.c
+@@ -598,6 +598,420 @@
+     puts("PASS: production path completion returns Idle; 21-ms stale feedback faults");
+ }
+ 
++#ifndef ALIGNMENT_DESKTOP
++/* Real production queue-drain function with a finite FIFO scheduling seam. */
++static SupervisorMessage p02_inbox[SUPERVISOR_MAX_MESSAGES_CYCLE * 8U];
++static unsigned p02_read, p02_written;
++BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t ticks)
++{
++    (void)ticks;
++    CHECK(q == (QueueHandle_t)&ctx);
++    if (p02_read == p02_written) return 0;
++    *(SupervisorMessage *)item = p02_inbox[p02_read++];
++    return pdPASS;
++}
++UBaseType_t uxQueueMessagesWaiting(QueueHandle_t q)
++{
++    CHECK(q == (QueueHandle_t)&ctx);
++    return (UBaseType_t)(p02_written - p02_read);
++}
++static void p02_enqueue(SupervisorMessage msg)
++{
++    CHECK(p02_written < sizeof(p02_inbox)/sizeof(p02_inbox[0]));
++    p02_inbox[p02_written++] = msg;
++}
++static void p02_queue_reset(void)
++{
++    g_queue = (QueueHandle_t)&ctx;
++    p02_read = p02_written = 0U;
++}
++static void p02_motion_ready_master(uint32_t now_ms)
++{
++    master.initialized = true;
++    master.node_count = JOINT_DRIVE_AXES;
++    master.heartbeat_timeout_ms = 300U;
++    for (size_t i = 0U; i < JOINT_DRIVE_AXES; ++i) {
++        master.drives[i].heartbeat_seen = true;
++        master.drives[i].heartbeat_state =
++            AVATAR_M_HEARTBEAT_STATE_OPERATIONAL;
++        master.drives[i].feedback_valid = true;
++        master.drives[i].cia402_state = CIA402_STATE_OPERATION_ENABLED;
++        master.last_heartbeat_ms[i] = now_ms;
++        master.heartbeat_timestamp_valid[i] = true;
++    }
++}
++static bool p02_authorization_press;
++static bool p02_board_read(void *unused, DriveRestartBoardSample *out)
++{
++    (void)unused;
++    *out = (DriveRestartBoardSample){
++        .valid = true, .board_ready = true, .reset_reviewed = true,
++        .ipc_session_fresh = true, .old_commands_discarded = true,
++        .feedback_revalidated = true,
++        .operator_pressed = p02_authorization_press
++    };
++    return true;
++}
++static void p02_startup_setup(void)
++{
++    setup(ROBOT_STATE_BOOT);
++    ctx.restart_gate = (DriveRestartGate){0};
++    ctx.boot.phase = BOOT_PHASE_WAIT_AUTHORIZATION;
++    ctx.boot.preenable_status_checked = true;
++    ctx.config.ipc = (IpcShared *)&ctx; /* ipc_valid test seam */
++    ctx.config.reset_diagnostics.captured = true;
++    ctx.config.reset_diagnostics.cause = RESET_CAUSE_POWER_ON;
++    ctx.config.drive_restart_board.read = p02_board_read;
++    ctx.config.drive_restart_board.context = NULL;
++    p02_authorization_press = false;
++    p02_motion_ready_master(400U);
++    master.drive_command_permission = false;
++}
++static bool p02_invalid_board_read(void *unused, SupervisorInputSnapshot *out)
++{
++    (void)unused;
++    out->valid = true;
++    return false; /* acquisition return wins over stale out contents */
++}
++static bool p02_invalid_snapshot_read(void *unused, SupervisorInputSnapshot *out)
++{
++    (void)unused;
++    out->valid = false;
++    return true; /* transport success must not override invalid snapshot */
++}
++static void test_p02_authorization(void)
++{
++    p02_startup_setup();
++    /* BOOT must not demand drivesReady before CiA-402 enables. */
++    ctx.machine.safety.drivesReady = false;
++    DriveRestartSystemSample sample = supervisor_restart_system_sample(&ctx,400U);
++    CHECK(sample.communication_ready && sample.state_ready && sample.safety_valid);
++    CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
++        &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
++    p02_authorization_press = true;
++    CHECK(drive_restart_gate_tick(&ctx.restart_gate,
++        &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
++    CHECK(ctx.restart_gate.authorized);
++    /* An authorized BOOT must tolerate not-yet-enabled drive readiness.
++     * A fresh safety snapshot with drivesReady=false cannot force FAULT. */
++    master.drive_command_permission = true;
++    SupervisorMessage boot_safety = {0};
++    boot_safety.type = SUPERVISOR_MESSAGE_SAFETY;
++    boot_safety.data.safety = ctx.machine.safety;
++    handle_message(&ctx, &boot_safety);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_BOOT);
++    CHECK(ctx.restart_gate.authorized && master.drive_command_permission);
++    /* Once BOOT ends, disabled/unready drives must NOT authorize motion. */
++    ctx.machine.activeState = ROBOT_STATE_HOMING;
++    sample = supervisor_restart_system_sample(&ctx,400U);
++    CHECK(!sample.state_ready);
++    CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
++        &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
++    CHECK(ctx.restart_gate.inhibited);
++
++    for (unsigned field = 0U; field < 4U; ++field) {
++        p02_startup_setup();
++        switch (field) {
++            case 0U: ctx.machine.safety.motionPermitted = false; break;
++            case 1U: ctx.machine.safety.communicationHealthy = false; break;
++            case 2U: ctx.machine.safety.statusValid = false; break;
++            default: master.last_heartbeat_ms[3] = 99U; break;
++        }
++        sample = supervisor_restart_system_sample(&ctx,400U);
++        CHECK(!sample.safety_valid || !sample.communication_ready);
++        CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
++            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
++        p02_authorization_press = true;
++        CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
++            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
++        CHECK(!ctx.restart_gate.authorized);
++        CHECK(!master.drive_command_permission);
++        /* A previously held button cannot authorize on signal recovery. */
++        ctx.machine.safety = (RobotSafetySnapshot){.statusValid=true,
++            .motionPermitted=true, .drivesReady=false, .communicationHealthy=true};
++        master.last_heartbeat_ms[3] = 400U;
++        sample = supervisor_restart_system_sample(&ctx,400U);
++        CHECK(sample.communication_ready && sample.safety_valid);
++        CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
++            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
++        p02_authorization_press = false;
++        CHECK(!drive_restart_gate_tick(&ctx.restart_gate,
++            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
++        p02_authorization_press = true;
++        CHECK(drive_restart_gate_tick(&ctx.restart_gate,
++            &ctx.config.reset_diagnostics, &ctx.config.drive_restart_board, &sample));
++    }
++    puts("PASS: P02 BOOT safety/heartbeat gate without drivesReady circularity");
++}
++static void test_p02_containment(void)
++{
++    setup(ROBOT_STATE_TEACHING);
++    SupervisorMessage msg = {0};
++    msg.type = SUPERVISOR_MESSAGE_SAFETY;
++    msg.data.safety = ctx.machine.safety;
++    msg.data.safety.communicationHealthy = false;
++    handle_message(&ctx, &msg);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++    CHECK(ctx.machine.activeFaultCode ==
++          state_error_code(ROBOT_STATE_TEACHING, 0xE013U));
++    check_revoked();
++    policy(SUPERVISOR_EVENT_RESET);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++
++    msg.data.safety.estopActive = true;
++    handle_message(&ctx, &msg);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_EMERGENCY_STOP);
++    CHECK(ctx.machine.faultSeverity == ROBOT_FAULT_SEVERITY_EMERGENCY);
++    check_revoked();
++
++    setup(ROBOT_STATE_PATH_EXECUTION);
++    now_tick = 20U;
++    CHECK(supervisor_motion_containment_check(&ctx, now_tick, false));
++    drive.axis[3].feedback_valid = false;
++    CHECK(!supervisor_motion_containment_check(&ctx, now_tick, false));
++    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++    CHECK(ctx.machine.activeFaultCode ==
++          state_error_code(ROBOT_STATE_PATH_EXECUTION, 0xE203U));
++    check_revoked();
++    drive.axis[3].feedback_valid = true;
++    policy(SUPERVISOR_EVENT_RESET);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++
++    /* 100 ms applies to active non-Path motion only. */
++    setup(ROBOT_STATE_TEACHING);
++    now_tick = 100U;
++    CHECK(supervisor_motion_containment_check(&ctx, now_tick, true));
++    now_tick = 101U;
++    CHECK(!supervisor_motion_containment_check(&ctx, now_tick, true));
++    CHECK(ctx.machine.activeFaultCode ==
++          state_error_code(ROBOT_STATE_TEACHING, 0xE200U));
++    check_revoked();
++
++    /* Healthy paused/validation periods without SYNC do not require fresh TPDO. */
++    for (unsigned i = 0U; i < 2U; ++i) {
++        setup(i == 0U ? ROBOT_STATE_PAUSED : ROBOT_STATE_PATH_VALIDATION);
++        now_tick = 501U;
++        CHECK(supervisor_motion_containment_check(&ctx, now_tick, false));
++        CHECK(ctx.machine.activeState != ROBOT_STATE_FAULT);
++        CHECK(drive.polls == 1U);
++    }
++    setup(ROBOT_STATE_TEACHING);
++    CHECK(supervisor_motion_containment_check(&ctx, 501U, false));
++    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
++    /* Modulo uint32 milliseconds across wraparound on active motion. */
++    setup(ROBOT_STATE_TEACHING);
++    for (unsigned i = 0U; i < JOINT_DRIVE_AXES; ++i)
++        drive.axis[i].timestamp_us =
++            (uint64_t)(UINT32_MAX - 5U) * UINT64_C(1000);
++    CHECK(supervisor_motion_containment_check(&ctx, 2U, true));
++
++    /* PathExecution's original 20-ms watchdog receives queued TPDO in its
++     * own poll, and still rejects 21-ms stale feedback afterward. */
++    setup(ROBOT_STATE_PATH_EXECUTION);
++    prepare_execution();
++    ctx.path_execution.feedback_watch_started = true;
++    ctx.path_execution.feedback_watch_started_us = 0U;
++    for (unsigned i = 0U; i < JOINT_DRIVE_AXES; ++i)
++        ctx.path_execution.initial_tpdo_count[i] = drive.sequence[i];
++    drive.auto_feedback = true;
++    drive.pending_feedback = true;
++    now_tick = 20U;
++    CHECK(supervisor_motion_containment_check(&ctx, now_tick, false));
++    CHECK(drive.axis[0].timestamp_us == UINT64_C(20000));
++    run_active_state(&ctx);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_PATH_EXECUTION);
++    CHECK(ctx.path_execution.error != PATH_EXEC_ERR_CYCLIC_FEEDBACK);
++    /* Suppress subsequent synthetic responses: retained TPDO is now stale. */
++    drive.auto_feedback = false;
++    now_tick = 41U;
++    run_active_state(&ctx);
++    CHECK(ctx.path_execution.error == PATH_EXEC_ERR_CYCLIC_FEEDBACK);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++    check_revoked();
++
++    /* Physical hand-guiding has no commissioned target source. Even a
++     * fully ready synthetic motor, manual-guidance flag and homing state
++     * cannot grant access to an unauthenticated six-value envelope. */
++    setup(ROBOT_STATE_TEACHING);
++    p02_motion_ready_master(0U);
++    ctx.teaching_runtime.manual_guidance_active = true;
++    ctx.teaching_runtime.motion_permitted = true;
++    ctx.teaching_runtime.robot_homed = true;
++    ctx.teaching_runtime.timestamp_ms = 0U;
++    msg = (SupervisorMessage){0};
++    msg.type = SUPERVISOR_MESSAGE_GUIDED_TARGET;
++    const uint32_t rejected_before = ctx.machine.rejectedEventCount;
++    handle_message(&ctx, &msg);
++    CHECK(drive.commands == 0U);
++    CHECK(ctx.machine.rejectedEventCount == rejected_before + 1U);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
++    for (unsigned i = 0U; i < 5U; ++i) {
++        ctx.teaching_runtime.manual_guidance_active = true;
++        ctx.teaching_runtime.motion_permitted = true;
++        ctx.teaching_runtime.robot_homed = true;
++        ctx.teaching_runtime.timestamp_ms = 0U;
++        ctx.machine.activeState = ROBOT_STATE_TEACHING;
++        now_tick = 0U;
++        if (i == 0U) ctx.teaching_runtime.manual_guidance_active = false;
++        if (i == 1U) ctx.teaching_runtime.motion_permitted = false;
++        if (i == 2U) ctx.teaching_runtime.robot_homed = false;
++        if (i == 3U) now_tick = 1000U; /* stale runtime timestamp */
++        if (i == 4U) ctx.machine.activeState = ROBOT_STATE_IDLE;
++        handle_message(&ctx, &msg);
++        CHECK(drive.commands == 0U);
++    }
++
++    setup(ROBOT_STATE_HOMING);
++    drive.network_ok = false;
++    CHECK(!supervisor_motion_containment_check(&ctx, 1U, false));
++    CHECK(ctx.machine.activeFaultCode ==
++          state_error_code(ROBOT_STATE_HOMING, 0xE111U));
++    check_revoked();
++    puts("PASS: P02 motion feedback/poll/revocation and Path 20-ms boundary");
++}
++static void p02_enqueue_noop_batch(unsigned count)
++{
++    for (unsigned i = 0U; i < count; ++i) {
++        SupervisorMessage noop = {0};
++        noop.type = SUPERVISOR_MESSAGE_TEACHING_RUNTIME;
++        p02_enqueue(noop);
++    }
++}
++static void test_p02_queue_and_board_failure(void)
++{
++    setup(ROBOT_STATE_TEACHING);
++    p02_motion_ready_master(0U);
++    p02_queue_reset();
++    SupervisorMessage target = {0};
++    target.type = SUPERVISOR_MESSAGE_GUIDED_TARGET;
++    target.data.guided_target_units[0] = 42;
++    SupervisorMessage unsafe = {0};
++    unsafe.type = SUPERVISOR_MESSAGE_SAFETY;
++    unsafe.data.safety = ctx.machine.safety;
++    unsafe.data.safety.motionPermitted = false;
++    p02_enqueue(target);
++    p02_enqueue(unsafe);
++    supervisor_process_message_batch(&ctx);
++    CHECK(drive.commands == 0U);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++    check_revoked();
++
++    /* No active physical guidance: the drained, safe sole target is denied. */
++    setup(ROBOT_STATE_TEACHING);
++    p02_motion_ready_master(0U);
++    p02_queue_reset();
++    p02_enqueue(target);
++    supervisor_process_message_batch(&ctx);
++    CHECK(drive.commands == 0U);
++    CHECK(ctx.machine.rejectedEventCount == 1U);
++
++    /* Exactly a full 16-message batch with depth zero is NOT an overload. */
++    setup(ROBOT_STATE_IDLE);
++    p02_queue_reset();
++    p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE);
++    CHECK(supervisor_drain_messages(&ctx) == SUPERVISOR_DRAIN_COMPLETE);
++    CHECK(uxQueueMessagesWaiting(g_queue) == 0U);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_IDLE);
++
++    /* An unprocessed unsafe SAFETY entry behind a full batch never permits
++     * continued motion. Overload faults before another active-state step. */
++    setup(ROBOT_STATE_TEACHING);
++    p02_motion_ready_master(0U);
++    p02_queue_reset();
++    p02_enqueue(target);
++    p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE - 1U);
++    p02_enqueue(unsafe);
++    supervisor_process_message_batch(&ctx);
++    CHECK(drive.commands == 0U);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++    CHECK(ctx.machine.activeFaultCode ==
++          state_error_code(ROBOT_STATE_TEACHING, 0xE016U));
++    check_revoked();
++    run_active_state(&ctx);
++    CHECK(off_calls > 0U);
++
++    /* Sustained backlog while Approach/PathExecution have initiated their
++     * controlled-stop phases must NEVER suspend the supervisor in a motion
++     * state. The fail-closed response is FAULT and safe-output servicing,
++     * not continued target dispatch or fake stop acknowledgement. */
++    for (unsigned motion = 0U; motion < 2U; ++motion) {
++        const RobotStateId state = motion == 0U
++            ? ROBOT_STATE_APPROACH : ROBOT_STATE_PATH_EXECUTION;
++        setup(state);
++        if (motion == 0U) {
++            ctx.approach.phase = APPROACH_PHASE_CONTROLLED_STOP;
++            ctx.approach_control.reset_requested = true;
++        } else {
++            prepare_execution();
++            ctx.path_execution.phase = PATH_EXEC_PHASE_CONTROLLED_STOP;
++            ctx.path_execution_inputs.reset_requested = true;
++        }
++        p02_queue_reset();
++        p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE * 2U);
++        supervisor_process_message_batch(&ctx);
++        CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++        CHECK(ctx.machine.activeFaultCode == state_error_code(state, 0xE016U));
++        check_revoked();
++        const unsigned prior_commands = drive.commands;
++        run_active_state(&ctx);
++        CHECK(off_calls > 0U);
++        /* Fault servicing remains reachable with sustained queue overload. */
++        for (unsigned cycle = 0U; cycle < 3U; ++cycle) {
++            /* One batch arrives while another remains: sustained 32/32. */
++            p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE);
++            supervisor_process_message_batch(&ctx);
++            run_active_state(&ctx);
++            CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++            CHECK(drive.commands == prior_commands);
++            CHECK(!master.drive_command_permission);
++        }
++        policy(SUPERVISOR_EVENT_RESET);
++        CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++    }
++
++    /* Teaching Record is a purposeful early break: preserve the pending
++     * event and execute TEACHING before dequeuing a second Record. */
++    setup(ROBOT_STATE_TEACHING);
++    p02_queue_reset();
++    SupervisorMessage teach = {0};
++    teach.type = SUPERVISOR_MESSAGE_TEACHING_EVENT;
++    teach.data.teaching_event = TEACH_EVENT_RECORD_POINT;
++    p02_enqueue(teach);
++    p02_enqueue(teach);
++    CHECK(supervisor_drain_messages(&ctx) == SUPERVISOR_DRAIN_TEACHING_EVENT);
++    CHECK(uxQueueMessagesWaiting(g_queue) == 1U);
++    CHECK(ctx.pending_teaching_event == TEACH_EVENT_RECORD_POINT);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
++    /* Do not consume the next record until the state step clears the slot. */
++    run_active_state(&ctx); /* actual P01 Teaching handler consumes Record */
++    CHECK(ctx.pending_teaching_event == TEACH_EVENT_NONE);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
++    CHECK(supervisor_drain_messages(&ctx) == SUPERVISOR_DRAIN_TEACHING_EVENT);
++    CHECK(uxQueueMessagesWaiting(g_queue) == 0U);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_TEACHING);
++
++    /* Raw board callback fails after authorization. The actual production
++     * acquisition function must fault and revoke; status cannot be reused. */
++    setup(ROBOT_STATE_TEACHING);
++    ctx.config.io.read_inputs = p02_invalid_board_read;
++    supervisor_sample_inputs(&ctx);
++    CHECK(!ctx.gpio_inputs.valid);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++    CHECK(ctx.machine.activeFaultCode ==
++          state_error_code(ROBOT_STATE_TEACHING, 0xE015U));
++    check_revoked();
++    setup(ROBOT_STATE_TEACHING);
++    ctx.config.io.read_inputs = p02_invalid_snapshot_read;
++    supervisor_sample_inputs(&ctx);
++    CHECK(!ctx.gpio_inputs.valid);
++    CHECK(ctx.machine.activeState == ROBOT_STATE_FAULT);
++    CHECK(ctx.machine.activeFaultCode ==
++          state_error_code(ROBOT_STATE_TEACHING, 0xE015U));
++    check_revoked();
++    puts("PASS: P02 adverse queued order, bounded overload, raw board failure");
++}
++#endif
++
+ int main(void)
+ {
+     robot_config_init_ur5(&robot);
+@@ -612,6 +1026,11 @@
+     test_approach_reset();
+     test_cancellation();
+     test_completion_and_feedback();
++#ifndef ALIGNMENT_DESKTOP
++    test_p02_authorization();
++    test_p02_containment();
++    test_p02_queue_and_board_failure();
++#endif
+     puts("PASS: exact production Supervisor behavioral regressions (mock scheduling)");
+     return 0;
+ }
+--- a/Firmware/Tests/supervisor_alignment/queue.h
++++ b/Firmware/Tests/supervisor_alignment/queue.h
+@@ -7,4 +7,5 @@
+ BaseType_t xQueueSend(QueueHandle_t q, const void *item, TickType_t wait);
+ BaseType_t xQueueSendFromISR(QueueHandle_t q, const void *item, BaseType_t *woken);
+ BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t wait);
++UBaseType_t uxQueueMessagesWaiting(QueueHandle_t q);
+ #endif

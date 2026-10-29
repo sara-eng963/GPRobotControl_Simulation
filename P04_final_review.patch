@@ -1,0 +1,653 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b5f4edc..5b68696 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -208,6 +208,10 @@ if(Python3_Interpreter_FOUND)
+         COMMAND "${Python3_EXECUTABLE}"
+             "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/run_state_machine_alignment_tests.py")
+     set_tests_properties(stm32_state_machine_alignment PROPERTIES TIMEOUT 180)
++    add_test(NAME p04_integrated_production_scenarios
++        COMMAND "${Python3_EXECUTABLE}"
++            "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/run_p04_integrated.py")
++    set_tests_properties(p04_integrated_production_scenarios PROPERTIES TIMEOUT 180)
+     add_test(NAME stm32_portable_protocol_regressions
+         COMMAND "${Python3_EXECUTABLE}"
+             "${CMAKE_CURRENT_SOURCE_DIR}/Firmware/Tests/check_portable_protocol.py")
+diff --git a/Firmware/P04_INTEGRATED_TIMING_FAULT_INJECTION_REPORT.md b/Firmware/P04_INTEGRATED_TIMING_FAULT_INJECTION_REPORT.md
+new file mode 100644
+index 0000000..227e42d
+--- /dev/null
++++ b/Firmware/P04_INTEGRATED_TIMING_FAULT_INJECTION_REPORT.md
+@@ -0,0 +1,163 @@
++# P04 — Integrated Timing and Fault-Injection Pre-Hardware Review
++
++**Disposition: INCOMPLETE / UNVERIFIED.** This is a source-reviewed **candidate** patch package, not a verified production integration. No ARM device, WSL checkout, FreeRTOS POSIX kernel checkout, or toolchain was available in the authoring container. No target timing measurements or physical stopping tests were performed. The baseline branch and files were read from the connected GitHub repository. All tests described below are supplied as executable source, but their execution against the complete P03 checkout is **NOT RUN** until applied and verified in WSL.
++
++## 1. Baseline and environment
++
++- Canonical repository: `sara-eng963/GPRobotControl_Simulation`, only branch `sara/can-replacement`.
++- Verified canonical HEAD: `916e7a85fd2d20f445fe513901f8d149260c09cb`, message `P03: implement runtime safety freshness and CM4 liveness`; remote tree `bc552fe74fd6ebe50d5785338181ebaf62a20280`.
++- Source files inspected from that exact commit: production Supervisor `.c/.h`, `supervisor_timing_quality.h`, CM7 timer composition, production CM4 IPC service, `runtime_evidence.h`, `supervision_progress.h`, both IPC transport copies, STM32 CANopen master/header, desktop CANopen master, current runtime/timer/CAN/CM4 harnesses and CMake registrations.
++- Local environment: Linux container with C compiler and CMake, **no GitHub network/DNS access from its shell**, **no repository checkout** and **no `arm-none-eabi-gcc`**. GitHub connector supplied read-only baseline data. No source-level test below has yet compiled against the complete P03 checkout. The source from GitHub was not mirrored to a local Git repository.
++- Current CTest baseline: **55 as reported for P03, not independently re-executed**. P04 proposes one new CTest (`p04_integrated_production_scenarios`), conditional on Python3 discovery. The actual total must be obtained from `ctest -N` in WSL; do not assume 56.
++
++## 2. Production timing and execution trace
++
++Source: `Firmware/STM32H745/CM7/Core/Src/application_supervisor.c` owns TIM2/TIM3, 1 MHz TIM2/2 ms TIM3 settings, sequence-matched ring of **8 serviced TIM3 IRQ timestamps**. `timer_wait` uses a counting FreeRTOS notification, `pdTRUE` to drain count, deadline wait 6 ms. TIM2 is extended to 64-bit by an overflow ISR; a pending UIF correction covers one pending wrap but cannot prove arbitrary multi-wrap IRQ masking. Only CM7 TIM2 events and CM7 task timestamps are directly comparable. CM4 progress timestamps and host wall clocks are different domains.
++
++Production task `supervisor_task.c` executes:
++
++1. TIM3 `wait_next`, missed-count/timeout E003 detection, optional `observe_wake`;
++2. capture `cycle_start_us` from TIM2, and **new P04 pre-dispatch TIM3 timing validation**;
++3. `supervisor_pre_dispatch_cycle`: external inputs, at most **16** queued messages (special Teaching-event boundary, overload E016), at most **8** CM4 IPC frames, safety freshness E017 / peer response freshness E018, state-specific CAN/drive containment;
++4. controller CANopen heartbeat service, retry deferred state entry, restart/authorization gate and `canopen_master_set_drive_permission`, active-state step or FAULT service, observation-only guidance, drive snapshot, CM7 IPC status, output diagnostic adapter;
++5. task execution elapsed check: `>= 2000 us` E004; `supervisor_timing_assess` on serviced ISR-to-wake/completion and previous wake gap, E003 on severe >=4000 us service/wake gaps, E004 on ISR-to-completion >=2000 us; record per-cycle progress, but an unsuccessful cycle is not eligible for an independent watchdog feed.
++
++**Identified defect at P03 baseline:** the original Supervisor evaluated `supervisor_timing_assess` *after* state step. Consequently a single late wake (including `isr_to_wake >= 2000 us` or `isr_to_task_pre_dispatch >= 2000 us`), inconsistent timing observation or severe observed gap could be processed as a motion cycle before the fault. Existing tests explicitly expected invalid observations to increment a counter but *not* fault. The patch adds a guarded pre-dispatch assessment and a distinct E019 for absent/invalid timestamps; severe observed gaps use E003 and observed ISR-to-current-dispatch age reaching 2 ms E004 (including scheduling preemption after an on-time wake). Completion overrun cannot be known until work finishes and is still evaluated post-cycle. This change is safety-oriented and requires WSL regression.
++
++A target notification count >1 is distinct from a serviced ISR gap >2 ms; an interval between serviced interrupts does **not** independently establish missed hardware update count. E003 represents source-defined release/cadence faults, E004 the source-defined deadline faults, E016 Supervisor queue overflow, E017 safety freshness, E018 CM4 peer freshness, and candidate **E019** invalid or missing timing evidence. E019 is proposed, not yet integration-validated for external fault-code consumers.
++
++### Timing ownership and provisional budget
++
++| Subsystem | Owner/clock | Existing bound | Safety evidence / unresolved budget |
++|---|---|---|---|
++| TIM3 release/IRQ timestamp | CM7 timer ISR, TIM2 extended us | 8-entry history, notification accumulation | IRQ masking/latency and DWT time pending physical test |
++| Supervisor message processing | CM7 task, local tick/time | 16 items/cycle; exact 16 boundary depth query | E016 fail-closed backlog; queue send may block external producers, not this bounded drain |
++| CM7 IPC consumption | CM7 task / CM7 local ms | 8 messages/cycle; zero-timeout receive | Under continuous old traffic, challenge can starve and peer expires; fresh responses do not override safety faults |
++| CM4 IPC service | CM4 defaultTask / CM4 tick | 1 ms nominal task, 8 status frames per pass, 16 queued HMI | Task scheduling and CM4 load not hardware measured |
++| Actual FreeRTOS Message Buffers | shared SRAM4; each core's kernel | zero send/receive timeout; bounded storage | 60-byte app wire frame, 4-byte frame length on ARM; HSEM/EXTI transport ordering not physically measured |
++| P03 challenge | CM7 issue/receipt clock | 30 ms provisional maximum RTT | CM4 service must finish before response, no CM4-to-CM7 timestamp subtraction |
++| P03 peer freshness | CM7 receipt ms | 50 ms provisional maximum age | `runtime_peer_fresh` also enforces pending challenge deadline |
++| P03 safety freshness | CM7 verified producer time + receipt ms | 100 ms provisional | Requires non-null verifier, valid same-clock source timestamp/sequence |
++| CANopen master RX | CM7 owner, HAL FDCAN backend | max 32 frames/poll | Excess deferred, **no explicit saturation fault / high-water mark** in baseline; risk pending hardware measurement |
++| RPDO target + SYNC | CM7 CANopen owner | 6 sends + 1 SYNC per target cycle | TX nonblocking HAL backend must be proven; any failure revokes permission |
++| Supervisor execution | CM7 TIM2 us | 2000 us **deadline**, not a proven WCET | worst-case interrupt preemption, DMA/cache, memory and bus contention unknown |
++
++Loops with maximum counts do not establish a time bound for each HAL/backend call. `run_active_state` includes state-specific stop/trajectory/validation work; lower-priority validation worker can defer. Read/write GPIO provider callbacks and CAN backend completion are not known-WCET components.
++
++## 3. CAN load model (analytical; one shared Classic CAN bus at 1 Mbit/s)
++
++The **actual** project PDO mapper uses one `RPDO4` **DLC 4** per axis, one `TPDO4` **DLC 6** per axis, and a SYNC frame **DLC 0**. Six axes at 500 Hz imply **6 RPDO4 + 6 TPDO4 + 1 SYNC = 13 standard 11-bit CAN frames every 2 ms**, assuming each drive returns one TPDO every SYNC. Standard 11-bit Classical CAN 2.0 frames plus intermission require approximately `47 + 8 × DLC` bits, excluding stuffing. Lower-bound serialization is `6 × 79 + 6 × 95 + 47 = 1091 bit / 2 ms`, or **54.55%** of a 1 Mbit/s link. A conservative bit-stuffing envelope bounded by about `floor((33 + 8×DLC)/4)` extra bits per frame yields about **65.75%** (1315 bit/2 ms), before additional heartbeats and diagnostics. This maximum-stuffing model is not an exact exhaustive CAN bit-pattern proof.
++
++The controller sends a periodic 100 ms heartbeat (11-bit DLC 1). Drive heartbeat periods/phase must be established from BOOT's commissioned SDO mapping, not assumed always 100 ms. Each 100 ms heartbeat source adds nominal 550 bit/s excluding stuffing. Arbitration order, FIFO backlog, repeated arbitration loss, error frames, retransmissions, NMT/SDO diagnostics and extended drive timing are not represented by average utilization. Critically, 1091 µs serialized per 2 ms **does not imply completion within a 2000 µs command-to-feedback deadline**, since RPDO and TPDO transmit phases and the application processing must also fit.
++
++## 4. Candidate integrated fault matrix
++
++The supplied `test_p04_integrated.c` uses the repository's **actual Supervisor TU through the existing alignment fixture** with its task/IPC/fake-drive seams. Scenarios are injected, not observed on hardware. All are **NOT RUN in current environment**.
++
++| Case | Injected conditions | Required assertion / observed only after WSL execution |
++|---|---|---|
++| P04-01 | Fresh P03 evidence, on-time TIM3, valid drive and Approach path | No spurious fault / permission remains granted under fixture assumptions |
++| P04-02 | Peer age 51 ms during Approach | E018, FAULT, immediate software permission revocation |
++| P04-03 | Wake at 2000 µs, severe service gap, invalid ordering | E004/E003/E019 pre-dispatch, revocation and fault response; PathExecution on-time acceptance |
++| P04-04 | >16 normal Supervisor items plus expired safety | E016 queue precedence, no motion permission; separate non-overloaded E017 safety expiry assertion |
++| P04-05 | Missing drive axis 2 feedback, CM4 fresh | E202 and FAULT independently of CM4 |
++| P04-06 | Simultaneous peer expiry and drive feedback loss | FAULT, revocation, fault service |
++| P04-07 | Renew communications after peer FAULT | No automatic authorization or motion recovery |
++| P04-08 | Repeated queued overload in PathExecution | Continued FAULT service and no restored permission |
++| P04-09 | CM7 uint32 ms wrap, delayed/replay peer response, stale safety | Modular age and sequence checks reject stale/replay |
++| P04-10 | Post-FAULT timing disturbance | No forced motor dispatch; fault response still reachable |
++| P04-BOUNDARY | Wake at 1999/2000/2001 µs, post-wake preemption to 2000 µs, and missing observation | Strict boundary fault behavior; E019 for absent observation |
++
++**Gaps:** True CAN bus-off/TX saturation, exact-full RX boundary and post-recovery NMT traffic, high-water traces, CM4 stalled after independent IPC buffer exhaustion, simultaneous two-core preemption under actual FreeRTOS, real physical stop and hardware watchdog feed are **not implemented/verified by this candidate**. Existing P03 real-POSIX IPC type 6 HELLO/type 7 PROGRESS tests must be run in addition; the new integrated Supervisor fixture uses fake IPC and does not replace them.
++
++## 5. Source changes and rationale
++
++- `Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c`: add `supervisor_timing_pre_dispatch_check`, invoke before `supervisor_pre_dispatch_cycle`. Do not alter P01/P02/P03 safety ordering or 2000 us threshold. E019 proposed for invalid timing evidence.
++- `Firmware/Tests/test_p04_integrated.c`: new source-owned Supervisor fixture sharing all production C and test dependencies; 10 adversarial sequences + timing boundaries. No new supervisor/IPC/CANopen architecture.
++- `Firmware/Tests/run_state_machine_alignment_tests.py`: register P04 fixture and source-only fast mode for mutation execution. Existing mutations remain intact.
++- `Firmware/Tests/run_p04_integrated.py`: run test, parse exact scenario markers, optionally emit JSON trace; all timing values explicitly **injected**.
++- `Firmware/Tests/run_p04_mutations.py`: temporary symlink mirror compiling mutated production source and requiring behavioral assertion failure, not a compiler error. Candidate 8 Supervisor + 2 timer mutations.
++- `CMakeLists.txt`: register P04 CTest under existing Python availability conditional.
++- This report and exact-blob patch builder. **No SRAM4, IPC ABI, flash partitions or CANopen owner code modified** in this candidate.
++
++## 6. Provenance and diagnostics
++
++The `P04_TRACE_FILE=/path/p04.json` output records per-scenario PASS/FAIL and the exact synthetic wake deadline test inputs. Source: production C evaluated with *deterministically injected fake CM7 timestamps* in host mocks. It is not a production cycle trace or benchmark. Statistical min, mean, p95, p99, max of actual task time are **NOT AVAILABLE**; no hardware samples were collected. No telemetry, dynamic memory or file I/O was inserted into CM7's real-time cycle.
++
++## 7. Verification matrix
++
++| Verification | Status in authoring environment | Reproducibility requirement |
++|---|---|---|
++| Canonical branch HEAD/P03 metadata and source inspection | PASS (GitHub read-only) | `git rev-parse HEAD`, `git show --no-patch -s` |
++| New package Python syntax | PASS (local `python -m py_compile`) | `python3 -m py_compile ...` |
++| Isolated candidate pre-dispatch C smoke + exact P03 timing header | PASS (local host only) | `python3 local_source_check/run_candidate_smoke.py` |
++| Exact P03 timing header boundaries + one compiled negative mutation | PASS (local host only) | `local_source_check/test_timing_quality_exact.c`; one wake-boundary mutant compiled and failed assertion |
++| New P04 production scenario fixture | **NOT RUN** | `python3 Firmware/Tests/run_p04_integrated.py` |
++| New P04 10 negative mutations | **NOT RUN** | `python3 Firmware/Tests/run_p04_mutations.py` |
++| Production extracted TIM2/TIM3 injection regression | **NOT RUN** | `python3 Firmware/Tests/run_m7_timer_fault_injection.py` |
++| Existing P01/P02 state alignment and mutations | **NOT RUN** | `python3 Firmware/Tests/run_state_machine_alignment_tests.py` |
++| Existing P03 runtime/supervisor/CM4 suites | **NOT RUN** | `run_p03_...` in Firmware/Tests |
++| Actual FreeRTOS POSIX transport, types 6/7 | **NOT RUN** | `bash Intercore/Tests/run_ipc_freertos_runtime.sh` |
++| CANopen C2B master ABI/permission tests | **NOT RUN** | `python3 Firmware/Tests/run_c2b_canopen_master_tests.py` |
++| CMake configure, build, CTests | **NOT RUN** | `cmake -S . -B build-p04 ...`, `ctest --test-dir build-p04` |
++| CM7/CM4 Debug/Release ARM builds | **NOT RUN** | `python3 Firmware/Tests/build_stm32.py --help` then documented options |
++| Firmware integration Debug/Release, `git diff --check` | **NOT RUN** | Repository scripts and Git checks |
++| Actual 500 Hz / safe physical stopping | **HARDWARE-PENDING** | Oscilloscope/logic analyzer and drive commissioning required |
++
++## 8. Mutation evidence
++
++`run_p04_mutations.py` defines 10 mutants (late dispatch, invalid timestamp, severe gap, permission containment, peer expiry, safety expiry, queue overload, CAN feedback, missed-release condition, execution-overrun condition). **0/10 integrated source mutations executed** here; one separate native timing-header boundary mutant compiled and failed an assertion. A mutation only counts rejected after the executable compiles and emits `P04_ASSERT_FAIL` (integrated case) or a native assertion failure (existing timer-source extraction). A failure during compilation is recorded as a verification failure, not a killed mutation. Some candidate mutants may fail to detect if the fixture does not exercise the specific path; this must be resolved before P04 acceptance. Existing mutation suites remain unchanged.
++
++## 9. Outstanding risks and defects
++
++- CM7 prior to P04 may dispatch a target after an already late or invalid wake. Proposed fix is **unverified** until real production fixture and ARM builds pass.
++- Invalid timing evidence has a newly proposed E019 code; confirm fault-code consumers, dashboards, documentation and operator handling.
++- The preflight check cannot predict an overrun caused by later CAN operations. E004 completion faults can only prohibit **subsequent** cycles, not retroactively prevent transmission already attempted in the overrunning cycle.
++- CAN RX consumes at most 32 frames per poll but saturated backlog is not separately reported; no claim of complete CAN outage coverage. Source-grounded overload reporting requires a suitable backend pending-watermark contract to avoid equating an exactly-full batch with true queue overflow.
++- CAN send return-success is HAL enqueue, not bus arbitration completion or physical motor execution.
++- P03 30/50/100 ms thresholds are provisional; measured producer jitter, independent board verifier and latency margin remain unavailable.
++- Shared SRAM4 FreeRTOS message-buffer ABI works in the existing POSIX harness but true 2-core cache/ISR/HSEM scheduling needs hardware.
++- FAULT routine itself may fail hardware I/O. Software attempts to revoke permission do not prove drive torque removed.
++
++## 10. Future STM32 hardware measurement procedure
++
++1. Confirm board TIM2 is 1 MHz, TIM3 generates the expected 2 ms releases, interrupts priority 5, 64-bit TIM2 overflow handling. Run a sustained 10+ minute stress test and a separate 72+ minute rollover test (TIM2 wraps after approximately 71.6 minutes at 1 MHz) before accepting hardware rollover claims; injected rollover cases are not physical evidence.
++2. Toggle dedicated low-intrusion GPIO markers at TIM3 serviced ISR entry, Supervisor immediately after `wait_next`, immediately before first RPDO, after last SYNC enqueue, after fault permission revocation, and at progress completion. Capture with a synchronized multi-channel logic analyzer/oscilloscope. Avoid intrusive printing, allocation and unbounded instrument calls.
++3. Use DWT CYCCNT for cycle counts with 64-bit software extension and an independent TIM2 correlation; at 400 MHz 32-bit CYCCNT wraps after about 10.7 s. Confirm actual CPU clock and target interrupt overhead.
++4. Record 100,000+ continuous cycles in SRAM circular buffers, export **outside** the 500 Hz loop, and compute min/mean/p95/p99/max, misses, worst wake delay, earliest/last RPDO/SYNC bus time and software fault/revocation latency. Include intentional ISR contention, CM4 QSPI/IPC traffic, full message queues, flash wait states and CAN error/retransmission campaigns. Capture CAN controller's bus-off/error counters and physical CAN analyzer timestamps.
++5. Acceptance is **zero missed releases and zero >=2000 us task execution overruns under the qualified test envelope**; report any measured failure, source-to-bus-end latency and the actual fault-service tail. These are qualification targets, not current pass claims.
++6. Independently validate physical safe stop against actual drives including STO/relay design, fault-injection stop latency, watchdog configuration and E-stop channel; do not infer from firmware-only tests.
++
++## 11. Final software disposition
++
++**INCOMPLETE / UNVERIFIED.** A source-grounded pre-dispatch correction, deterministic integration tests, mutation runner, JSON scenario output and exact-baseline patch builder have been authored but production compilation, transport stress, full regressions, ARM builds and physical deadlines are not verified. Engineering Director must not authorize a P04 commit on this evidence alone.
++
++## Independent WSL verification — 2026-10-29
++
++Canonical baseline:
++916e7a85fd2d20f445fe513901f8d149260c09cb
++
++Branch: sara/can-replacement
++
++Results:
++- P04 integrated scenarios: 11/11 PASS.
++- P04 compiled source mutations: 10/10 rejected.
++- Existing production Supervisor regressions: PASS.
++- Full CMake build: PASS.
++- Desktop CTests: 56/56 PASS.
++- STM32 CM7 Debug and Release builds: PASS.
++- STM32 CM4 Debug and Release builds: PASS.
++- Debug and Release firmware integration: PASS.
++- git diff --check: PASS.
++
++Local verification correction:
++- P04-04 safety-expiry fixture changed to 101 ms.
++- The P03 safety freshness limit of 100 ms is inclusive.
++- No production safety threshold was relaxed.
++
++Verification scope:
++- Timing scenarios use deterministic injected timestamps.
++- Host execution does not establish STM32 worst-case execution time.
++- Physical 500 Hz timing and motor stopping remain unverified.
++
++Final source review and commit authorization remain pending.
+diff --git a/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c b/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
+index 352269f..41acdf4 100644
+--- a/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
++++ b/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
+@@ -1509,6 +1509,32 @@ static void supervisor_pre_dispatch_cycle(SupervisorTaskContext *context)
+     (void)supervisor_motion_containment_check(context, supervisor_now_ms(), false);
+ }
+ 
++/* P04: validate the source-owned TIM3 observation before entering a motion
++ * state. Completion overruns remain post-execution (cannot be predicted);
++ * no motion is executed after an already-observable late/invalid wake.
++ * TIM3 service times and TIM2 wake sample share the CM7 clock domain. */
++static bool supervisor_timing_pre_dispatch_check(
++    SupervisorTaskContext *context, uint64_t task_now_us)
++{
++    const SupervisorTimingAssessment a = context->last_timing_wake_available
++        ? supervisor_timing_assess(&context->last_timing_wake, task_now_us,
++              context->previous_timing_wake_valid,
++              context->previous_timing_wake_us)
++        : (SupervisorTimingAssessment){0};
++    uint32_t detail = 0U;
++    if (!a.valid)
++        detail = 0xE019U; /* invalid or missing CM7 timing evidence */
++    else if (a.service_gap_severe || a.wake_gap_severe)
++        detail = 0xE003U; /* serviced interrupt / wake cadence violated */
++    else if (a.late_completion)
++        detail = 0xE004U; /* task already >=2 ms from serviced IRQ */
++    if (detail == 0U) return true;
++    if (context->machine.activeState != ROBOT_STATE_FAULT &&
++        context->machine.activeState != ROBOT_STATE_EMERGENCY_STOP)
++        emit_step_failure(context, detail);
++    return false;
++}
++
+ static void supervisor_task_entry(void *argument)
+ {
+     SupervisorTaskContext *context = argument;
+@@ -1569,6 +1595,11 @@ static void supervisor_task_entry(void *argument)
+         }
+         const uint64_t cycle_start_us =
+             hardware_timed ? supervisor_now_us() : UINT64_C(0);
++        /* Reject known missed/invalid TIM3 timing before motor-state
++         * dispatch; completion overruns are evaluated after work. */
++        if (hardware_timed &&
++            !supervisor_timing_pre_dispatch_check(context, cycle_start_us))
++            progress_cycle_ok = false;
+         TRACE_BEGIN(TIMING_SUPERVISOR);
+         /* P03: actual production pre-dispatch cycle; tests call the same function. */
+         supervisor_pre_dispatch_cycle(context);
+diff --git a/Firmware/Tests/run_p04_integrated.py b/Firmware/Tests/run_p04_integrated.py
+new file mode 100644
+index 0000000..31f1f98
+--- /dev/null
++++ b/Firmware/Tests/run_p04_integrated.py
+@@ -0,0 +1,53 @@
++#!/usr/bin/env python3
++"""Production-source P04 scenarios via repo-owned Supervisor alignment builder.
++Deterministic fake-clock scenarios; JSON is NOT a measured STM32 timing trace.
++"""
++import json
++import os
++from pathlib import Path
++import re
++import subprocess
++import sys
++
++ROOT=Path(__file__).resolve().parents[2]
++RUNNER=ROOT/'Firmware/Tests/run_state_machine_alignment_tests.py'
++EXPECTED=[f'P04-{i:02d}' for i in range(1,11)]+['P04-BOUNDARY']
++
++
++def main():
++    env=os.environ.copy()
++    env['P04_FAST_ONLY']='1'
++    result=subprocess.run([sys.executable,str(RUNNER)],
++                          env=env,capture_output=True,text=True,timeout=180)
++    log=result.stdout+'\n'+result.stderr
++    found=re.findall(r'^P04_SCENARIO (P04-[\w-]+) PASS injected-time$',
++                     log,re.M)
++    success=(result.returncode==0 and len(found)==len(EXPECTED)
++             and set(found)==set(EXPECTED) and len(set(found))==len(found))
++    payload={
++        'baseline':'916e7a85fd2d20f445fe513901f8d149260c09cb',
++        'producer':'source-compiled production Supervisor fixture',
++        'timing_origin':'deterministic injected CM7 clock values, not measured',
++        'scheduling_origin':'host fake FreeRTOS tasks/queue, not real dual core',
++        'status':'PASS' if success else 'FAIL',
++        'scenarios':{name:('PASS' if name in found else 'FAIL')
++                     for name in EXPECTED},
++        'duration_inputs_us':{
++            'wake_boundaries':[1999,2000,2001],
++            'period':2000,
++            'injected_service_gap':4000,
++            'measurement':'test stimulus only; not firmware WCET'
++        },
++        'process_exit_code':result.returncode,
++    }
++    out=os.environ.get('P04_TRACE_FILE')
++    if out:
++        dest=Path(out);dest.parent.mkdir(parents=True,exist_ok=True)
++        dest.write_text(json.dumps(payload,indent=2)+'\n')
++    print(log, end='' if log.endswith('\n') else '\n')
++    print(json.dumps(payload,indent=2))
++    if not success:
++        raise SystemExit('FAIL: scenario output, compilation or assertion mismatch')
++    print('PASS: P04 deterministic integrated fixture (NOT hardware timing)')
++
++if __name__=='__main__': main()
+diff --git a/Firmware/Tests/run_p04_mutations.py b/Firmware/Tests/run_p04_mutations.py
+new file mode 100644
+index 0000000..fe13c42
+--- /dev/null
++++ b/Firmware/Tests/run_p04_mutations.py
+@@ -0,0 +1,98 @@
++#!/usr/bin/env python3
++"""Source mutations: compile MUST pass and P04 assertions MUST reject.
++Creates a symlink mirror outside repo; never writes/commits/reset existing Git files.
++"""
++from pathlib import Path
++import os
++import shutil
++import subprocess
++import sys
++import tempfile
++
++ROOT=Path(__file__).resolve().parents[2]
++TARGET=Path('Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c')
++ALIGN=Path('Firmware/Tests/run_state_machine_alignment_tests.py')
++TIMER=Path('Firmware/Tests/run_m7_timer_fault_injection.py')
++BASE='916e7a85fd2d20f445fe513901f8d149260c09cb'
++
++SUPERVISOR={
++ 'late_dispatch_veto':('else if (a.late_completion)\n        detail = 0xE004U;',
++                   'else if (false && a.late_completion)\n        detail = 0xE004U;'),
++ 'invalid_timing_veto':('if (!a.valid)\n        detail = 0xE019U;',
++                        'if (false && !a.valid)\n        detail = 0xE019U;'),
++ 'severe_service_gap_veto':('else if (a.service_gap_severe || a.wake_gap_severe)',
++                            'else if (false && (a.service_gap_severe || a.wake_gap_severe))'),
++ 'timing_fault_containment':('emit_step_failure(context, detail);\n    return false;\n}\n\nstatic void supervisor_task_entry',
++                            '(void)detail;\n    return false;\n}\n\nstatic void supervisor_task_entry'),
++ 'peer_expiry_veto':('else if (!runtime_peer_fresh(&context->peer_evidence, now_ms))',
++                     'else if (false && !runtime_peer_fresh(&context->peer_evidence, now_ms))'),
++ 'safety_expiry_veto':('if (!runtime_safety_fresh(&context->safety_evidence,',
++                       'if (false && !runtime_safety_fresh(&context->safety_evidence,'),
++ 'queue_overload_veto':('if (result == SUPERVISOR_DRAIN_OVERLOAD &&',
++                        'if (false && result == SUPERVISOR_DRAIN_OVERLOAD &&'),
++ 'can_feedback_veto':('!feedback.feedback_valid || !feedback.operation_enabled ||',
++                      'false || !feedback.operation_enabled ||'),
++}
++TIMING={
++ 'missed_release_veto':('if (periods != 1U) {','if (false && periods != 1U) {'),
++ 'execution_deadline_veto':('if (elapsed >= UINT64_C(2000)) {',
++                             'if (false && elapsed >= UINT64_C(2000)) {'),
++}
++
++def mirror(output,rel,mutable):
++    src=ROOT/rel;dst=output/rel
++    if rel==TARGET:
++        dst.parent.mkdir(parents=True,exist_ok=True)
++        dst.write_text(mutable);return
++    if rel in (ALIGN,TIMER):
++        dst.parent.mkdir(parents=True,exist_ok=True)
++        shutil.copy2(src,dst);return
++    if src.is_dir() and any(t.is_relative_to(rel) for t in (TARGET,ALIGN,TIMER)):
++        dst.mkdir(parents=True,exist_ok=True)
++        for child in src.iterdir(): mirror(output,rel/child.name,mutable)
++    else:
++        dst.parent.mkdir(parents=True,exist_ok=True)
++        dst.symlink_to(src,target_is_directory=src.is_dir())
++
++def execute(source,timer):
++    with tempfile.TemporaryDirectory(prefix='p04-mutant-') as tmp:
++        dst=Path(tmp)
++        for child in ROOT.iterdir():
++            if child.name=='.git':continue
++            mirror(dst,Path(child.name),source)
++        path=dst/(TIMER if timer else ALIGN)
++        env=os.environ.copy()
++        if not timer:env['P04_FAST_ONLY']='1'
++        return subprocess.run([sys.executable,str(path)],env=env,
++                              capture_output=True,text=True,timeout=240)
++
++def ensure_compiled_assertion_failure(name, result, timer):
++    out=result.stdout+'\n'+result.stderr
++    required='Assertion' if timer else 'P04_ASSERT_FAIL'
++    if result.returncode==0 or required not in out:
++        raise RuntimeError(name+': mutant survived or did not reach behavioral assertion\n'+out[-3500:])
++    if ('error:' in out or 'COMPILE FAIL' in out or
++        'No such file' in out or 'undefined reference' in out or
++        'Traceback' in out and required not in out):
++        raise RuntimeError(name+': compile/infrastructure failure is NOT mutation rejection\n'+out[-3500:])
++    print('REJECTED (compiled, behavioral assertion): '+name,flush=True)
++
++def main():
++    original=(ROOT/TARGET).read_text()
++    for label,timer in [('integrated',False),('timer_extraction',True)]:
++        baseline=execute(original,timer)
++        if baseline.returncode:
++            raise RuntimeError('BASELINE '+label+' FAIL\n'+baseline.stdout+baseline.stderr)
++        if not timer and 'P04_SCENARIO P04-10 PASS' not in baseline.stdout:
++            raise RuntimeError('P04 fixture missing from baseline test')
++        print('PASS: P04 '+label+' baseline',flush=True)
++    for timer,mutations in [(False,SUPERVISOR),(True,TIMING)]:
++        for name,(good,bad) in mutations.items():
++            if original.count(good)!=1:
++                raise RuntimeError(name+': unique exact production anchor missing')
++            result=execute(original.replace(good,bad),timer)
++            ensure_compiled_assertion_failure(name,result,timer)
++    print('PASS: '+str(len(SUPERVISOR)+len(TIMING))+
++          ' compiled negative P04 source mutations rejected')
++
++if __name__=='__main__':main()
+diff --git a/Firmware/Tests/run_state_machine_alignment_tests.py b/Firmware/Tests/run_state_machine_alignment_tests.py
+index 8bcfa7a..7791f84 100644
+--- a/Firmware/Tests/run_state_machine_alignment_tests.py
++++ b/Firmware/Tests/run_state_machine_alignment_tests.py
+@@ -113,7 +113,13 @@ def main():
+         execute(fixture, "production CM4 HMI lifecycle", overrides={cm4: cm4_obj})
+ 
+         wrapper = TESTS / "test_production_supervisor.c"
++        if os.environ.get("P04_FAST_ONLY") == "1":
++            execute(TESTS / "test_p04_integrated.c",
++                    "P04 integrated production scenarios", wrapper=True)
++            return
+         execute(wrapper, "production Supervisor wrapper", wrapper=True)
++        execute(TESTS / "test_p04_integrated.c",
++                "P04 integrated production scenarios", wrapper=True)
+ 
+         # Reuse the same scheduling seam against the actual desktop wrapper
+         # and its state/CANopen units. Target-only restart assertions remain
+diff --git a/Firmware/Tests/test_p04_integrated.c b/Firmware/Tests/test_p04_integrated.c
+new file mode 100644
+index 0000000..7910536
+--- /dev/null
++++ b/Firmware/Tests/test_p04_integrated.c
+@@ -0,0 +1,233 @@
++/* P04 deterministic integrated source-level fault injection.
++ * Compiles the actual production Supervisor translation unit through the
++ * existing P01/P02/P03 alignment fixture. No synthetic Supervisor is defined.
++ * The existing fixture's source-owned helpers and fake devices supply only
++ * controllable scheduling, queue, IPC and drive observations.
++ */
++#define main p04_legacy_supervisor_main
++#include "test_production_supervisor.c"
++#undef main
++
++#ifndef ALIGNMENT_DESKTOP
++#define P04_REQUIRE(x) do { if (!(x)) { \
++    fprintf(stderr, "P04_ASSERT_FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); \
++    exit(41); \
++} } while (0)
++#define P04_PASS(id) puts("P04_SCENARIO " id " PASS injected-time")
++
++static SupervisorTimingWake p04_wake(uint64_t isr, uint64_t wake,
++                                    uint32_t service_gap)
++{
++    SupervisorTimingWake s = {0};
++    s.timestamp_valid = true;
++    s.isr_service_us = isr;
++    s.wake_sample_us = wake;
++    s.isr_gap_valid = service_gap != 0U;
++    s.isr_service_gap_us = service_gap;
++    return s;
++}
++static void p04_prep(RobotStateId state, uint32_t now)
++{
++    setup(state);
++    p03_ready_evidence(&ctx, now);
++    p03_prepare_pre_dispatch();
++    p02_motion_ready_master(now);
++    now_tick = now;
++}
++static void p04_timing_fault(uint32_t detail, uint64_t isr,
++                             uint64_t wake, uint64_t task_now,
++                             uint32_t service_gap)
++{
++    p04_prep(ROBOT_STATE_APPROACH, 100U);
++    ctx.last_timing_wake_available = true;
++    ctx.last_timing_wake = p04_wake(isr,wake,service_gap);
++    P04_REQUIRE(!supervisor_timing_pre_dispatch_check(&ctx,task_now));
++    P04_REQUIRE(ctx.machine.activeState == ROBOT_STATE_FAULT);
++    P04_REQUIRE(ctx.machine.activeFaultCode ==
++               state_error_code(ROBOT_STATE_APPROACH, detail));
++    P04_REQUIRE(ctx.restart_gate.inhibited);
++    P04_REQUIRE(!master.drive_command_permission);
++    unsigned previous_stop = stop_calls;
++    run_active_state(&ctx);
++    P04_REQUIRE(ctx.fault_response_step_ok);
++    P04_REQUIRE(stop_calls == previous_stop);
++    P04_REQUIRE(drive.commands == 0U);
++}
++static void p04_scenario_01(void)
++{
++    p04_prep(ROBOT_STATE_APPROACH,100U);
++    ctx.last_timing_wake_available=true;
++    ctx.last_timing_wake=p04_wake(200000U,200100U,2000U);
++    P04_REQUIRE(supervisor_timing_pre_dispatch_check(&ctx,200101U));
++    supervisor_pre_dispatch_cycle(&ctx);
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_APPROACH);
++    P04_REQUIRE(master.drive_command_permission);
++    P04_PASS("P04-01");
++}
++static void p04_scenario_02(void)
++{
++    p04_prep(ROBOT_STATE_APPROACH,100U);
++    ctx.peer_evidence.last_response_ms=49U;
++    supervisor_pre_dispatch_cycle(&ctx);
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    P04_REQUIRE(!master.drive_command_permission);
++    P04_REQUIRE(ctx.machine.activeFaultCode ==
++               state_error_code(ROBOT_STATE_APPROACH,0xE018U));
++    P04_PASS("P04-02");
++}
++static void p04_scenario_03(void)
++{
++    p04_timing_fault(0xE004U,200000U,202000U,202000U,2000U);
++    p04_timing_fault(0xE003U,200000U,200010U,200011U,4000U);
++    p04_timing_fault(0xE019U,200020U,200010U,200030U,2000U);
++    p04_prep(ROBOT_STATE_PATH_EXECUTION,100U);
++    ctx.last_timing_wake_available=true;
++    ctx.last_timing_wake=p04_wake(200000U,200010U,2000U);
++    P04_REQUIRE(supervisor_timing_pre_dispatch_check(&ctx,200011U));
++    /* Deadline-overrun detection itself is exercised by the existing
++     * source-extracted m7_timer_fault_host 1999/2000 boundary tests. */
++    P04_PASS("P04-03");
++}
++static void p04_scenario_04(void)
++{
++    p04_prep(ROBOT_STATE_APPROACH,100U);
++    p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE+2U);
++    ctx.safety_evidence.last_source_ms=0U;
++    ctx.safety_evidence.last_receipt_ms=0U;
++    supervisor_pre_dispatch_cycle(&ctx);
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    P04_REQUIRE(ctx.machine.activeFaultCode==
++               state_error_code(ROBOT_STATE_APPROACH,0xE016U));
++    P04_REQUIRE(!master.drive_command_permission);
++    /* Expiry must independently fault without the overload masking it.
++     * The 100 ms freshness boundary is inclusive; 101 ms is expired. */
++    p04_prep(ROBOT_STATE_APPROACH,101U);
++    ctx.safety_evidence.last_source_ms=0U;
++    ctx.safety_evidence.last_receipt_ms=0U;
++    supervisor_pre_dispatch_cycle(&ctx);
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    P04_REQUIRE(ctx.machine.activeFaultCode==
++               state_error_code(ROBOT_STATE_APPROACH,0xE017U));
++    P04_REQUIRE(!master.drive_command_permission);
++    P04_PASS("P04-04");
++}
++static void p04_scenario_05(void)
++{
++    p04_prep(ROBOT_STATE_APPROACH,100U);
++    P04_REQUIRE(supervisor_motion_containment_check(&ctx,100U,false));
++    drive.axis[2].feedback_valid=false;
++    P04_REQUIRE(!supervisor_motion_containment_check(&ctx,100U,false));
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    P04_REQUIRE(ctx.machine.activeFaultCode==
++               state_error_code(ROBOT_STATE_APPROACH,0xE202U));
++    P04_REQUIRE(runtime_peer_fresh(&ctx.peer_evidence,100U));
++    P04_REQUIRE(!master.drive_command_permission);
++    P04_PASS("P04-05");
++}
++static void p04_scenario_06(void)
++{
++    p04_prep(ROBOT_STATE_APPROACH,100U);
++    drive.axis[0].feedback_valid=false;
++    ctx.peer_evidence.last_response_ms=0U;
++    supervisor_pre_dispatch_cycle(&ctx);
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    P04_REQUIRE(!master.drive_command_permission);
++    run_active_state(&ctx);
++    P04_REQUIRE(ctx.fault_response_step_ok);
++    P04_PASS("P04-06");
++}
++static void p04_scenario_07(void)
++{
++    p04_prep(ROBOT_STATE_APPROACH,100U);
++    ctx.peer_evidence.last_response_ms=0U;
++    supervisor_pre_dispatch_cycle(&ctx);
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    p03_ready_evidence(&ctx,101U);
++    drive.axis[0].feedback_valid=true;
++    now_tick=101U;
++    supervisor_pre_dispatch_cycle(&ctx);
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    P04_REQUIRE(ctx.restart_gate.inhibited);
++    P04_REQUIRE(!master.drive_command_permission);
++    P04_PASS("P04-07");
++}
++static void p04_scenario_08(void)
++{
++    p04_prep(ROBOT_STATE_PATH_EXECUTION,100U);
++    for(unsigned cycle=0;cycle<3U;cycle++) {
++        p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE+1U);
++        now_tick=100U+cycle;
++        supervisor_pre_dispatch_cycle(&ctx);
++        P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++        P04_REQUIRE(!master.drive_command_permission);
++        run_active_state(&ctx);
++        P04_REQUIRE(ctx.fault_response_step_ok);
++        p02_queue_reset();
++    }
++    P04_PASS("P04-08");
++}
++static void p04_scenario_09(void)
++{
++    RuntimePeerEvidence p={.expected_session=71U};
++    IpcMessage hello=p03_hello(71U);
++    P04_REQUIRE(runtime_peer_on_hello(&p,&hello));
++    uint32_t challenge=0;
++    P04_REQUIRE(runtime_peer_challenge(&p,UINT32_MAX-5U,&challenge));
++    IpcMessage reply=p03_progress(71U,1U,challenge);
++    P04_REQUIRE(runtime_peer_accept(&p,&reply,UINT32_MAX));
++    P04_REQUIRE(runtime_peer_fresh(&p,UINT32_MAX));
++    P04_REQUIRE(!runtime_peer_fresh(&p,50U));
++    P04_REQUIRE(!runtime_peer_accept(&p,&reply,0U));
++    RuntimeSafetyPort port={.verify=p03_fixture_verify,.max_age_ms=100U};
++    RuntimeSafetyEvidence safety={.accepted=true,.last_source_ms=UINT32_MAX-1U,
++        .last_receipt_ms=UINT32_MAX-1U};
++    P04_REQUIRE(runtime_safety_fresh(&safety,&port,2U));
++    P04_REQUIRE(!runtime_safety_fresh(&safety,&port,200U));
++    P04_PASS("P04-09");
++}
++static void p04_scenario_10(void)
++{
++    p04_prep(ROBOT_STATE_PATH_EXECUTION,100U);
++    p02_enqueue_noop_batch(SUPERVISOR_MAX_MESSAGES_CYCLE+1U);
++    supervisor_pre_dispatch_cycle(&ctx);
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    p02_queue_reset();
++    ctx.last_timing_wake_available=true;
++    ctx.last_timing_wake=p04_wake(200000U,202001U,2020U);
++    P04_REQUIRE(!supervisor_timing_pre_dispatch_check(&ctx,202001U));
++    run_active_state(&ctx);
++    P04_REQUIRE(ctx.fault_response_step_ok);
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    P04_REQUIRE(!master.drive_command_permission);
++    P04_PASS("P04-10");
++}
++static void p04_boundary_tests(void)
++{
++    const uint64_t isr=UINT64_C(100000);
++    p04_prep(ROBOT_STATE_APPROACH,100U);
++    ctx.last_timing_wake_available=true;
++    ctx.last_timing_wake=p04_wake(isr,isr+1999U,2000U);
++    P04_REQUIRE(supervisor_timing_pre_dispatch_check(&ctx,isr+1999U));
++    p04_timing_fault(0xE004U,isr,isr+2000U,isr+2000U,2000U);
++    p04_timing_fault(0xE004U,isr,isr+2001U,isr+2001U,2000U);
++    /* A perfectly legal 1999us wake can become late before dispatch. */
++    p04_timing_fault(0xE004U,isr,isr+1999U,isr+2000U,2000U);
++    p04_prep(ROBOT_STATE_APPROACH,100U);
++    P04_REQUIRE(!supervisor_timing_pre_dispatch_check(&ctx,100001U));
++    P04_REQUIRE(ctx.machine.activeState==ROBOT_STATE_FAULT);
++    P04_PASS("P04-BOUNDARY");
++}
++#endif
++int main(void)
++{
++#ifndef ALIGNMENT_DESKTOP
++    robot_config_init_ur5(&robot);
++    for(unsigned i=0;i<ROBOT_DOF;++i)
++        P04_REQUIRE(avatar_m_position_scale_default(&scales[i],50.0));
++    p04_scenario_01();p04_scenario_02();p04_scenario_03();
++    p04_scenario_04();p04_scenario_05();p04_scenario_06();
++    p04_scenario_07();p04_scenario_08();p04_scenario_09();
++    p04_scenario_10();p04_boundary_tests();
++#endif
++    return p04_legacy_supervisor_main();
++}

@@ -330,6 +330,11 @@
 			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/ft_sensor.c</locationURI>
 		</link>
 		<link>
+			<name>Application/HandGuiding/ft_serial_transport.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/ft_serial_transport.c</locationURI>
+		</link>
+		<link>
 			<name>Application/HandGuiding/sensor_config.c</name>
 			<type>1</type>
 			<locationURI>PARENT-3-PROJECT_LOC/HandGuiding/sensor_config.c</locationURI>

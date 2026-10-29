@@ -1,0 +1,615 @@
+diff --git a/CANComm/CANopen/canopen_master_types.h b/CANComm/CANopen/canopen_master_types.h
+new file mode 100644
+--- /dev/null
++++ b/CANComm/CANopen/canopen_master_types.h
+@@ -0,0 +1,110 @@
++#ifndef CANOPEN_MASTER_TYPES_H
++#define CANOPEN_MASTER_TYPES_H
++
++/*
++ * Canonical CANopen master type contract for both STM32 CM7 and desktop.
++ * This header owns all CanopenMaster-related enum/struct/callback types.
++ * All consumers, including the production master and the real drive ports,
++ * must compile this single declaration; platform behavior remains in .c.
++ *
++ * drive_command_permission is stored in both environments to preserve the
++ * ABI, but the desktop implementation does NOT enforce the firmware C2B
++ * authorization policy. Only the STM32 CANopen master implements that veto.
++ */
++#include "../can_backend.h"
++#include "canopen_sdo.h"
++#include "../../ServoDrive/AvatarM/avatar_m_drive.h"
++#include "../../ServoDrive/JointDrive/joint_drive_port.h"
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++typedef enum
++{
++    CANOPEN_MASTER_SDO_IDLE = 0,
++    CANOPEN_MASTER_SDO_PENDING,
++    CANOPEN_MASTER_SDO_COMPLETE,
++    CANOPEN_MASTER_SDO_ABORT,
++    CANOPEN_MASTER_SDO_TIMEOUT,
++    CANOPEN_MASTER_SDO_TRANSPORT_ERROR
++} CanopenMasterSdoState;
++
++typedef struct
++{
++    CanBackend *backend;
++
++    uint8_t node_ids[JOINT_DRIVE_AXES];
++    uint8_t node_count;
++
++    /*
++     * Heartbeat age limit used by canopen_master_healthy().
++     * Set to zero to require the state but disable age checking.
++     */
++    uint32_t heartbeat_timeout_ms;
++
++    /* One boot/configuration SDO transaction is outstanding at a time. */
++    uint32_t sdo_timeout_ms;
++
++} CanopenMasterConfig;
++
++typedef struct
++{
++    CanopenMasterSdoState state;
++
++    uint8_t node_index;
++    uint16_t index;
++    uint8_t subindex;
++
++    bool expects_read;
++
++    uint32_t started_ms;
++
++    CanopenSdoResponse response;
++
++} CanopenMasterSdoTransaction;
++
++/* RTOS-independent callback: runtime access must originate from its one owner. */
++typedef bool (*CanopenMasterOwnerCheck)(void *context);
++
++typedef struct {
++    int32_t value;
++    uint64_t timestamp_us;
++    bool valid;
++} CanopenTpdoLatest;
++
++typedef struct
++{
++    CanBackend *backend;
++
++    AvatarMDrive drives[JOINT_DRIVE_AXES];
++    uint8_t node_count;
++
++    uint32_t heartbeat_timeout_ms;
++    uint32_t sdo_timeout_ms;
++
++    /* Host-produced heartbeat is independent of any one motion state. */
++    uint32_t last_controller_heartbeat_ms;
++    bool controller_heartbeat_sent;
++
++    uint32_t last_heartbeat_ms[JOINT_DRIVE_AXES];
++    bool heartbeat_timestamp_valid[JOINT_DRIVE_AXES];
++
++    /* Monotonic per-node TPDO4 receive counters for cyclic freshness checks. */
++    uint32_t tpdo_rx_count[JOINT_DRIVE_AXES];
++    CanopenTpdoLatest latest_tpdo[JOINT_DRIVE_AXES];
++
++    CanopenMasterSdoTransaction sdo;
++
++    /* Software veto only. Cleared at init and every new NMT reset cycle. */
++    bool drive_command_permission;
++
++    bool initialized;
++
++    /* Bound once by the controller task after initialization and before use. */
++    CanopenMasterOwnerCheck owner_check;
++    void *owner_check_context;
++
++} CanopenMaster;
++
++#endif /* CANOPEN_MASTER_TYPES_H */
+diff --git a/CANComm/CANopen/canopen_master.h b/CANComm/CANopen/canopen_master.h
+--- a/CANComm/CANopen/canopen_master.h
++++ b/CANComm/CANopen/canopen_master.h
+@@ -25,89 +25,7 @@
+     (((uint32_t)CANOPEN_CONTROLLER_NODE_ID << 16) | \
+      (uint32_t)CANOPEN_DRIVE_CONSUMER_TIMEOUT_MS)
+ 
+-typedef enum
+-{
+-    CANOPEN_MASTER_SDO_IDLE = 0,
+-    CANOPEN_MASTER_SDO_PENDING,
+-    CANOPEN_MASTER_SDO_COMPLETE,
+-    CANOPEN_MASTER_SDO_ABORT,
+-    CANOPEN_MASTER_SDO_TIMEOUT,
+-    CANOPEN_MASTER_SDO_TRANSPORT_ERROR
+-} CanopenMasterSdoState;
+-
+-typedef struct
+-{
+-    CanBackend *backend;
+-
+-    uint8_t node_ids[JOINT_DRIVE_AXES];
+-    uint8_t node_count;
+-
+-    /*
+-     * Heartbeat age limit used by canopen_master_healthy().
+-     * Set to zero to require the state but disable age checking.
+-     */
+-    uint32_t heartbeat_timeout_ms;
+-
+-    /* One boot/configuration SDO transaction is outstanding at a time. */
+-    uint32_t sdo_timeout_ms;
+-
+-} CanopenMasterConfig;
+-
+-typedef struct
+-{
+-    CanopenMasterSdoState state;
+-
+-    uint8_t node_index;
+-    uint16_t index;
+-    uint8_t subindex;
+-
+-    bool expects_read;
+-
+-    uint32_t started_ms;
+-
+-    CanopenSdoResponse response;
+-
+-} CanopenMasterSdoTransaction;
+-
+-/* RTOS-independent callback: runtime access must originate from its one owner. */
+-typedef bool (*CanopenMasterOwnerCheck)(void *context);
+-
+-typedef struct {
+-    int32_t value;
+-    uint64_t timestamp_us;
+-    bool valid;
+-} CanopenTpdoLatest;
+-
+-typedef struct
+-{
+-    CanBackend *backend;
+-
+-    AvatarMDrive drives[JOINT_DRIVE_AXES];
+-    uint8_t node_count;
+-
+-    uint32_t heartbeat_timeout_ms;
+-    uint32_t sdo_timeout_ms;
+-
+-    /* Host-produced heartbeat is independent of any one motion state. */
+-    uint32_t last_controller_heartbeat_ms;
+-    bool controller_heartbeat_sent;
+-
+-    uint32_t last_heartbeat_ms[JOINT_DRIVE_AXES];
+-    bool heartbeat_timestamp_valid[JOINT_DRIVE_AXES];
+-
+-    /* Monotonic per-node TPDO4 receive counters for cyclic freshness checks. */
+-    uint32_t tpdo_rx_count[JOINT_DRIVE_AXES];
+-    CanopenTpdoLatest latest_tpdo[JOINT_DRIVE_AXES];
+-
+-    CanopenMasterSdoTransaction sdo;
+-
+-    bool initialized;
+-
+-    /* Bound once by the controller task after initialization and before use. */
+-    CanopenMasterOwnerCheck owner_check;
+-    void *owner_check_context;
+-
+-} CanopenMaster;
++#include "canopen_master_types.h"
+ 
+ /* Initialize before task scheduling; bind exactly once inside owner task.
+  * Unbound coordinators retain standalone-test/initialization semantics.
+diff --git a/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.h b/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.h
+--- a/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.h
++++ b/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.h
+@@ -1,5 +1,5 @@
+-#ifndef CANOPEN_MASTER_H
+-#define CANOPEN_MASTER_H
++#ifndef STM32_CANOPEN_MASTER_H
++#define STM32_CANOPEN_MASTER_H
+ 
+ #include "../can_backend.h"
+ #include "canopen_nmt.h"
+@@ -25,92 +25,7 @@
+     (((uint32_t)CANOPEN_CONTROLLER_NODE_ID << 16) | \
+      (uint32_t)CANOPEN_DRIVE_CONSUMER_TIMEOUT_MS)
+ 
+-typedef enum
+-{
+-    CANOPEN_MASTER_SDO_IDLE = 0,
+-    CANOPEN_MASTER_SDO_PENDING,
+-    CANOPEN_MASTER_SDO_COMPLETE,
+-    CANOPEN_MASTER_SDO_ABORT,
+-    CANOPEN_MASTER_SDO_TIMEOUT,
+-    CANOPEN_MASTER_SDO_TRANSPORT_ERROR
+-} CanopenMasterSdoState;
+-
+-typedef struct
+-{
+-    CanBackend *backend;
+-
+-    uint8_t node_ids[JOINT_DRIVE_AXES];
+-    uint8_t node_count;
+-
+-    /*
+-     * Heartbeat age limit used by canopen_master_healthy().
+-     * Set to zero to require the state but disable age checking.
+-     */
+-    uint32_t heartbeat_timeout_ms;
+-
+-    /* One boot/configuration SDO transaction is outstanding at a time. */
+-    uint32_t sdo_timeout_ms;
+-
+-} CanopenMasterConfig;
+-
+-typedef struct
+-{
+-    CanopenMasterSdoState state;
+-
+-    uint8_t node_index;
+-    uint16_t index;
+-    uint8_t subindex;
+-
+-    bool expects_read;
+-
+-    uint32_t started_ms;
+-
+-    CanopenSdoResponse response;
+-
+-} CanopenMasterSdoTransaction;
+-
+-/* RTOS-independent callback: runtime access must originate from its one owner. */
+-typedef bool (*CanopenMasterOwnerCheck)(void *context);
+-
+-typedef struct {
+-    int32_t value;
+-    uint64_t timestamp_us;
+-    bool valid;
+-} CanopenTpdoLatest;
+-
+-typedef struct
+-{
+-    CanBackend *backend;
+-
+-    AvatarMDrive drives[JOINT_DRIVE_AXES];
+-    uint8_t node_count;
+-
+-    uint32_t heartbeat_timeout_ms;
+-    uint32_t sdo_timeout_ms;
+-
+-    /* Host-produced heartbeat is independent of any one motion state. */
+-    uint32_t last_controller_heartbeat_ms;
+-    bool controller_heartbeat_sent;
+-
+-    uint32_t last_heartbeat_ms[JOINT_DRIVE_AXES];
+-    bool heartbeat_timestamp_valid[JOINT_DRIVE_AXES];
+-
+-    /* Monotonic per-node TPDO4 receive counters for cyclic freshness checks. */
+-    uint32_t tpdo_rx_count[JOINT_DRIVE_AXES];
+-    CanopenTpdoLatest latest_tpdo[JOINT_DRIVE_AXES];
+-
+-    CanopenMasterSdoTransaction sdo;
+-
+-    /* Software veto only. Cleared at init and every new NMT reset cycle. */
+-    bool drive_command_permission;
+-
+-    bool initialized;
+-
+-    /* Bound once by the controller task after initialization and before use. */
+-    CanopenMasterOwnerCheck owner_check;
+-    void *owner_check_context;
+-
+-} CanopenMaster;
++#include "../../../../../../CANComm/CANopen/canopen_master_types.h"
+ 
+ /* Initialize before task scheduling; bind exactly once inside owner task.
+  * Unbound coordinators retain standalone-test/initialization semantics.
+@@ -335,4 +250,4 @@
+     uint32_t now_ms
+ );
+ 
+-#endif /* CANOPEN_MASTER_H */
++#endif /* STM32_CANOPEN_MASTER_H */
+diff --git a/Firmware/Tests/run_a02_1_canopen_adapter_abi.py b/Firmware/Tests/run_a02_1_canopen_adapter_abi.py
+--- a/Firmware/Tests/run_a02_1_canopen_adapter_abi.py
++++ b/Firmware/Tests/run_a02_1_canopen_adapter_abi.py
+@@ -1,12 +1,11 @@
+ #!/usr/bin/env python3
+-"""A02.1: compile real STM32 master + real root adapters. TEST ONLY.
++"""A02.2: strict production-master / shared-adapter ABI regression.
+ 
+ Run from any working directory. No files are written to the repository.
+-Default exits nonzero if production behavior fails. Optionally use
+---expect-baseline-failure for a local reproduction that exits zero ONLY when
+-layout differs and the observed behavior test fails (never use as a CI gate).
++Strict mode is required for CI and exits nonzero on any ABI/layout mismatch
++or behavioral failure. Reproduction of the original known defect remains
++available by checking out the previous A02.1 commit (5e74a693).
+ """
+-import argparse
+ import os
+ from pathlib import Path
+ import re
+@@ -52,20 +51,21 @@
+     if m is None:
+         raise RuntimeError("Layout probe produced no initialized offset")
+     permission = re.search(r"permission=(\d+)", r.stdout)
+-    return int(m.group(1)), (int(permission.group(1)) if permission else None)
++    size = re.search(r"sizeof=(\d+)", r.stdout)
++    align = re.search(r"align=(\d+)", r.stdout)
++    sdo = re.search(r"sdo=(\d+)", r.stdout)
++    owner = re.search(r"owner_check=(\d+)", r.stdout)
++    if not all((permission, size, align, sdo, owner)):
++        raise RuntimeError("Incomplete canonical CANopen layout probe: " + r.stdout)
++    return {"initialized": int(m.group(1)), "permission": int(permission.group(1)),
++            "sizeof": int(size.group(1)), "align": int(align.group(1)),
++            "sdo": int(sdo.group(1)), "owner_check": int(owner.group(1))}
+ 
+ 
+ def main():
+-    parser = argparse.ArgumentParser(description=__doc__)
+-    parser.add_argument("--expect-baseline-failure", action="store_true",
+-                        help="local evidence mode; not a required-passing CI check")
+-    args = parser.parse_args()
+-    expected_sha = "d8924d3acb4ec39e31462c49c680ccfb12f53316"
+     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                           capture_output=True, text=True, check=True).stdout.strip()
+     print("REPOSITORY_HEAD:", head)
+-    if head != expected_sha:
+-        raise RuntimeError("Expected exact A02.1 baseline; no branch switching performed")
+     paths = [*MASTER_SOURCES, *ADAPTERS, *REAL_DRIVE_DEPS,
+              TESTS / "a02_1_canopen_layout_probe.c",
+              TESTS / "test_a02_1_canopen_adapter_abi.c"]
+@@ -78,14 +78,16 @@
+     with tempfile.TemporaryDirectory(prefix="a02_1_canopen_abi_") as tmp:
+         workdir = Path(tmp)
+         print("=== Headers: separate real compilation units ===")
+-        fw_offset, permission_offset = layout(base, workdir, "firmware")
+-        root_offset, _ = layout(base, workdir, "root")
+-        print(f"OFFSETS firmware_initialized={fw_offset} "
+-              f"firmware_permission={permission_offset} root_initialized={root_offset}")
+-        if fw_offset == root_offset or permission_offset != root_offset:
+-            raise RuntimeError("Expected offset substitution not demonstrated")
++        fw_layout = layout(base, workdir, "firmware")
++        root_layout = layout(base, workdir, "root")
++        print("FIRMWARE_LAYOUT:", fw_layout)
++        print("ROOT_LAYOUT:", root_layout)
++        if fw_layout != root_layout:
++            raise RuntimeError("CANopen type ABI mismatch: " +
++                               f"firmware={fw_layout}, root={root_layout}")
+ 
+         print("=== Header include tracing: real production and root translation units ===")
++        canonical_header = ROOT_CAN / "canopen_master_types.h"
+         for src, required_header in [
+             (MASTER_SOURCES[0], FW / "canopen_master.h"),
+             *[(src, ROOT_CAN / "canopen_master.h") for src in ADAPTERS],
+@@ -98,12 +100,14 @@
+                 raise RuntimeError("Compiler header tracing failed for " + str(src))
+             header_paths = []
+             for line in result.stderr.splitlines():
+-                match = re.match(r"^\.+\s+(.+canopen_master\.h)$", line.strip())
++                match = re.match(r"^\.+\s+(.+canopen_master(?:_types)?\.h)$", line.strip())
+                 if match:
+                     header_paths.append(Path(match.group(1)).resolve())
+             print("HEADER_TRACE", src.name, "=>", *header_paths)
+             if required_header.resolve() not in header_paths:
+                 raise RuntimeError("Unexpected CanopenMaster header in " + str(src))
++            if canonical_header.resolve() not in header_paths:
++                raise RuntimeError("Canonical CANopen type header missing from " + str(src))
+ 
+         print("=== Production master with both genuine root adapters ===")
+         exe = workdir / "adapter_abi_test"
+@@ -112,35 +116,9 @@
+                        *map(str, REAL_DRIVE_DEPS), "-lm", "-o", str(exe)]
+         run(compilation)
+         test = run([str(exe)], allow_failure=True)
+-        if args.expect_baseline_failure:
+-            if test.returncode == 0:
+-                raise RuntimeError("Expected baseline failure absent")
+-            expected_output = [
+-                "production_initialized=1 permission=0 commissioning_initialized=0",
+-                "commissioning_configured=0 joint_configured=0",
+-                "A02.1 granted: commissioning_initialized=1 joint_configured=1",
+-                "A02.1 revoked: commissioning_initialized=0 joint_configured=0",
+-            ]
+-            output = test.stdout + test.stderr
+-            if not all(needle in output for needle in expected_output):
+-                raise RuntimeError("Baseline output did not isolate the expected ABI mismatch")
+-            expected_failures = {
+-                "init_when_denied", "configured_when_denied",
+-                "commissioning_configured_when_denied", "init_after_revoke",
+-                "configured_after_revoke", "init_when_denied == init_when_granted",
+-                "configured_when_denied == configured_when_granted",
+-            }
+-            actual_failures = re.findall(r"^FAIL A02\.1:\d+: (.+)$",
+-                                         test.stderr, flags=re.MULTILINE)
+-            if len(actual_failures) != len(expected_failures) or \
+-                    set(actual_failures) != expected_failures:
+-                raise RuntimeError("Unexpected failing assertion(s): " +
+-                                   repr(actual_failures))
+-            print("REPRODUCED ARCH-001: only expected adapter ABI assertions failed")
+-            return 0
+         if test.returncode:
+             raise RuntimeError("ARCH-001 reproduced: required adapter contract failed")
+-        print("PASS: production adapter ABI conformance")
++        print("PASS: canonical CANopen layout, real adapters, and authorization vetoes")
+     return 0
+ 
+ 
+diff --git a/Firmware/Tests/a02_1_canopen_layout_probe.c b/Firmware/Tests/a02_1_canopen_layout_probe.c
+--- a/Firmware/Tests/a02_1_canopen_layout_probe.c
++++ b/Firmware/Tests/a02_1_canopen_layout_probe.c
+@@ -17,8 +17,8 @@
+            _Alignof(CanopenMaster), offsetof(CanopenMaster, sdo),
+            offsetof(CanopenMaster, initialized),
+            offsetof(CanopenMaster, owner_check));
+-#if defined(A02_PROBE_FIRMWARE)
+-    printf("LAYOUT variant=firmware permission=%zu\n",
++#if defined(A02_PROBE_ROOT) || defined(A02_PROBE_FIRMWARE)
++    printf("LAYOUT variant=%s permission=%zu\n", HEADER_VARIANT,
+            offsetof(CanopenMaster, drive_command_permission));
+ #endif
+     return 0;
+diff --git a/Firmware/Tests/test_a02_1_canopen_adapter_abi.c b/Firmware/Tests/test_a02_1_canopen_adapter_abi.c
+--- a/Firmware/Tests/test_a02_1_canopen_adapter_abi.c
++++ b/Firmware/Tests/test_a02_1_canopen_adapter_abi.c
+@@ -1,4 +1,4 @@
+-/* A02.1 -- intentionally failing integration regression on d8924d3.
++/* A02.1/A02.2 -- strict real production-composition ABI regression.
+  * This TU sees the production CanopenMaster. Both actual adapters are built
+  * separately and retain their relative includes of the root declaration.
+  * Do not replace either adapter with a mock and do not link root master.c.
+@@ -85,9 +85,9 @@
+            (int)init_when_denied, (int)commissioning_configured_when_denied,
+            (int)configured_when_denied);
+     fflush(stdout);
+-    EXPECT(init_when_denied);                   /* expected FAIL on baseline */
+-    EXPECT(configured_when_denied);             /* expected FAIL on baseline */
+-    EXPECT(commissioning_configured_when_denied); /* expected FAIL on baseline */
++    EXPECT(init_when_denied);
++    EXPECT(configured_when_denied);
++    EXPECT(commissioning_configured_when_denied);
+ 
+     int32_t targets[JOINT_DRIVE_AXES] = {0};
+     EXPECT(!canopen_master_begin_write_controlword(&master, 0U, 0x000FU, 1U));
+@@ -118,7 +118,7 @@
+     printf("A02.1 revoked: commissioning_initialized=%d joint_configured=%d\n",
+            (int)init_after_revoke, (int)configured_after_revoke);
+     fflush(stdout);
+-    EXPECT(init_after_revoke);                  /* expected FAIL on baseline */
++    EXPECT(init_after_revoke);
+     EXPECT(configured_after_revoke);            /* expected FAIL on baseline */
+     EXPECT(init_when_denied == init_when_granted);
+     EXPECT(configured_when_denied == configured_when_granted);
+@@ -126,7 +126,7 @@
+ 
+     canopen_master_close(&master);
+     if (failures != 0U) {
+-        fprintf(stderr, "A02.1: %u violated assertions (expected baseline defect).\n",
++        fprintf(stderr, "A02.2: %u adapter contract assertions failed.\n",
+                 failures);
+         return 1;
+     }
+diff --git a/.github/workflows/stm32-firmware.yml b/.github/workflows/stm32-firmware.yml
+--- a/.github/workflows/stm32-firmware.yml
++++ b/.github/workflows/stm32-firmware.yml
+@@ -4,6 +4,7 @@
+   push:
+     paths:
+       - 'Firmware/**'
++      - 'CANComm/**'
+       - 'ControlCore/**'
+       - 'ServoDrive/**'
+       - 'HandGuiding/**'
+@@ -11,6 +12,7 @@
+   pull_request:
+     paths:
+       - 'Firmware/**'
++      - 'CANComm/**'
+       - 'ControlCore/**'
+       - 'ServoDrive/**'
+       - 'HandGuiding/**'
+@@ -41,6 +43,7 @@
+           python3 Firmware/Tests/run_drive_restart_gate_tests.py
+           python3 Firmware/Tests/check_c2b_wiring.py
+           python3 Firmware/Tests/run_c2b_canopen_master_tests.py
++          python3 Firmware/Tests/run_a02_1_canopen_adapter_abi.py
+           bash Firmware/Tests/check_shared_layout.sh
+           bash Firmware/Tests/check_sram4_linkers.sh
+           bash Firmware/Tests/check_intercore_startup_compile.sh
+diff --git a/Firmware/Tests/A02_2_CANOPEN_TYPE_CONTRACT.md b/Firmware/Tests/A02_2_CANOPEN_TYPE_CONTRACT.md
+new file mode 100644
+--- /dev/null
++++ b/Firmware/Tests/A02_2_CANOPEN_TYPE_CONTRACT.md
+@@ -0,0 +1,83 @@
++# Stage A02.2 — Canonical CANopen type contract
++
++Verified GitHub branch HEAD at package construction: `5e74a6933e4ff457a120f6ebf24afd6352332d71`.
++This package is an **uncommitted patch**; no GitHub files or branches were changed.
++
++## Architectural decision
++
++`CANComm/CANopen/canopen_master_types.h` owns all CANopen master enum,
++configuration, transaction, feedback, callback and master instance types.
++The root and firmware public master headers include that **same exact file**.
++The firmware header alone declares the production-only setter
++`canopen_master_set_drive_permission()`; root desktop code does not implement or
++call this API. The canonical struct contains the permission member in BOTH
++builds, but it does not itself enforce permission behavior in the desktop
++implementation. The production `.c` retains the C2B guards unchanged.
++
++## Local application (from repo root, branch HEAD must still be 5e74a693)
++
++```
++git status --short
++git rev-parse HEAD
++git apply --check /path/to/A02_2.patch
++git apply /path/to/A02_2.patch
++python3 Firmware/Tests/run_a02_1_canopen_adapter_abi.py
++python3 Firmware/Tests/run_c2b_canopen_master_tests.py
++python3 Firmware/Tests/run_drive_restart_gate_tests.py
++python3 Firmware/Tests/check_c2b_wiring.py
++python3 Firmware/Tests/build_stm32.py --core CM7 --config Debug
++python3 Firmware/Tests/build_stm32.py --core CM7 --config Release
++python3 Firmware/Tests/build_stm32.py --core CM4 --config Debug
++python3 Firmware/Tests/build_stm32.py --core CM4 --config Release
++python3 Firmware/Tests/check_firmware_integration.py
++python3 Firmware/Tests/check_firmware_integration.py --build-root build/stm32/Release
++```
++
++## Remaining firmware-side software verification
++
++```
++python3 Firmware/Tests/check_portable_protocol.py
++python3 Firmware/Tests/check_stage_a_configuration.py --self-test
++python3 Firmware/Tests/run_supervision_policy_tests.py
++python3 Firmware/Tests/check_c2a_wiring.py
++bash Firmware/Tests/check_shared_layout.sh
++bash Firmware/Tests/check_sram4_linkers.sh
++bash Firmware/Tests/check_intercore_startup_compile.sh
++bash Firmware/Tests/check_intercore_notifications.sh
++bash Firmware/Tests/check_cm4_validation_service.sh
++python3 Firmware/Tests/check_tim2_tim3_integration.py
++python3 Firmware/Tests/run_m7_timer_fault_injection.py
++```
++
++## Desktop / CMake / SIL Kit when dependencies exist
++
++```
++# The repository requires the sibling ../FreeRTOS-Kernel checkout.
++cmake -S . -B build/a02_2_desktop -DENABLE_SILKIT=OFF
++cmake --build build/a02_2_desktop -j 4
++ctest --test-dir build/a02_2_desktop --output-on-failure
++
++# Requires installed SIL Kit SDK; optionally run the real full simulation:
++SILKIT_ROOT=/path/to/SilKit bash scripts/run_full_can_silkit_simulation.sh --no-gui
++```
++
++Use a configured, pinned SIL Kit SDK and review the simulation script's
++external tool and process expectations before running its interactive flow.
++
++
++Consult `build_stm32.py --help` if your checked-out script uses different
++--config flag spelling. All tests are read-only or emit temporary/build
++artifacts; do not commit before independent acceptance.
++
++## CI
++
++The existing STM32 CI now triggers on `CANComm/**` changes and requires the
++strict A02.1 real adapter composition. The historical `--expect-baseline-failure`
++mode is expressly **not** a CI requirement; it is permitted only at its exact
++A02.1 SHA. `actions/checkout@v4` shallow cloning does not inhibit strict mode.
++
++## Limitations
++
++No complete source checkout/ARM toolchain/SIL Kit was available for executing
++all production and host tests in this container. Passing local checks of patch
++format do not establish firmware runtime correctness or physical safety.

@@ -7,6 +7,7 @@ endif()
 
 add_library(hand_guiding STATIC
     ft_sensor.c
+    ft_serial_transport.c
     sensor_config.c
     admittance_control.c
     admittance_matlab_reference.c
@@ -38,10 +39,37 @@ else()
     target_link_libraries(hand_guiding PUBLIC control_core avatar_drives m)
 endif()
 
-foreach(test_name IN ITEMS test_ft_sensor test_sensor_config test_wrench_processing test_admittance_control test_cartesian_joint_mapper test_wrench_frame test_hand_guiding_pipeline test_supervisor_dry_run_adapter test_guidance_command_gate)
+foreach(test_name IN ITEMS test_ft_sensor test_sensor_config test_wrench_processing test_admittance_control test_cartesian_joint_mapper test_wrench_frame test_hand_guiding_pipeline test_supervisor_dry_run_adapter test_guidance_command_gate test_ft_serial_transport test_p05_serial_guidance)
     add_executable(${test_name} Tests/${test_name}.c)
     target_link_libraries(${test_name} PRIVATE hand_guiding)
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror -UNDEBUG)
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_tests_properties(${test_name} PROPERTIES TIMEOUT 10)
 endforeach()
+
+# Host-only integration: these classes do not exist in either STM32 image.
+# Reuse ControlCore, existing CANopen, validation and intercore streaming.
+if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    add_executable(p05_virtual_system
+        ../Simulation/P05/p05_virtual_system.c
+        ../StateMachine/States/state_path_validation.c)
+    target_compile_features(p05_virtual_system PRIVATE c_std_11)
+    target_include_directories(p05_virtual_system PRIVATE
+        ../StateMachine ../StateMachine/States)
+    target_link_libraries(p05_virtual_system PRIVATE
+        hand_guiding control_core avatar_drives canopen_stack
+        intercore_validation_storage intercore_trajectory_storage m)
+    target_compile_options(p05_virtual_system PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+
+    # Existing validation code emits a pre-C2x array-qualifier
+    # pedantic warning. Keep strict checks on new P05 sources.
+    # Scope this exception to the legacy source in this host target.
+    set_source_files_properties(
+        ../StateMachine/States/state_path_validation.c
+        PROPERTIES COMPILE_OPTIONS "-Wno-error=pedantic")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/p05_ctest_evidence")
+    add_test(NAME p05_virtual_end_to_end
+        COMMAND p05_virtual_system "${CMAKE_CURRENT_BINARY_DIR}/p05_ctest_evidence")
+    set_tests_properties(p05_virtual_end_to_end PROPERTIES TIMEOUT 180)
+endif()

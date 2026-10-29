@@ -1,0 +1,415 @@
+diff --git a/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c b/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c
+--- a/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c
++++ b/Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c
+@@ -180,8 +180,8 @@ void canopen_master_clear_runtime(
+     CanopenMaster *master
+ )
+ {
+     if (!owner_access_allowed(master)) return;
+-    if (master != NULL) master->drive_command_permission = false;
++    canopen_master_set_drive_permission(master, false);
+     if (
+         master == NULL ||
+         !master->initialized
+@@ -218,9 +218,21 @@ void canopen_master_clear_runtime(
+ void canopen_master_set_drive_permission(CanopenMaster *master,
+                                          bool permitted)
+ {
+-    if (!owner_access_allowed(master)) return;
+-    if (master != NULL)
+-        master->drive_command_permission = master->initialized && permitted;
++    /* No permission may be established before the Supervisor task binds
++     * its runtime owner. Foreign task calls cannot modify the gate. */
++    if (master == NULL || master->owner_check == NULL ||
++        !owner_access_allowed(master))
++        return;
++    /* An SDO write already transmitted to the drive cannot be recalled.
++     * Prevent a late 6040h acknowledgement from being reported as a
++     * successful in-flight enable after permission was withdrawn. */
++    if (!permitted && master->sdo.state == CANOPEN_MASTER_SDO_PENDING &&
++        !master->sdo.expects_read && master->sdo.index == 0x6040U)
++    {
++        memset(&master->sdo.response, 0, sizeof(master->sdo.response));
++        master->sdo.state = CANOPEN_MASTER_SDO_TRANSPORT_ERROR;
++    }
++    master->drive_command_permission = master->initialized && permitted;
+ }
+ 
+ void canopen_master_set_heartbeat_timeout(
+@@ -536,9 +548,9 @@ bool canopen_master_send_nmt_all(
+ {
+     if (!owner_access_allowed(master)) return false;
+     if (master != NULL &&
+         (command == CANOPEN_NMT_RESET_COMMUNICATION ||
+          command == CANOPEN_NMT_RESET_APPLICATION))
+-        master->drive_command_permission = false;
++        canopen_master_set_drive_permission(master, false);
+     if (
+         master == NULL ||
+         !master->initialized
+
+diff --git a/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c b/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
+--- a/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
++++ b/Firmware/STM32H745/CM7/Application/StateMachine/supervisor_task.c
+@@ -1199,6 +1199,11 @@ static void supervisor_task_entry(void *argument)
+          * No-op in an already entered state. */
+         enter_active_state(context);
+         const bool was_authorized = context->restart_gate.authorized;
++        /* A CANopen NMT reset can revoke permission inside the coordinator.
++         * Never silently regrant the old session on the next 2 ms cycle. */
++        if (was_authorized &&
++            !context->config.canopen_master->drive_command_permission)
++            drive_restart_gate_inhibit(&context->restart_gate);
+         bool drive_permission = false;
+         if (context->machine.activeState == ROBOT_STATE_FAULT ||
+             context->machine.activeState == ROBOT_STATE_EMERGENCY_STOP)
+diff --git a/.github/workflows/stm32-firmware.yml b/.github/workflows/stm32-firmware.yml
+--- a/.github/workflows/stm32-firmware.yml
++++ b/.github/workflows/stm32-firmware.yml
+@@ -40,7 +40,8 @@ jobs:
+           python3 Firmware/Tests/run_supervision_policy_tests.py
+           python3 Firmware/Tests/check_c2a_wiring.py
+           python3 Firmware/Tests/run_drive_restart_gate_tests.py
+           python3 Firmware/Tests/check_c2b_wiring.py
++          python3 Firmware/Tests/run_c2b_canopen_master_tests.py
+           bash Firmware/Tests/check_shared_layout.sh
+           bash Firmware/Tests/check_sram4_linkers.sh
+           bash Firmware/Tests/check_intercore_startup_compile.sh
+diff --git a/Firmware/Tests/test_c2b_canopen_master.c b/Firmware/Tests/test_c2b_canopen_master.c
+new file mode 100644
+--- /dev/null
++++ b/Firmware/Tests/test_c2b_canopen_master.c
+@@ -0,0 +1,228 @@
++/*
++ * Stage C2B: black-box fake-backend tests of production STM32
++ * Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.c.
++ * Do not replace this source with top-level desktop CANopen implementation.
++ * These tests verify the software TX veto, not physical drive safety.
++ */
++#include "canopen_master.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define CHECK(cond) do { if (!(cond)) { \
++    fprintf(stderr,"FAIL %s:%d: %s\n",__FILE__,__LINE__,#cond); \
++    exit(1); \
++} } while (0)
++
++typedef struct {
++    CanFrame sent[128];
++    CanFrame incoming[32];
++    size_t sent_count, rx_head, rx_tail;
++    bool fail_next_send;
++} FakeBus;
++
++typedef struct {
++    FakeBus bus;
++    CanBackend backend;
++    CanopenMaster master;
++    bool owner_allowed;
++} Fixture;
++
++static CanBackendResult fake_send(void *ctx, const CanFrame *frame)
++{
++    FakeBus *b = (FakeBus *)ctx;
++    if (b->fail_next_send) {
++        b->fail_next_send = false;
++        return CAN_BACKEND_ERROR;
++    }
++    CHECK(b->sent_count < sizeof(b->sent)/sizeof(b->sent[0]));
++    b->sent[b->sent_count++] = *frame;
++    return CAN_BACKEND_OK;
++}
++static CanBackendResult fake_receive(void *ctx, CanFrame *frame)
++{
++    FakeBus *b = (FakeBus *)ctx;
++    if (b->rx_head == b->rx_tail) return CAN_BACKEND_WOULD_BLOCK;
++    *frame = b->incoming[b->rx_head++];
++    return CAN_BACKEND_OK;
++}
++static void fake_close(void *ctx) { (void)ctx; }
++static bool owner_check(void *ctx) { return *(const bool *)ctx; }
++static void enqueue_response(Fixture *f, const CanFrame *frame)
++{
++    CHECK(f->bus.rx_tail < sizeof(f->bus.incoming)/sizeof(f->bus.incoming[0]));
++    f->bus.incoming[f->bus.rx_tail++] = *frame;
++}
++static void fixture_init(Fixture *f)
++{
++    memset(f, 0, sizeof(*f));
++    f->backend = (CanBackend){ .context = &f->bus, .send = fake_send,
++                               .receive = fake_receive, .close = fake_close };
++    CanopenMasterConfig cfg = { .backend = &f->backend,
++                                .node_count = JOINT_DRIVE_AXES,
++                                .heartbeat_timeout_ms = 300U,
++                                .sdo_timeout_ms = 100U };
++    for (size_t i = 0; i < JOINT_DRIVE_AXES; i++) cfg.node_ids[i] = (uint8_t)(i + 1U);
++    CHECK(canopen_master_init(&f->master, &cfg));
++    CHECK(f->master.initialized);
++    CHECK(!f->master.drive_command_permission);
++}
++static void bind_owner(Fixture *f)
++{
++    f->owner_allowed = true;
++    CHECK(canopen_master_bind_runtime_owner(&f->master, owner_check,
++                                            &f->owner_allowed));
++}
++static void approved(Fixture *f)
++{
++    bind_owner(f);
++    canopen_master_set_drive_permission(&f->master, true);
++    CHECK(f->master.drive_command_permission);
++}
++static void targets(int32_t out[JOINT_DRIVE_AXES])
++{
++    for (size_t i = 0; i < JOINT_DRIVE_AXES; i++) out[i] = (int32_t)(1000 + 17 * i);
++}
++static void test_cold_and_prebind_denial(void)
++{
++    Fixture f;
++    fixture_init(&f);
++    int32_t q[JOINT_DRIVE_AXES]; targets(q);
++    CHECK(!canopen_master_send_sync(&f.master));
++    CHECK(!canopen_master_send_target_cycle(&f.master,q,JOINT_DRIVE_AXES));
++    CHECK(!canopen_master_begin_write_controlword(&f.master,0,0x0006U,5U));
++    CHECK(!canopen_master_begin_write_controlword(&f.master,0,0x0007U,5U));
++    CHECK(!canopen_master_begin_write_controlword(&f.master,0,0x000FU,5U));
++    CHECK(f.bus.sent_count == 0U);
++    /* Vulnerability in original C2B: the unbound master could grant itself permission. */
++    canopen_master_set_drive_permission(&f.master, true);
++    CHECK(!f.master.drive_command_permission);
++    CHECK(!canopen_master_send_sync(&f.master));
++    bind_owner(&f);
++    CHECK(!f.master.drive_command_permission);
++    CHECK(!canopen_master_send_sync(&f.master));
++    CHECK(f.bus.sent_count == 0U);
++}
++static void test_approved_transmissions(void)
++{
++    Fixture f;
++    fixture_init(&f);
++    approved(&f);
++    int32_t q[JOINT_DRIVE_AXES]; targets(q);
++    CHECK(canopen_master_send_target_cycle(&f.master,q,JOINT_DRIVE_AXES));
++    CHECK(f.bus.sent_count == JOINT_DRIVE_AXES + 1U);
++    for (size_t i=0; i<JOINT_DRIVE_AXES; ++i) {
++        CHECK(f.bus.sent[i].id != 0x080U);
++        CHECK(f.bus.sent[i].dlc <= 8U);
++    }
++    CHECK(f.bus.sent[JOINT_DRIVE_AXES].id == 0x080U);
++    CHECK(f.bus.sent[JOINT_DRIVE_AXES].dlc == 0U);
++    CHECK(canopen_master_send_sync(&f.master));
++    CHECK(f.bus.sent_count == JOINT_DRIVE_AXES + 2U);
++    CHECK(f.bus.sent[f.bus.sent_count-1].id == 0x080U);
++    CHECK(canopen_master_begin_write_controlword(&f.master, 0U, 0x000FU, 10U));
++    CHECK(canopen_master_sdo_state(&f.master) == CANOPEN_MASTER_SDO_PENDING);
++    const CanFrame *w = &f.bus.sent[f.bus.sent_count-1];
++    CHECK(w->id == 0x601U); /* SDO Rx for configured node 1 */
++    CHECK(w->dlc == 8U);
++    CHECK(w->data[0] == 0x2BU && w->data[1] == 0x40U &&
++          w->data[2] == 0x60U && w->data[3] == 0x00U);
++    CHECK(w->data[4] == 0x0FU && w->data[5] == 0x00U);
++}
++static void test_revocation_and_stale_sdo_ack(void)
++{
++    Fixture f;
++    fixture_init(&f);
++    approved(&f);
++    int32_t q[JOINT_DRIVE_AXES]; targets(q);
++    CHECK(canopen_master_begin_write_controlword(&f.master, 0U, 0x000FU, 10U));
++    size_t sent_before = f.bus.sent_count;
++    CHECK(canopen_master_sdo_state(&f.master) == CANOPEN_MASTER_SDO_PENDING);
++    canopen_master_set_drive_permission(&f.master, false);
++    CHECK(!f.master.drive_command_permission);
++    CHECK(canopen_master_sdo_state(&f.master) == CANOPEN_MASTER_SDO_TRANSPORT_ERROR);
++    CHECK(canopen_master_sdo_response(&f.master) == NULL);
++    CHECK(!canopen_master_send_sync(&f.master));
++    CHECK(!canopen_master_send_target_cycle(&f.master,q,JOINT_DRIVE_AXES));
++    CHECK(!canopen_master_begin_write_controlword(&f.master,0U,0x000FU,20U));
++    CHECK(f.bus.sent_count == sent_before);
++    /* An expedited write-OK received after revocation must NOT complete the old SDO. */
++    const CanFrame ack = { .id = 0x581U, .dlc = 8U,
++                           .data = {0x60U,0x40U,0x60U,0x00U,0U,0U,0U,0U} };
++    enqueue_response(&f,&ack);
++    CHECK(canopen_master_poll(&f.master,20U));
++    CHECK(canopen_master_sdo_state(&f.master) == CANOPEN_MASTER_SDO_TRANSPORT_ERROR);
++    CHECK(canopen_master_sdo_response(&f.master) == NULL);
++    /* Explicit voltage-disable/quick-stop requests remain available; not safety-rated. */
++    CHECK(canopen_master_begin_write_controlword(&f.master,0U,0x0000U,22U));
++    canopen_master_sdo_clear(&f.master);
++    CHECK(canopen_master_begin_write_controlword(&f.master,0U,0x0002U,23U));
++}
++static void test_nmt_reset_revokes_and_cancels(void)
++{
++    Fixture f;
++    fixture_init(&f);
++    approved(&f);
++    CHECK(canopen_master_begin_write_controlword(&f.master,0U,0x000FU,12U));
++    CHECK(canopen_master_send_nmt_all(&f.master,CANOPEN_NMT_RESET_COMMUNICATION));
++    CHECK(!f.master.drive_command_permission);
++    CHECK(canopen_master_sdo_state(&f.master) == CANOPEN_MASTER_SDO_TRANSPORT_ERROR);
++    const CanFrame *reset = &f.bus.sent[f.bus.sent_count-1];
++    CHECK(reset->id == 0U && reset->dlc == 2U && reset->data[0] == 0x82U);
++    CHECK(!canopen_master_send_sync(&f.master));
++    CHECK(!canopen_master_begin_write_controlword(&f.master,0U,0x000FU,13U));
++
++    Fixture failed;
++    fixture_init(&failed);
++    approved(&failed);
++    failed.bus.fail_next_send = true;
++    CHECK(!canopen_master_send_nmt_all(&failed.master,CANOPEN_NMT_RESET_APPLICATION));
++    CHECK(!failed.master.drive_command_permission); /* even if reset TX failed */
++    CHECK(!canopen_master_send_sync(&failed.master));
++
++    Fixture runtime;
++    fixture_init(&runtime);
++    approved(&runtime);
++    CHECK(canopen_master_begin_write_controlword(&runtime.master,0U,0x000FU,1U));
++    canopen_master_clear_runtime(&runtime.master);
++    CHECK(!runtime.master.drive_command_permission);
++    CHECK(canopen_master_sdo_state(&runtime.master) == CANOPEN_MASTER_SDO_IDLE);
++}
++static void test_runtime_owner_enforcement(void)
++{
++    Fixture f;
++    fixture_init(&f);
++    bind_owner(&f);
++    int32_t q[JOINT_DRIVE_AXES]; targets(q);
++    f.owner_allowed = false;
++    canopen_master_set_drive_permission(&f.master,true);
++    CHECK(!f.master.drive_command_permission);
++    CHECK(!canopen_master_send_sync(&f.master));
++    CHECK(!canopen_master_send_target_cycle(&f.master,q,JOINT_DRIVE_AXES));
++    CHECK(!canopen_master_begin_write_controlword(&f.master,0U,0x000FU,0U));
++    CHECK(!canopen_master_send_nmt_all(&f.master,CANOPEN_NMT_RESET_COMMUNICATION));
++    CHECK(f.bus.sent_count == 0U);
++    f.owner_allowed = true;
++    canopen_master_set_drive_permission(&f.master,true);
++    CHECK(f.master.drive_command_permission);
++    f.owner_allowed = false;
++    canopen_master_set_drive_permission(&f.master,false);
++    CHECK(f.master.drive_command_permission); /* foreign caller cannot change the gate */
++    CHECK(!canopen_master_send_sync(&f.master));
++    CHECK(!canopen_master_send_nmt_all(&f.master,CANOPEN_NMT_RESET_COMMUNICATION));
++    CHECK(f.bus.sent_count == 0U);
++    f.owner_allowed = true;
++    CHECK(canopen_master_send_sync(&f.master));
++    canopen_master_set_drive_permission(&f.master,false);
++    CHECK(!f.master.drive_command_permission);
++}
++int main(void)
++{
++    test_cold_and_prebind_denial();
++    test_approved_transmissions();
++    test_revocation_and_stale_sdo_ack();
++    test_nmt_reset_revokes_and_cancels();
++    test_runtime_owner_enforcement();
++    puts("PASS: production STM32 CANopen master authorization, revocation, NMT, SDO and owner checks");
++    return 0;
++}
+diff --git a/Firmware/Tests/run_c2b_canopen_master_tests.py b/Firmware/Tests/run_c2b_canopen_master_tests.py
+new file mode 100644
+--- /dev/null
++++ b/Firmware/Tests/run_c2b_canopen_master_tests.py
+@@ -0,0 +1,100 @@
++#!/usr/bin/env python3
++"""Execute exact production CM7 CANopen coordinator against a fake CAN backend.
++
++No repository writes; compiler artifacts and mutants live in temporary directories.
++Requires the already-C2B-patched local checkout, NOT the C2A remote baseline.
++"""
++from pathlib import Path
++import os
++import subprocess
++import sys
++import tempfile
++
++ROOT = Path(__file__).resolve().parents[2]
++FW = ROOT / 'Firmware/STM32H745/CM7/Application'
++MASTER = FW / 'CANComm/CANopen/canopen_master.c'
++TEST = ROOT / 'Firmware/Tests/test_c2b_canopen_master.c'
++DEPS = [
++    FW / 'CANComm/CANopen/canopen_heartbeat.c',
++    FW / 'CANComm/CANopen/canopen_nmt.c',
++    FW / 'CANComm/CANopen/canopen_sdo.c',
++    ROOT / 'ServoDrive/AvatarM/avatar_m_drive.c',
++    ROOT / 'ServoDrive/AvatarM/avatar_m_pdo.c',
++    ROOT / 'ServoDrive/CiA402/cia402.c',
++]
++
++# Each mutation removes one distinct safety decision; each MUST compile and
++# then fail by violating an executed fake-CAN behavioral assertion.
++MUTANTS = {
++    'controlword veto': (
++        '(!master->drive_command_permission &&\n         controlword != 0x0000U && controlword != 0x0002U)',
++        'false'),
++    'SYNC veto': (
++        '!master->drive_command_permission ||\n        !master->initialized\n    )\n    {\n        return false;\n    }\n\n    CanFrame frame;',
++        '!master->initialized\n    )\n    {\n        return false;\n    }\n\n    CanFrame frame;'),
++    'RPDO target veto': (
++        'master == NULL ||\n        !master->drive_command_permission ||\n        !master->initialized ||\n        target_positions == NULL',
++        'master == NULL ||\n        !master->initialized ||\n        target_positions == NULL'),
++    'owner-bound permission setter': (
++        'master == NULL || master->owner_check == NULL ||\n        !owner_access_allowed(master)',
++        'master == NULL'),
++    'pending SDO cancellation': (
++        'if (!permitted && master->sdo.state == CANOPEN_MASTER_SDO_PENDING &&',
++        'if (false && !permitted && master->sdo.state == CANOPEN_MASTER_SDO_PENDING &&'),
++    'NMT reset revocation': (
++        'if (master != NULL &&\n        (command == CANOPEN_NMT_RESET_COMMUNICATION ||\n         command == CANOPEN_NMT_RESET_APPLICATION))\n        canopen_master_set_drive_permission(master, false);',
++        'if (false) canopen_master_set_drive_permission(master, false);'),
++    'foreign-owner policy': (
++        'return master == NULL || master->owner_check == NULL ||\n           master->owner_check(master->owner_check_context);',
++        'return master == NULL || master->initialized;'),
++}
++
++def compile_run(tmp: Path, source: Path, label: str):
++    binary = tmp / 'bin'
++    cmd = [os.environ.get('CC', 'cc'), '-std=c11', '-O1', '-g',
++           '-Wall', '-Wextra', '-Werror', '-pedantic',
++           '-I', str(FW / 'CANComm/CANopen'),
++           str(TEST), str(source), *map(str, DEPS), '-lm', '-o', str(binary)]
++    result = subprocess.run(cmd, capture_output=True, text=True)
++    if result.returncode:
++        raise RuntimeError(f'{label} COMPILE FAILED:\n{result.stdout}\n{result.stderr}')
++    return subprocess.run([str(binary)], capture_output=True, text=True)
++
++def main():
++    for p in [MASTER, TEST, *DEPS]:
++        if not p.is_file():
++            raise RuntimeError(f'Production source or test missing: {p}')
++    # Supplemental source wiring check. Behavior is exercised in the fake CAN
++    # tests; this also ensures the live Supervisor cannot restore permission
++    # automatically after an NMT reset. Does not replace an integration test.
++    supervisor = (FW / 'StateMachine/supervisor_task.c').read_text()
++    guard = ('if (was_authorized &&\n'
++             '            !context->config.canopen_master->drive_command_permission)')
++    if guard not in supervisor:
++        raise RuntimeError('Supervisor missing NMT/session-loss restart inhibition')
++    original = MASTER.read_text()
++    for label, (needle, _) in MUTANTS.items():
++        if original.count(needle) != 1:
++            raise RuntimeError(f'{label}: expected one precise source anchor, found {original.count(needle)}; inspect real checkout before changing tests')
++    with tempfile.TemporaryDirectory(prefix='c2b_canopen_', dir=os.environ.get('TMPDIR')) as path:
++        tmp = Path(path)
++        result = compile_run(tmp, MASTER, 'baseline')
++        if result.returncode:
++            raise RuntimeError(f'Production baseline FAIL:\n{result.stdout}\n{result.stderr}')
++        print(result.stdout.strip())
++        for label, (needle, replacement) in MUTANTS.items():
++            mutant = tmp / 'canopen_master.c'
++            mutant.write_text(original.replace(needle, replacement, 1))
++            result = compile_run(tmp, mutant, label)
++            if result.returncode == 0:
++                raise RuntimeError(f'MUTATION SURVIVED: {label}')
++            if 'FAIL ' not in result.stderr:
++                raise RuntimeError(f'MUTATION ABNORMAL TERMINATION: {label}: {result.stderr}')
++            print(f'PASS: mutation rejected at runtime: {label}')
++    print('PASS: 7/7 executable production-master mutations rejected')
++
++if __name__ == '__main__':
++    try:
++        main()
++    except (RuntimeError, OSError) as error:
++        sys.exit(f'FAIL: {error}')
