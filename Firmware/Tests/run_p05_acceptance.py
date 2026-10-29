@@ -40,8 +40,11 @@ def main():
                                      cwd=ROOT, text=True).strip()
     head = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
                                    cwd=ROOT, text=True).strip()
-    if branch != BRANCH or head != BASE:
-        raise SystemExit(f'NO TEST RUN: expected {BRANCH}@{BASE}; got {branch}@{head}')
+    # Verified P05 commits retain the original baseline in their ancestry.
+    ancestry = subprocess.run(['git','merge-base','--is-ancestor',BASE,head],
+                              cwd=ROOT, check=False).returncode == 0
+    if branch != BRANCH or not ancestry:
+        raise SystemExit(f'NO TEST RUN: expected {BRANCH} descending from {BASE}; got {branch}@{head}')
     if ns.output is None:
         output = Path(tempfile.mkdtemp(prefix='p05_acceptance_'))
     else:
@@ -70,9 +73,20 @@ def main():
                 str(ROOT / 'Firmware/Tests/run_p05_mutations.py')])
         record('compiled_p04_mutations', [sys.executable,
                 str(ROOT / 'Firmware/Tests/run_p04_mutations.py')])
+        record('p05_in_chain_mutations', [sys.executable,
+                str(ROOT / 'Firmware/Tests/run_p05_in_chain_mutations.py'),
+                '--build-host',str(build)])
+        record('p05_production_supervisor_source', [sys.executable,
+                str(ROOT / 'Firmware/Tests/run_p05_supervisor_source.py')])
+        record('p05_acceptance_negative', [sys.executable,
+                str(ROOT / 'Firmware/Tests/test_p05_acceptance_gate.py')])
+        record('p05_complete_evidence_gate', [sys.executable,
+                str(ROOT / 'Firmware/Tests/check_p05_integrated_evidence.py'),
+                str(output / 'p05_connected')])
     else:
         for label in ('p05_connected_host_runner','p05_and_full_ctest','compiled_p05_mutations',
-                      'compiled_p04_mutations'):
+                      'compiled_p04_mutations', 'p05_in_chain_mutations', 'p05_production_supervisor_source',
+                      'p05_acceptance_negative','p05_complete_evidence_gate'):
             data['results'][label] = {'status':'NOT RUN',
                                      'reason':'Host configure/build failed'}
 
@@ -83,6 +97,9 @@ def main():
                 str(ROOT / 'Firmware/Tests/build_stm32.py'),
                 '--core',core,'--config',config,
                 '--output',str(arm_root / core)])
+        record(f'p05_uart_arm_link_{config}', [sys.executable,
+            str(ROOT / 'Firmware/Tests/check_p05_uart_arm.py'),
+            '--build-root',str(arm_root)])
         record(f'firmware_integration_{config}', [sys.executable,
             str(ROOT / 'Firmware/Tests/check_firmware_integration.py'),
             '--build-root',str(arm_root)])

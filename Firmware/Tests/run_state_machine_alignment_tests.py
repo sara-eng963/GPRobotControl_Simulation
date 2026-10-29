@@ -113,6 +113,19 @@ def main():
         execute(fixture, "production CM4 HMI lifecycle", overrides={cm4: cm4_obj})
 
         wrapper = TESTS / "test_production_supervisor.c"
+        if os.environ.get("P05_SUPERVISOR_ONLY") == "1":
+            # Reuse the exact P04 production fixture; compose the additional
+            # assertions in the SAME translation unit without duplicating it.
+            p04 = (TESTS / "test_p04_integrated.c").read_text()
+            assert p04.count("int main(void)") == 1
+            p04 = p04.replace('#include "test_production_supervisor.c"',
+                '#include "' + str(TESTS / "test_production_supervisor.c") + '"')
+            p04 = p04.replace("int main(void)", "int p04_original_main(void)", 1)
+            combined = tmp / "p05_prod_fixture.c"
+            combined.write_text(p04 + "\n" +
+                (TESTS / "test_p05_production_supervisor.c").read_text())
+            execute(combined, "P05 actual production Supervisor source", wrapper=True)
+            return
         if os.environ.get("P04_FAST_ONLY") == "1":
             execute(TESTS / "test_p04_integrated.c",
                     "P04 integrated production scenarios", wrapper=True)

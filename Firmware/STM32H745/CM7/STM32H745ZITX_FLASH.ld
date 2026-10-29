@@ -47,7 +47,9 @@ MEMORY
   RAM_D1 (xrw)   : ORIGIN = 0x24000000, LENGTH =  512K
   FLASH  (rx)    : ORIGIN = 0x08000000, LENGTH = 1024K    /* Memory is divided. Actual start is 0x08000000 and actual length is 2048K */
   DTCMRAM (xrw)  : ORIGIN = 0x20000000, LENGTH = 128K
-  RAM_D2 (xrw)   : ORIGIN = 0x30000000, LENGTH = 288K
+  RAM_D2 (xrw)   : ORIGIN = 0x30000000, LENGTH = 288K - 512
+  /* Same physical tail is excluded from CM4's 0x10000000 D2 alias. */
+  DMA_RX_D2 (rw) : ORIGIN = 0x30047E00, LENGTH = 512
   /* Shared SRAM4 partitions */
   SRAM4_IPC        (rw)  : ORIGIN = 0x38000000, LENGTH = 4K
   SRAM4_TRAJECTORY (rw)  : ORIGIN = 0x38001000, LENGTH = 16K
@@ -169,6 +171,20 @@ SECTIONS
     _ebss = .;         /* define a global symbol at bss end */
     __bss_end__ = _ebss;
   } >RAM_D1
+
+  /* P05 USART2 DMA: dedicated, 32-byte aligned D2 SRAM. DMA1 cannot use
+   * DTCM. NOLOAD avoids initializing memory while DMA owns it. */
+  .dma_rx_d2 (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dma_rx_d2_start__ = .;
+    KEEP(*(.dma_rx_d2))
+    KEEP(*(.dma_rx_d2.*))
+    . = ALIGN(32);
+    __dma_rx_d2_end__ = .;
+  } >DMA_RX_D2
+  ASSERT(SIZEOF(.dma_rx_d2) == 512,
+         "P05 DMA RX section must contain exactly 512 bytes")
 
   /* Stage 2C: shared SRAM4 objects, NOT part of either core's .bss clear.
    * These sections must hold only uninitialized objects. Cross-core

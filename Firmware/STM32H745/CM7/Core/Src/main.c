@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "application_supervisor.h"
+#include "application_ft_service.h"
 
 
 #include "intercore_shared_memory.h"
@@ -599,6 +600,10 @@ void StartDefaultTask(void *argument)
       Error_Handler();
     }
   }
+
+  /* Optional physical F/T transport: missing vendor decoder/provider is
+   * intentional and leaves USART2 DMA inactive. Never authorizes motion. */
+  (void)application_ft_service_start();
 
   for (;;)
   {

@@ -1,12 +1,13 @@
-/* P05 HOST-ONLY executable. Not compiled in either STM32 image.
- * Real HandGuiding/ControlCore, PathValidation, CANopen, intercore storage
- * protocol and streaming code; physical CAN and serial are replaced ONLY
- * by simulated node electronics.  In-memory durable-store fixture is NOT
- * a QSPI emulator nor a claim of NOR verification. See acceptance report. */
+/* P05 host-only integration; never part of the physical STM32 images.
+ * Existing W25Q512JV validated storage driver and existing host NOR protocol
+ * model are used for the SAME validated and replayed trajectory; no second
+ * flash emulator, duplicated CANopen stack or production authorization. */
 #include "../../HandGuiding/ft_serial_transport.h"
 #include "../../HandGuiding/hand_guiding_pipeline.h"
 #include "../../HandGuiding/Tests/p05_mock_ft_protocol.h"
-#include "../../CANComm/CANopen/canopen_master.h"
+#include "../../Firmware/STM32H745/CM7/Application/CANComm/CANopen/canopen_master.h"
+#include "p05_production_supervisor.h"
+#include "../../Firmware/STM32H745/CM7/Application/StateMachine/States/state_path_execution.h"
 #include "../../ServoDrive/AvatarM/avatar_m_pdo.h"
 #include "../../ServoDrive/AvatarM/avatar_m_position.h"
 #include "../../Intercore/validation_storage_bridge.h"
@@ -14,6 +15,9 @@
 #include "../../ControlCore/Kinematics/control_fk.h"
 #include "../../ControlCore/Math/math3d.h"
 #include "../../StateMachine/States/state_path_validation.h"
+#include "../Renode/Storage/qspi_nor_validated_storage.h"
+#include "../Renode/Storage/w25_artifact_crc.h"
+#include "../Tests/w25q_nor_model.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +36,7 @@
  * and a SYNC before any feedback update. No hardware interface or HAL handle. */
 typedef struct {
     CanFrame rx[RX_CAPACITY];
-    unsigned head,tail,tx_cycles,rx_cycles;
+    unsigned head,tail,tx_cycles,rx_cycles,target_frames;
     int32_t pending[AXES],actual[AXES];
     unsigned staged;
     bool fail_tx,drop_tpdo,order_fault,nmt_started;
@@ -62,6 +66,7 @@ static CanBackendResult virtual_send(void *ctx, const CanFrame *f)
         }
         b->pending[axis]=target;
         ++b->staged;
+        ++b->target_frames;
     } else if (f->id == 0x080U) {
         if (b->staged != AXES || f->dlc != 0U) {
             b->order_fault=true;return CAN_BACKEND_ERROR;
@@ -89,6 +94,7 @@ static CanBackendResult virtual_receive(void *ctx, CanFrame *f)
     return CAN_BACKEND_OK;
 }
 static void virtual_close(void *ctx) {(void)ctx;}
+static bool host_guidance_owner(void *ctx) { (void)ctx; return true; }
 static bool heartbeat(VirtualBus *b)
 {
     for(unsigned axis=0;axis<AXES;axis++) {
@@ -108,51 +114,87 @@ static bool gated_send(SimGate *g,CanopenMaster *m,const int32_t pos[AXES])
     }
     return true;
 }
-static void revoke(SimGate *g) {g->latched=true;g->authorised=false;}
 
-/* Host-only storage callbacks: reuse exactly the production validation/IPC/
- * streaming algorithms; the bytes here are a mock durable medium, NOT NOR.
- * Real Renode tests cover the independent W25Q512JV durable backend. */
+/* Test-only W25Q bus is the repository's existing NOR protocol model.
+ * The ACTUAL qspi_nor_validated_storage driver owns durable A/B slots,
+ * verification and CRC. This wrapper only records the M7-submitted bytes
+ * for independent comparisons after readback; it never supplies playback. */
+#define NOR_SLOT_BYTES ((((4096U + MAX_SAMPLES * 24U) + 4095U) / 4096U) * 4096U)
+#define NOR_IMAGE_BYTES (2U * NOR_SLOT_BYTES)
+static Model nor_device;
+static uint8_t nor_image[NOR_IMAGE_BYTES];
+static QspiNorValidatedStorage nor_writer;
+static QspiNorValidatedStorage nor_reloaded;
 typedef struct {
-    PvExecutionSample samples[MAX_SAMPLES];
-    ValidatedTrajectory metadata;
+    PathValidationStorage physical_backend;
+    PvExecutionSample submitted[MAX_SAMPLES];
     uint32_t count;
-    bool writing,committed,failed;
-} HostArtifact;
-static HostArtifact artifact_store;
-static bool host_begin(void *ctx)
+    uint32_t commits;
+} StorageRecorder;
+static StorageRecorder recorder;
+static bool model_storage_begin(void *ctx)
 {
-    HostArtifact *s=ctx;
-    s->writing=true;s->committed=false;s->count=0;return true;
+    StorageRecorder *s=ctx;
+    s->count=0U;
+    return s->physical_backend.begin(s->physical_backend.context);
 }
-static bool host_write(uint32_t i,const PvExecutionSample *v,void *ctx)
+static bool model_storage_write(uint32_t i,const PvExecutionSample *sample,void *ctx)
 {
-    HostArtifact *s=ctx;
-    if(!s->writing||s->failed||i!=s->count||i>=MAX_SAMPLES)return false;
-    s->samples[i]=*v;++s->count;return true;
-}
-static bool host_commit(const ValidatedTrajectory *m,void *ctx)
-{
-    HostArtifact *s=ctx;
-    if(!s->writing||s->failed||m->sample_count!=s->count)return false;
-    s->metadata=*m;s->committed=true;s->writing=false;return true;
-}
-static void host_abort(void *ctx)
-{
-    HostArtifact *s=ctx;s->writing=false;s->committed=false;
-}
-static bool host_read_meta(ValidatedTrajectory *m,void *ctx)
-{
-    HostArtifact *s=ctx;if(!s->committed||s->failed)return false;
-    *m=s->metadata;return true;
-}
-static bool host_read_samples(uint32_t first,TrajectorySample *dst,
-                              uint32_t n,void *ctx)
-{
-    HostArtifact *s=ctx;
-    if(!s->committed||s->failed||n==0||first>s->count||n>s->count-first)
+    StorageRecorder *s=ctx;
+    if (!sample || i!=s->count || i>=MAX_SAMPLES ||
+        !s->physical_backend.write_sample(i,sample,s->physical_backend.context))
         return false;
-    memcpy(dst,&s->samples[first],n*sizeof(*dst));return true;
+    s->submitted[i]=*sample; /* immutable M7 validation evidence */
+    ++s->count;
+    return true;
+}
+static bool model_storage_commit(const ValidatedTrajectory *meta,void *ctx)
+{
+    StorageRecorder *s=ctx;
+    if (!meta || meta->sample_count!=s->count ||
+        !s->physical_backend.commit(meta,s->physical_backend.context))
+        return false;
+    ++s->commits;
+    return true;
+}
+static void model_storage_abort(void *ctx)
+{
+    StorageRecorder *s=ctx;
+    s->physical_backend.abort(s->physical_backend.context);
+}
+static bool nor_read_meta(ValidatedTrajectory *m,void *ctx)
+{
+    QspiNorValidatedStorage *s=ctx;
+    if (!s || !m || !s->committed || !s->readback_verified)return false;
+    *m=s->metadata;
+    return true;
+}
+static bool nor_read_samples(uint32_t first,TrajectorySample *dst,
+                             uint32_t count,void *ctx)
+{
+    /* Actual W25Q read opcodes, not the recorder's RAM copy. */
+    return qspi_nor_validated_storage_read_samples(first,
+            (PvExecutionSample *)dst,count,ctx);
+}
+static bool initialize_existing_nor_model(void)
+{
+    w25_model_init(&nor_device,nor_image,sizeof(nor_image));
+    nor_device.suppress_event_trace=true; /* unbounded trajectory ops, no 512-event trace */
+    W25Q512JVBus bus={w25_model_command,w25_model_time,
+                       w25_model_idle,&nor_device};
+    return qspi_nor_validated_storage_set_bus(&bus) &&
+        qspi_nor_validated_storage_init(&nor_writer,0U,MAX_SAMPLES);
+}
+static bool reload_existing_nor_model(void)
+{
+    /* Drop all MCU-owned volatile slot state; keep only simulated NOR bytes. */
+    w25_model_power_cycle(&nor_device);
+    W25Q512JVBus bus={w25_model_command,w25_model_time,
+                       w25_model_idle,&nor_device};
+    return qspi_nor_validated_storage_set_bus(&bus) &&
+        qspi_nor_validated_storage_init(&nor_reloaded,0U,MAX_SAMPLES) &&
+        qspi_nor_validated_storage_load_committed(&nor_reloaded) &&
+        nor_reloaded.committed && nor_reloaded.readback_verified;
 }
 static bool taught_point(const RobotConfig *robot,const double q[AXES],
                          uint32_t now_ms,TaughtPoint *p)
@@ -279,6 +321,9 @@ int main(int argc,char **argv)
     }
     REQUIRE(canopen_master_poll(&master,0U),"initial CAN poll");
     REQUIRE(canopen_master_ready_for_motion(&master,0U),"six drives feedback ready");
+    REQUIRE(canopen_master_bind_runtime_owner(&master,host_guidance_owner,NULL),
+            "isolated HOST guidance owner");
+    canopen_master_set_drive_permission(&master,true); /* isolated HOST guidance */
     SimGate gate={.authorised=true}; /* host only; NEVER a production verifier */
     FtSerialPort serial;FtSerialProtocol protocol=mock_protocol();
     REQUIRE(ft_serial_init(&serial,&protocol,5000,1500,3000),"serial init");
@@ -351,14 +396,17 @@ int main(int argc,char **argv)
     TrajectoryConsumer consumer;
     validation_m7_init(&m7,&shared);
     trajectory_m7_init(&consumer,&trajectory);
-    PathValidationStorage host={.begin=host_begin,.write_sample=host_write,
-        .commit=host_commit,.abort=host_abort,
-        .capacity_samples=MAX_SAMPLES,.context=&artifact_store};
-    CommittedTrajectoryReader reader={.read_metadata=host_read_meta,
-        .read_samples=host_read_samples,.capacity_samples=MAX_SAMPLES,
-        .context=&artifact_store};
+    REQUIRE(initialize_existing_nor_model(),"existing W25Q model + QSPI driver");
+    qspi_nor_validated_storage_bind(&nor_writer,&recorder.physical_backend);
+    PathValidationStorage qspi={.begin=model_storage_begin,
+        .write_sample=model_storage_write,.commit=model_storage_commit,
+        .abort=model_storage_abort,.capacity_samples=MAX_SAMPLES,
+        .context=&recorder};
+    CommittedTrajectoryReader reader={.read_metadata=nor_read_meta,
+        .read_samples=nor_read_samples,.capacity_samples=MAX_SAMPLES,
+        .context=&nor_reloaded};
     REQUIRE(playback_m4_init(&replay,&shared,&trajectory,&reader),"CM4 replay owner");
-    REQUIRE(validation_m4_init(&m4,&shared,&host),"CM4 storage owner");
+    REQUIRE(validation_m4_init(&m4,&shared,&qspi),"CM4 W25Q storage owner");
     PathValidationStorage proxy=validation_m7_storage(&m7,MAX_SAMPLES);
     ValidatedTrajectory validated={0};
     PathValidationState validation={0};
@@ -373,16 +421,31 @@ int main(int argc,char **argv)
         REQUIRE(validation_m4_step(&m4),"CM4 validation service");
     }
     REQUIRE(state==STATE_STEP_COMPLETE && vout.report.result==PV_RESULT_VALID &&
-            vout.trajectory_ready && artifact_store.committed,
-            "validated committed trajectory");
+            vout.trajectory_ready && recorder.commits==1U &&
+            nor_writer.committed && nor_writer.readback_verified,
+            "validated W25Q QSPI committed trajectory");
     REQUIRE(validated.sample_count>0 &&
             validated.sample_count<=MAX_SAMPLES,"validated capacity");
+    REQUIRE(reload_existing_nor_model(),"power-cycle and reload exact NOR artifact");
+    REQUIRE(nor_reloaded.metadata.program_id==validated.program_id &&
+            nor_reloaded.metadata.source_revision==validated.source_revision &&
+            nor_reloaded.metadata.artifact_crc==validated.artifact_crc &&
+            nor_reloaded.metadata.sample_count==validated.sample_count &&
+            nor_reloaded.metadata.sample_data_crc==validated.sample_data_crc &&
+            w25_artifact_crc(&nor_reloaded.metadata)==validated.artifact_crc,
+            "exact durable metadata and identity after power-cycle");
+    REQUIRE(recorder.count==validated.sample_count,"all validated samples submitted");
     uint32_t computed_crc=UINT32_MAX;
-    for(uint32_t i=0;i<validated.sample_count;i++)
-        computed_crc=crc32_step(computed_crc,&artifact_store.samples[i],
-                                sizeof(artifact_store.samples[i]));
+    for(uint32_t i=0;i<validated.sample_count;i++){
+        PvExecutionSample from_flash={0};
+        REQUIRE(qspi_nor_validated_storage_read_sample(i,&from_flash,&nor_reloaded),
+                "read one actual QSPI NOR sample");
+        REQUIRE(!memcmp(&from_flash,&recorder.submitted[i],sizeof(from_flash)),
+                "QSPI readback matches validator-submitted bytes");
+        computed_crc=crc32_step(computed_crc,&from_flash,sizeof(from_flash));
+    }
     REQUIRE(validated.sample_data_crc==~computed_crc,
-            "validator committed CRC matches exact stored samples");
+            "CRC of exact W25Q readback matches committed metadata");
     TrajectoryIdentity id={.program_id=validated.program_id,
         .source_revision=validated.source_revision,
         .artifact_crc=validated.artifact_crc,
@@ -397,32 +460,49 @@ int main(int argc,char **argv)
     REQUIRE(playback_m4_step(&replay),"prefill batch one");
     REQUIRE(playback_m4_step(&replay),"prefill batch two");
     REQUIRE(trajectory_m7_begin(&consumer,&id),"begin exact playback epoch");
+    /* The live production task owns replay dispatch, using the same master,
+     * the actual JointDrivePort and production PathExecution state. */
+    REQUIRE(heartbeat(&bus) && canopen_master_poll(&master,now_us/1000U),
+            "fresh network before Supervisor commissioning");
+    master.owner_check=NULL; master.owner_check_context=NULL; /* host-only ownership handoff */
+    REQUIRE(p05_production_begin(&master,&validated,now_us),"production task preflight");
+    now_us+=4000U;
     unsigned replayed=0;
     for(uint32_t i=0;i<validated.sample_count;i++){
         (void)playback_m4_step(&replay);
         TrajectorySample s;
         REQUIRE(trajectory_m7_take(&consumer,i,&s)==TRAJECTORY_READ_OK,
                 "read preverified committed sample");
-        REQUIRE(!memcmp(&s,&artifact_store.samples[i],sizeof(s)),
-                "same samples on readback");
-        REQUIRE(gated_send(&gate,&master,s.target_position_units),"replay targets");
+        REQUIRE(!memcmp(&s,&recorder.submitted[i],sizeof(s)),
+                "stream is exactly W25Q-committed validation sample");
+        P05SupervisorObservation observation;
+        REQUIRE(p05_production_cycle((const PvExecutionSample *)&s,i,now_us,
+                P05_SUP_NORMAL,&observation),"production Supervisor replay dispatch");
+        REQUIRE(observation.samples_read==1U && observation.state_samples==i+1U,
+                "real production PathExecution consumed this flash sample");
         REQUIRE(heartbeat(&bus),"playback heartbeat");
-        REQUIRE(canopen_master_poll(&master,i*2U+now_us/1000U),"replay feedback");
+        REQUIRE(canopen_master_poll(&master,now_us/1000U),"replay feedback");
         REQUIRE(!memcmp(bus.actual,s.target_position_units,sizeof(bus.actual)),
                 "virtual motor followed committed target");
         joint_from_units(&bus,scales,measured);
         write_joint(joint,"replay",i,measured,measured);
         write_pose(pose,"replay",i,&robot,measured);
         fprintf(compare,"%u,%d,%d,1\n",i,
-             artifact_store.samples[i].target_position_units[0],s.target_position_units[0]);
+             recorder.submitted[i].target_position_units[0],s.target_position_units[0]);
         replayed++;
+        now_us+=2000U;
     }
     REQUIRE(trajectory_m7_finish(&consumer),"finish trajectory");
     playback_m7_cancel(&shared);
     REQUIRE(playback_m4_step(&replay),"CM4 release stream");
     /* Negative storage case: corrupt the committed sample after completion.
      * The existing CM4 full-artifact CRC verification must refuse a new epoch. */
-    artifact_store.samples[0].target_position_units[0] ^= 1;
+    /* Physically corrupt one byte in the EXISTING test-only NOR model, not
+     * the immutable recorder. M4 full-artifact CRC must reject the new epoch. */
+    const uint32_t flash_payload_start=nor_reloaded.base_address+
+        (uint32_t)nor_reloaded.active_slot*nor_reloaded.slot_bytes+4096U;
+    REQUIRE(flash_payload_start<sizeof(nor_image),"W25Q image payload bound");
+    nor_image[flash_payload_start] ^= 1U;
     REQUIRE(playback_m7_request(&shared,&trajectory,&id),"CRC rejection request");
     for(unsigned spin=0;spin<100 && shared.playback_status!=PLAYBACK_FAILED;spin++)
         (void)playback_m4_step(&replay);
@@ -431,54 +511,146 @@ int main(int argc,char **argv)
     REQUIRE(!trajectory_m7_begin(&consumer,&id),"no corrupted stream published");
     playback_m7_cancel(&shared);
     (void)playback_m4_step(&replay);
-    /* No TPDO4 freshness: simulated feedback counters cannot advance. The
-     * host gate revokes independently; production Supervisor is not spoofed. */
-    int32_t target[AXES]={0};
-    uint32_t previous_tpdo=canopen_master_tpdo_rx_count(&master,0);
-    bus.drop_tpdo=true;
-    REQUIRE(gated_send(&gate,&master,target),"loss injection target transmitted");
-    REQUIRE(heartbeat(&bus),"loss-injection heartbeat");
-    REQUIRE(canopen_master_poll(&master,now_us/1000U+500),"poll missing feedback");
-    REQUIRE(canopen_master_tpdo_rx_count(&master,0)==previous_tpdo,
-            "TPDO4 loss observed");
-    revoke(&gate);
-    unsigned before=bus.tx_cycles;
-    REQUIRE(!gated_send(&gate,&master,target) && bus.tx_cycles==before,
-            "lost feedback contains further simulated commands");
-    bus.drop_tpdo=false;
-    /* A distinct explicit host test authority exercises transport TX veto.
-     * This does NOT reauthorize the feedback-faulted gate above. */
-    SimGate tx_gate={.authorised=true};
-    bus.fail_tx=true;
-    REQUIRE(!gated_send(&tx_gate,&master,target),"CAN TX failure detected");
-    REQUIRE(tx_gate.latched && !tx_gate.authorised,"TX failure revokes simulation gate");
-    bus.fail_tx=false;
-    before=bus.tx_cycles;
-    REQUIRE(!gated_send(&tx_gate,&master,target) && bus.tx_cycles==before,
-            "no automatic reauthorization after recovery");
+    /* Each adversarial case starts a distinct explicit HOST commissioning
+     * session. Recovery attempts within the faulted session NEVER call begin.
+     * Both complete target frames and SYNCs must remain unchanged on denial. */
+    static const char *names[]={"revoked_motor_authorization","missing_drive_feedback",
+        "stale_drive_feedback","cm4_liveness_failure","missed_control_deadline",
+        "latched_fault","can_tx_failure"};
+    P05SupervisorObservation observations[7], recovery[7];
+    unsigned denied_cases=0U, recovery_denied=0U;
+    unsigned denied_frames[7],denied_syncs[7];
+    for(unsigned test=0;test<7U;++test) {
+        bus.drop_tpdo=false; bus.fail_tx=false;
+        now_us+=10000U;
+        REQUIRE(heartbeat(&bus),"fault case heartbeat");
+        for(unsigned axis=0;axis<AXES;++axis) {
+            CanFrame f;
+            REQUIRE(avatar_m_build_tpdo4((uint8_t)(axis+1U),bus.actual[axis],
+                    0x0027U,&f) && enqueue(&bus,&f),"fault case fresh TPDO");
+        }
+        REQUIRE(canopen_master_poll(&master,now_us/1000U),"fault case feedback");
+        REQUIRE(p05_production_begin(&master,&validated,now_us),"new HOST test session");
+        now_us+=4000U;
+        unsigned positive_frames=bus.target_frames,positive_syncs=bus.tx_cycles;
+        REQUIRE(p05_production_cycle(&recorder.submitted[0],0U,now_us,
+                P05_SUP_NORMAL,NULL),"positive control before every injection");
+        REQUIRE(bus.target_frames==positive_frames+6U &&
+                bus.tx_cycles==positive_syncs+1U,"positive six RPDOs then SYNC");
+        REQUIRE(heartbeat(&bus) && canopen_master_poll(&master,now_us/1000U),
+                "positive control feedback");
+        now_us+=2000U;
+        P05SupervisorStimulus stimulus=P05_SUP_NORMAL;
+        if(test==0U) stimulus=P05_SUP_REVOKED;
+        if(test==1U) {
+            /* Inject a missing observation in the actual coordinator cache. */
+            master.drives[2].feedback_valid=false;
+        }
+        uint32_t next_index=1U;
+        if(test==2U) {
+            bus.drop_tpdo=true;
+            /* Keep the task cadence and node heartbeats healthy while ONLY
+             * TPDO feedback stops. Isolate the production 20ms watchdog. */
+            for(unsigned soak=0U;soak<10U;++soak) {
+                REQUIRE(heartbeat(&bus),"stale-feedback heartbeat");
+                REQUIRE(p05_production_cycle(&recorder.submitted[next_index],
+                    next_index,now_us,P05_SUP_NORMAL,NULL),"watchdog grace cycle");
+                REQUIRE(canopen_master_poll(&master,now_us/1000U),"dropped TPDO poll");
+                ++next_index; now_us+=2000U;
+            }
+        }
+        if(test==3U) stimulus=P05_SUP_CM4_LOST;
+        if(test==4U) stimulus=P05_SUP_DEADLINE;
+        if(test==5U) stimulus=P05_SUP_LATCH_FAULT;
+        if(test==6U) bus.fail_tx=true;
+        unsigned before=bus.tx_cycles, frames=bus.target_frames;
+        REQUIRE(!p05_production_cycle(&recorder.submitted[next_index],next_index,now_us,stimulus,
+                &observations[test]),"production denies injected motion");
+        REQUIRE(bus.tx_cycles==before && bus.target_frames==frames,
+                "no RPDO or SYNC after unsafe stimulus");
+        REQUIRE(!observations[test].permission && observations[test].inhibited &&
+                observations[test].fault && observations[test].samples_read<=1U,
+                "production fault latches and revokes actual master");
+        if(test!=6U) REQUIRE(observations[test].samples_read==0U,
+                "unsafe motion denied before reading the next sample");
+        if(test==0U) REQUIRE((observations[test].fault_code&0xFFFFU)==0xE0B1U,
+                "authorization revocation fault");
+        if(test==2U) REQUIRE(observations[test].path_error==PATH_EXEC_ERR_CYCLIC_FEEDBACK,
+                "TPDO age alone trips production watchdog");
+        if(test==3U) REQUIRE((observations[test].fault_code&0xFFFFU)==0xE018U,
+                "CM4 liveness alone trips production fault");
+        if(test==4U) REQUIRE((observations[test].fault_code&0xFFFFU)==0xE004U,
+                "dispatch-adjacent deadline fault");
+        denied_frames[test]=bus.target_frames-frames;
+        denied_syncs[test]=bus.tx_cycles-before;
+        ++denied_cases;
+        bus.drop_tpdo=false; bus.fail_tx=false;
+        now_us+=2000U;
+        REQUIRE(heartbeat(&bus),"recovered heartbeat");
+        for(unsigned axis=0;axis<AXES;++axis) {
+            CanFrame f;
+            REQUIRE(avatar_m_build_tpdo4((uint8_t)(axis+1U),bus.actual[axis],
+                    0x0027U,&f) && enqueue(&bus,&f),"recovered TPDO");
+        }
+        REQUIRE(canopen_master_poll(&master,now_us/1000U),"recovered CAN inputs");
+        REQUIRE(!p05_production_cycle(&recorder.submitted[1],1U,now_us,
+                P05_SUP_RESTART,&recovery[test]),"no automatic restart");
+        REQUIRE(!recovery[test].permission && recovery[test].inhibited &&
+                recovery[test].samples_read==0U && bus.tx_cycles==before &&
+                bus.target_frames==frames,"restored inputs/HMI do not reauthorize");
+        REQUIRE(!canopen_master_send_target_cycle(&master,
+                recorder.submitted[1].target_position_units,AXES),
+                "production coordinator independently rejects bypass attempt");
+        ++recovery_denied;
+    }
     FtSensorSample stale;
     REQUIRE(!ft_serial_latest(&serial,now_us+5000,&stale),"stale F/T denied");
-    REQUIRE(artifact_store.committed && replayed==validated.sample_count,
-            "completed validated durable-mock replay");
+    REQUIRE(nor_reloaded.committed && replayed==validated.sample_count,
+            "completed exact W25Q-committed trajectory replay");
+    REQUIRE(denied_cases==7U && recovery_denied==7U,"all in-chain negatives executed");
     fclose(joint);fclose(pose);fclose(compare);
+    if(snprintf(path,sizeof(path),"%s/production_supervisor_trace.json",argv[1])>=(int)sizeof(path))return 2;
+    FILE *sup=fopen(path,"w");REQUIRE(sup!=NULL,"production Supervisor evidence");
+    fputs("{\"production_supervisor_executed\":true,\"same_live_canopen_process\":true,"
+          "\"task_entry_executed\":true,\"time_domain\":\"deterministic injected host time\","
+          "\"scenarios\":{",sup);
+    for(unsigned test=0;test<7U;++test) {
+        fprintf(sup,"%s\"%s\":{\"status\":\"PASS\",\"fault_code\":%u,"
+            "\"motion_denied\":true,\"restart_denied\":true,"
+            "\"permission\":%s,\"inhibited\":%s,\"path_error\":%u,"
+            "\"denied_rpdo_frames\":%u,\"denied_syncs\":%u}",
+            test?",":"",names[test],observations[test].fault_code,
+            observations[test].permission?"true":"false",
+            observations[test].inhibited?"true":"false",observations[test].path_error,
+            denied_frames[test],denied_syncs[test]);
+    }
+    fputs("}}\n",sup);fclose(sup);
+    if(snprintf(path,sizeof(path),"%s/qspi_readback.json",argv[1])>=(int)sizeof(path))return 2;
+    FILE *nor_proof=fopen(path,"w");REQUIRE(nor_proof!=NULL,"W25 proof file");
+    fprintf(nor_proof,"{\"backend\":\"existing_qspi_nor_validated_storage_and_w25_model\","
+        "\"same_artifact\":true,\"same_samples\":true,\"crc_verified\":true,"
+        "\"read_from_simulated_flash\":true,\"sample_count\":%u,"
+        "\"artifact_crc\":%u,\"sample_data_crc\":%u}\n",
+        validated.sample_count,validated.artifact_crc,validated.sample_data_crc);
+    fclose(nor_proof);
     if(snprintf(path,sizeof(path),"%s/faults.csv",argv[1])>=(int)sizeof(path))return 2;
     FILE *faults=fopen(path,"w");REQUIRE(faults!=NULL,"fault output");
     fputs("fault,detected,contained,automatic_authorization\n"
           "committed_sample_crc_corruption,1,1,0\n"
-          "tpdo_feedback_loss,1,1,0\n"
-          "can_tx_failure,1,1,0\n"
           "stale_ft_sample,1,1,0\n",faults);
+    for(unsigned test=0;test<7U;++test)
+        fprintf(faults,"%s,1,1,0\n",names[test]);
     fclose(faults);
     if(snprintf(path,sizeof(path),"%s/integration.json",argv[1])>=(int)sizeof(path))return 2;
     FILE *result=fopen(path,"w");REQUIRE(result!=NULL,"result output");
-    fprintf(result,"{\"result\":\"PASS\",\"simulation_only\":true,\"qspi_proven\":false,"
-                   "\"supervisor_production_invoked\":false,\"teach_cycles\":%u,"
+    fprintf(result,"{\"result\":\"PASS\",\"simulation_only\":true,\"qspi_proven\":true,"
+                   "\"supervisor_production_invoked\":true,\"teach_cycles\":%u,"
                    "\"can_target_cycles\":%u,\"can_feedback_cycles\":%u,"
                    "\"validated_samples\":%u,\"stream_replayed_samples\":%u,"
                    "\"blocked_recovery_attempts\":%u}\n",
             TEACH_CYCLES,bus.tx_cycles,bus.rx_cycles,validated.sample_count,
-            replayed,gate.blocked+tx_gate.blocked);
+            replayed,recovery_denied);
     fclose(result);
-    puts("P05 host virtual chain PASS (QSPI and production Supervisor NOT exercised)");
+    puts("P05 host virtual chain PASS (existing W25Q NOR model + actual QSPI storage; production Supervisor task controls live CANopen playback)");
     return 0;
 }

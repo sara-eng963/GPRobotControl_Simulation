@@ -44,7 +44,8 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
 MEMORY
 {
 FLASH (rx)     : ORIGIN = 0x08100000, LENGTH = 1024K
-RAM (xrw)      : ORIGIN = 0x10000000, LENGTH = 288K
+/* Reserve the last 512 D2 bytes for CM7 USART2 DMA (0x30047E00 alias). */
+RAM (xrw)      : ORIGIN = 0x10000000, LENGTH = 288K - 512
   /* Shared SRAM4 partitions */
   SRAM4_IPC        (rw)  : ORIGIN = 0x38000000, LENGTH = 4K
   SRAM4_TRAJECTORY (rw)  : ORIGIN = 0x38001000, LENGTH = 16K

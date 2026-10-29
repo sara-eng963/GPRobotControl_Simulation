@@ -19,4 +19,6 @@ bool ft_uart2_dma_start(FtSerialPort *port,FtUart2NowUs now,void *context);
  * work of 128 bytes. Call no less often than every 1ms at 1 Mbaud 8N1.
  * A missed half is a transport fault, never a silently reused sample. */
 bool ft_uart2_dma_service(void);
+/* Explicit stop after error or shutdown; there is no automatic restart. */
+void ft_uart2_dma_stop(void);
 #endif

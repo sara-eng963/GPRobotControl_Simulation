@@ -1,82 +1,231 @@
-# P05 — Final Laptop-Only Integration Candidate and Verification Evidence
+# P05 Final Software Integration — independently executed in WSL
 
-**Disposition: INCOMPLETE / UNVERIFIED.** Host transport tests have run. The whole integrated demonstration, ARM source graph and the QSPI-backed end-to-end run have **not** been executed. No hardware acceptance is claimed.
+Disposition: **P05 ACCEPTED (software simulation only)**. Execution date:
+2026-10-29, Africa/Cairo. No physical commissioning is claimed.
 
-## Exact provenance
+## Git provenance and preservation
 
-- Canonical repository: `sara-eng963/GPRobotControl_Simulation`.
-- Authorized branch: `sara/can-replacement`.
-- Exact committed baseline: `ba5ab122868bd50a4626c568574be106dfce98fe` (checked through connected GitHub, source read from that ref).
-- The user's WSL checkout `~/freertos-pc-test` is not mounted here; GitHub DNS is unavailable to local shell. Source files were inspected by connected GitHub at the exact baseline. No user Git files were changed. No commits, pushes, merges, resets, deletes or branches.
+- Original P05/P04 baseline: `ba5ab122868bd50a4626c568574be106dfce98fe`.
+- Actual local starting HEAD and independently fetched remote starting HEAD:
+  `345d5602358024e1ce05522f99aebab1db29b3b6`, on
+  `sara/can-replacement`. Contrary to the supplied environment description,
+  the earlier P05 candidate and scoped CMake warning fix were already committed;
+  no tracked local modifications were present. Only the correction ZIP was untracked.
+- The original installer refused the HEAD guard without editing. All five
+  guarded candidate SHA-256 values matched exactly; all four production files
+  patched by the package were byte-identical to `ba5ab12`; incremental
+  `git apply --check --whitespace=error` passed. An external audited installer
+  copy changed only BASE to the verified equivalent committed candidate.
+  Its source-hash, branch, collision and patch guards were retained and executed.
+  The original package was kept intact; the archival patch was never applied.
+- A complete pre-edit source backup, empty initial tracked/index diffs,
+  initial status/heads, correction installer logs and starting-history Git bundle
+  are retained outside the repository.
+- The final implementation descends from the remote partial P05 commit.
+  Historical tracked review archives remain untouched; the new review ZIP,
+  patches, builds and raw evidence are excluded from the new commit.
+  No force push, reset, clean, unrelated branch or PR is part of this workflow.
 
-## Reuse and source ownership
+## Executed integration boundary
 
-| Component | Production or host owner | P05 change |
-|---|---|---|
-| STM32 USART2 PD4(DE), PD5(TX), PD6(RX), DMA1 stream0 | CM7 HAL main/MSP/interrupts | Original CubeMX files untouched; new `ft_uart2_dma_bridge.[ch]` implements opt-in circular DMA half handling, task copying and cache maintenance. **Not started by an uncommissioned board** |
-| CM7 `.project` | CubeIDE-linked project | Adds only portable `ft_serial_transport.c` to CM7 graph. CM4 HMI and IPC project unchanged |
-| `HandGuiding/ft_serial_transport.[ch]` | Portable task/ISR handoff | C11 SPSC ring, 512 entries, whole-batch overflow rejection, error latch, clock/sequence/freshness validation, bounded task work increased from 128 to 256 bytes/call |
-| `HandGuiding/Tests/p05_mock_ft_protocol.h` | Host-only | 34-byte test protocol: A5 5A + u32 LE sequence + six signed i32 (synthetic milli-units) + IEEE reflected CRC32 LE. **NOT A SENSOR VENDOR SPECIFICATION.** |
-| Existing wrench frame, Tustin admittance, Jacobian mapper, FK | ControlCore/HandGuiding | Reused without editing the algorithms |
-| Existing CANopen master, NMT/SDO, RPDO4/TPDO4/SYNC, CiA402 | CM7 production; host library | Reused; `Simulation/P05/p05_virtual_system.c` supplies a **host-only six-node backend** that batches six RPDO4 and releases them on SYNC, then emits TPDO4/heartbeat. Host gate is not firmware authorization |
-| `state_path_validation`, teaching types, intercore validation bridge, committed-artifact verification, trajectory ring | CM7/CM4 code reused in host | Host harness records two FK-derived teach points, runs real bounded validator/CM4 queue and verifies a readback epoch. Host backing array is a **simulation fixture, not W25Q512JV NOR** |
-| `Simulation/Renode/Storage/w25q512jv_flash.c`, `qspi_nor_validated_storage.c`, `stm32h7_w25q_bus.c` | Existing QSPI / Renode | No modifications, no duplicate emulator; **not connected to the executable P05 host artifact fixture** |
-| `Firmware/STM32H745/CM4/Core/Src/application_validation_service.c` | CM4 physical flash provider | Unchanged, remains fail-closed with missing board providers |
-| `supervisor_task.c` P01–P04 safety/timing and CM4 HMI IPC | CM7 | Unchanged. Host gate cannot energize actual motors. **Production Supervisor not invoked by this host chain** |
-| FDCAN2 / HMI transport, Ethernet, USB, SDMMC, torch, power-good | Outside P05 | Unchanged and excluded |
+`Simulation/P05/p05_production_supervisor.c` includes the **actual production
+CM7 supervisor_task.c** through the existing P04 production-source fixture.
+It does not implement a substitute Supervisor. CMake links the existing
+production CANopen coordinator, real JointDrivePort and production state units
+into the same executable as the existing six-drive virtual CAN backend.
 
-### USART2 quantitative receive budget
+The host seam supplies injected board/safety/CM4 observations and deterministic
+clock releases. It authorizes a distinct host commissioning session using the
+real release/press restart policy. It executes the real task entry, initial
+timing assessment, pre-dispatch evidence/feedback checks, permission update,
+dispatch-adjacent timing recheck and production PathExecution dispatch.
+The P04-style scheduling seam exits at the second synthetic timer wait and
+re-enters the task with the same context/master on the next release.
+It rebinds the same host task identity at entry. This is source execution,
+not a running physical FreeRTOS scheduler or proof of dual-core timing.
 
-At a *configured*, unverified 1,000,000 baud 8N1: 10 bits per octet => 100,000 bytes/s, 100 bytes/1ms, 200 bytes/2ms. A budget of 128 bytes in an independently scheduled 1ms receive task provides a nominal 28% service margin; 256 bytes per 2ms also provides 28%. The initial candidate's 128 bytes per 2ms has a 36% deficit and cannot sustain a full-speed continuous byte stream.
+Every replay sample comes from the existing CM4 playback worker and trajectory
+consumer, bound to the reloaded QSPI backend. Production PathExecution consumes
+that sample and issues six ordered RPDO4 frames followed by SYNC through the
+same production coordinator. The virtual drives update only at SYNC.
+Exactly **1,312** validated, committed, reloaded and CRC-checked samples were
+replayed. The simulator checks all six target values against flash-submitted
+values and feedback; the gate independently checks trace length/order and
+metadata sample counts.
 
-The 512-byte DMA circular buffer has two 256-byte halves (each 2.56ms at this rate), and the 512-entry SPSC ring holds 5.12ms of traffic in the worst-case byte-rate model. DMA half/full callbacks publish a counter and a CM7-clock timestamp; the background task handles **at most one 256-byte half per invocation**, in 4x64-byte copies, and drains at most 128 parser bytes per service. A backlog exceeding one completed half is discarded and latched as a UART error. DMA buffers are 32-byte aligned with line-isolated invalidation. Board memory placement must ensure DMA1-addressable **non-DTCM** SRAM, and must be verified in an ARM ELF before deployment. No complete throughput or ISR WCET has been measured on STM32. A stalled task can lose data, correctly becoming a fail-closed transport fault.
+The isolated host teaching demonstration retains its synthetic F/T decoder and
+host-only guidance authority. Neither this host harness nor its authorization
+providers are included in either ARM image. Production hand-guiding remains
+observation-only; production Supervisor safety source and P01–P04 protections
+were not changed.
 
-`ft_uart2_dma_start` requires an explicit commissioned caller, a monotonic timestamp callback and existing UART2/DMA HAL initialization. Because the vendor frame specification is unknown, P05 does not start a physical sensor decoder and does not authorize physical guidance. A real low-priority CM7 task call site, restart policy and same-clock timestamp binding are still pending firmware integration; those are **not** silently reported PASS.
+## QSPI evidence and limits
 
-### Host demonstration execution
+The demonstration runs the existing `w25q_nor_model.c`,
+`w25q512jv_flash.c` and `qspi_nor_validated_storage.c`, with the real
+validation/storage/playback services. The recorder captures validator submissions
+only for comparison; it does not supply successful playback samples.
+
+The run commits the artifact through the actual W25Q bus command path, power
+cycles the model, creates a new storage runtime, discovers the committed slot,
+checks exact identity/metadata, reads every sample through the QSPI driver,
+recomputes sample CRC and replays the same stream. Corruption of one committed
+payload byte then prevents a new playback epoch.
+
+- Sample count: **1,312**.
+- Artifact CRC: **2767309324**.
+- Sample-data CRC: **2369567794**.
+- `same_artifact`, `same_samples`, `crc_verified` and
+  `read_from_simulated_flash`: executable assertions passed.
+
+This P05 path uses the **software NOR/QSPI model**. Separately, all five existing
+Renode firmware/MMIO QSPI regressions ran successfully, with their runner
+self-test. The P05 executable itself was not executed inside Renode, and there
+was no physical flash access or endurance measurement.
+
+## Same-process Supervisor fault verification
+
+Each case first sends a verified positive-control six-RPDO/SYNC transaction in
+a distinct explicitly commissioned host session. After injection, it requires
+zero additional RPDO target frames and zero SYNCs, a production fault and an
+inhibited/unauthorized real coordinator. Restored feedback and board/peer
+observations plus RESET/RESUME attempts must not restart that session.
+A direct coordinator target-send attempt must also fail.
+
+| Injected case | Result |
+|---|---|
+| Revoked motor authorization | PASS; production E0B1 containment |
+| Missing drive-feedback observation in actual coordinator cache | PASS |
+| TPDO loss with healthy cadence and node heartbeats | PASS; production 20 ms cyclic-feedback watchdog |
+| CM4 liveness expiration | PASS; production E018 containment |
+| Deadline crossed during input acquisition | PASS; dispatch-adjacent E004 veto |
+| Queued latched fault | PASS |
+| CAN transmission failure | PASS |
+| Recovery/automatic restart attempt after each of the seven cases | 7/7 denied |
+
+The executable emits `production_supervisor_trace.json` only after these
+assertions. It records real fault codes, path errors, permission/inhibit state
+and denied frame counts. The strengthened final gate requires the same-process
+and task-entry evidence plus every negative scenario. Separate production-source
+unit-test success cannot satisfy this gate.
+
+Two additional mutations recompile actual production Supervisor source into the
+live CANopen process. Removing the dispatch-adjacent timing veto or CM4-expiry
+veto compiles successfully but fails the executed P05 behavioral assertions.
+Neither compile errors nor abnormal infrastructure failures count as kills.
+
+## USART2 / RS-485 and DMA ownership
+
+PD4 DE / PD5 TX / PD6 RX and the existing UART/DMA configuration remain intact.
+The optional CM7 background service is called from the actual application
+startup and schedules bounded work every 1 ms at low priority. Missing
+`board_supply_ft_serial_config` or an uncommissioned decoder prevents task/DMA
+startup. No vendor sensor protocol was invented.
+
+The bridge latches UART errors/overrun and requires explicit restart. It copies
+a completed 256-byte DMA half into a CPU-owned snapshot, then rechecks DMA
+completion/error counters **before** publishing bytes to the serial decoder.
+An injected next-half completion during cache acquisition verifies that raced
+bytes are rejected before decoding. Existing error, starvation, stale-data and
+explicit restart assertions also pass.
+
+The director package originally placed the buffer at D2 start, overlapping
+CM4's RAM alias. Both CM7 linker variants now reserve exactly 512 bytes at
+**0x30047E00–0x30047FFF** in a dedicated DMA region. Both CM4 linker variants
+exclude the corresponding **0x10047E00–0x10047FFF** alias from general RAM.
+Debug and Release ELF checks verify the 32-byte-aligned 512-byte NOLOAD
+section, linked service/callback symbols, every CM4 allocated section and CM4
+stack ceiling. CM4 stack top is **0x10047E00**, outside the DMA buffer.
+The four Debug/Release builds use the flash-boot linker scripts; the RAM-debug
+variants have matching source reservations, with no separate RAM-boot execution claim.
+
+## Build/runtime repairs
+
+1. Guard baseline mismatch: independently verified source equivalence as above;
+   changed only the external audited installer's HEAD guard.
+2. Director QSPI evidence writer had an unterminated C string: corrected the
+   string literal without changing storage assertions.
+3. Production-source runner regex excluded digits and rejected the actually
+   passing `cm4_lost_and_recovered` line: accepted digits in scenario identifiers.
+4. Initial live harness include lookup selected desktop Supervisor definitions:
+   selected the production TU explicitly and used production include paths.
+5. Linker retained unused RTOS task/queue-creation entry points from the fixture:
+   used the same function/data-section and linker garbage-collection approach
+   as the existing P04 source compiler; no replacement Supervisor was added.
+6. Production coordinator correctly denied initial host sends without runtime
+   ownership: bound the isolated host owner and explicitly handed ownership to
+   the actual production task. Its permission/owner guards remain enforced.
+7. An initial fault injector referenced a nonexistent AvatarMDrive EMCY field:
+   replaced it with the explicit missing-observation cache stimulus described
+   above and removed an unused old host-gate helper.
+8. Fixed the DMA copy/ownership race and the cross-core D2 alias collision
+   described above.
+9. Acceptance formerly required HEAD to equal the original baseline, making
+   committed P05 unverifiable: it still requires the authorized branch and now
+   verifies that the original baseline is an ancestor.
+
+The previously committed legacy-only CMake
+`state_path_validation.c` pedantic-warning exception is preserved. New host
+code retains strict warnings; the production fixture's legacy enum warning is
+scoped to its source.
+
+## Independent verification results
+
+| Verification | Independently observed result |
+|---|---|
+| Complete corrected acceptance runner | **19/19 PASS**, no skipped/NOT RUN steps |
+| Full root CMake build and CTest | **60/60 PASS** |
+| Live P05 QSPI + production Supervisor chain and strengthened evidence gate | **PASS** |
+| Actual UART DMA source callbacks, faults, restart and copy-boundary preemption | **PASS** |
+| P05 serial source mutations | **3/3 compiled, behaviorally rejected** |
+| P05 production Supervisor in-chain mutations | **2/2 compiled, behaviorally rejected** |
+| P04 source mutations | **12/12 compiled, behaviorally rejected** |
+| Additional P01–P04/CANopen/IPC/timer/configuration scripts | **14/14 PASS** |
+| Renode QSPI MMIO regressions | **5/5 PASS**, plus runner self-test |
+| CM7 Debug / Release ARM builds | **PASS / PASS**, 103 translation units each |
+| CM4 Debug / Release ARM builds | **PASS / PASS**, 48 translation units each |
+| Debug / Release firmware integration | **PASS / PASS** |
+| Debug / Release DMA link and cross-core alias checks | **PASS / PASS** |
+| Missing-component acceptance negative tests | **PASS** |
+| git diff --check | **PASS** |
+
+The earlier complete run also passed all 18 checks then present. After final
+include-graph/alias fixes and adding the in-chain mutations to the runner, the
+complete final 19-step runner was rerun successfully. Results above describe
+executed binaries and assertions, not merely command exit codes.
+
+
+Evidence, starting backup and machine-readable summaries are retained outside
+the checkout at:
+`/home/sara/p05-verification/p05-20261029-KFxjLb`.
+The temporary execution audit remains at
+`/tmp/p05-audit-20261029T002800Z`.
+Raw logs/traces/build products are intentionally not committed.
+
+Reproduce on the authorized branch, with the repository's WSL/Linux
+dependencies (including the sibling FreeRTOS-Kernel, ARM GCC and Renode):
 
 ```bash
-bash scripts/run_p05_virtual_end_to_end.sh
-# or specify a NEW external directory:
-bash scripts/run_p05_virtual_end_to_end.sh /tmp/p05_evidence_01
+python3 Firmware/Tests/run_p05_acceptance.py --output /tmp/p05-new-evidence
 ```
 
-This builds the `p05_virtual_system` target from the actual repository's `HandGuiding`, `ControlCore`, CANopen, path-validation and intercore libraries. The following chain is implemented as source, but **has not been executed against the complete repository in this authoring session**:
+Use a new external output directory. The runner records every command and wall
+time and returns failure if any required result is not PASS. These host wall
+times are not STM32 WCET measurements.
 
-1. Generate 34-byte synthetic F/T packets, accept via `ft_serial_isr_receive`, decode with test-only mock and require fresh sequence/time.
-2. Execute actual `hand_guiding_pipeline_arm/step`, wrench processing, existing Tustin admittance and Cartesian-to-joint mapping; validate finite six-axis references.
-3. Convert joint radians with the existing AVATAR encoder scales; send through existing `canopen_master_send_target_cycle`. The virtual backend enforces six RPDO4 frames followed by one SYNC and emits six TPDO4 samples and heartbeat frames; `canopen_master_poll` checks actual decoded feedback.
-4. Use the measured virtual joint positions for two actual taught points and FK-derived Cartesian poses; calculate the repository's draft CRC and run `state_path_validation_enter/step` using the existing control/IK validation implementation.
-5. Submit the validator output via existing `validation_m7_storage` queue to `validation_m4_step`. A host-only artifact array stands in for absent physical storage; it has no flash semantics and is not represented as a W25Q commit.
-6. Request the exact identity via `playback_m7_request` and use existing full-sample CRC verification and ring/epoch streaming; `trajectory_m7_take` returns the exact committed sample; send its targets via the same CANopen master to virtual nodes, record readback comparison.
-7. Negative cases: change one stored sample to require CRC-rejected playback; suppress TPDO4 and revoke simulation permission; fail a CAN TX then reject recovered traffic without a fresh authorization; verify F/T staleness.
+## Remaining limitations and phone handoff
 
-Evidence outputs into the selected external directory: `joint_trace.csv`, `cartesian_trace.csv`, `trajectory_compare.csv`, `faults.csv`, `integration.json`, `summary.json`, configure/build/runtime logs. `summary.json` deliberately sets `full_p05_acceptance=false` even when the host subsystem returns PASS, because QSPI and production Supervisor integration remain unexecuted. CSV is MATLAB-compatible; MATLAB was not run.
+No physical STM32 deadline/jitter measurements, motor stopping, CAN electrical
+qualification, flash endurance, sensor accuracy or vendor F/T commissioning
+were performed. Board-specific physical providers remain absent and fail
+closed. Simulated authorization and injected liveness are not commissioning
+evidence. Hardware timing, DMA/MPU/bus operation and physical safety require
+separate controlled validation.
 
-### Executed verification (this session only)
-
-| Check | Status | Evidence |
-|---|---|---|
-| New `test_ft_serial_transport.c` (9 groups) built with native GCC against known `FtSensorSample` fixture | **PASS** | Corruption, deletion/truncation, sequencing, stale sample, link timeout, ISR overflow, UART fault, 32-bit wrap, 204 bytes/2ms drain |
-| Exact baseline `HandGuiding/CMakeLists.txt` blob | **PASS** | SHA `9b0e06ce8ecb477901835a5bbe79e0067d39584f` matches GitHub source |
-| Compiled source mutations against actual P05 serial source with a minimal FtSensorSample fixture | **PASS — 3/3 rejected** | Replay, stale-acceptance and overflow bypasses compiled then failed behavioral assertions |
-| Serial-to-guidance test in complete real source tree | **NOT RUN** | Requires actual WSL checkout |
-| New connected virtual end-to-end executable | **NOT RUN** | Source and runner supplied, no actual checkout to compile against here |
-| QSPI Renode JEDEC/write/erase/CRC/power-loss/streaming | **NOT RUN** this session | Existing separate scripts remain unmodified |
-| CANopen / IPC / trajectory / P01–P04 regressions and negative mutations | **NOT RUN** this session | Original tests retained |
-| Four ARM builds and both firmware integration checks | **NOT RUN** | `arm-none-eabi-gcc` unavailable |
-| Production USART2 task scheduling and DMA cache placement | **NOT RUN** | ARM build/hardware needed |
-| `git diff --check` on user WSL checkout | **NOT RUN** | Patch-level whitespace inspection available only here |
-| Hardware timing, real sensor scaling, physical motor stop | **NOT TESTABLE** | No hardware and unknown vendor protocol |
-
-**Separate user-reported P04 evidence** (56 CTests, 11 scenario groups, 12 compiled mutations, 4 ARM builds) is historical information, not new P05 test execution.
-
-### Remaining acceptance blockers
-
-1. Host executable still uses a test-only artifact backing array, not actual `QspiNorValidatedStorage` wired through Renode. A QSPI-backed *same-artifact* write/readback/stream must be demonstrated; isolated existing NOR regressions do not close this requirement.
-2. Real production `supervisor_task_entry` authorization, CM4 liveness, pre-dispatch timing faults, and `state_path_execution` are not invoked by the host-only demonstration. Existing tests must be run separately and integrated P05 coverage added; do not count the host SimGate as P01–P04 validation.
-3. STM32 DMA reception still lacks a scheduled, live CM7 background service and a vendor-specification-backed physical protocol decoder. The new HAL bridge is opt-in and uncommissioned.
-4. Full-repo compilation/CTest, Renode, ARM build and external independent WSL verification have not been executed. The new host harness may require corrections against actual source integration and its outcome is unknown.
-5. No commissioning of real sensors, board safety verifier, motors or physical timing has been performed.
-
-**Final disposition: INCOMPLETE / UNVERIFIED.** The updated candidate is one consolidated reviewable patch and a runnable host integration attempt, not a completed P05 final acceptance.
+For a fresh Codex Cloud task, select this GitHub repository and
+`sara/can-replacement`, fetch the latest branch, verify its HEAD, and read this
+report first. Do not reapply either review patch. Start with a requested next
+software task while preserving production motion denial and the separate
+physical-commissioning boundary. The cloud environment needs the same build
+dependencies; local `/tmp` or external WSL evidence is not automatically
+available there.
