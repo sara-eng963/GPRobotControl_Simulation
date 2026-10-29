@@ -14,6 +14,8 @@ typedef struct {
 bool virtual_ft_client_open(VirtualFtClient *client);
 bool virtual_ft_client_send(VirtualFtClient *client,
                                const double wrench_base_tcp[6]);
+bool virtual_ft_client_send_enabled(VirtualFtClient *client, bool enabled,
+                                       const double wrench_base_tcp[6]);
 /* On normal exit send zero samples before closing. A stopped GUI's stream
  * still expires in the Supervisor watchdog; this is NOT a safety stop. */
 void virtual_ft_client_close(VirtualFtClient *client);

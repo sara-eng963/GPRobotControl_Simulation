@@ -379,13 +379,29 @@ if(TARGET raylib)
         ${CMAKE_SOURCE_DIR}/HMI/hmi_theme.c
         ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_protocol.c
         ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_client.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_sender.c
         ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_controls.c
     )
     target_compile_features(virtual_ft_gui PRIVATE c_std_11)
     target_compile_definitions(virtual_ft_gui PRIVATE _POSIX_C_SOURCE=200809L)
     target_include_directories(virtual_ft_gui PRIVATE
         ${CMAKE_SOURCE_DIR}/HMI)
-    target_link_libraries(virtual_ft_gui PRIVATE raylib m)
+    target_link_libraries(virtual_ft_gui PRIVATE raylib pthread m)
+
+    # Actual GUI main with deterministic fake rendering/input; real sender/UDP.
+    add_executable(p06_gui_timing
+        ${CMAKE_SOURCE_DIR}/HMI/virtual_ft_gui_app.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Tests/p06_gui_backend.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_sender.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_client.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_controls.c
+        ${CMAKE_SOURCE_DIR}/Simulation/Guidance/virtual_ft_protocol.c)
+    target_include_directories(p06_gui_timing PRIVATE ${CMAKE_SOURCE_DIR}/external/raylib/src)
+    target_compile_definitions(p06_gui_timing PRIVATE _POSIX_C_SOURCE=200809L)
+    target_link_libraries(p06_gui_timing PRIVATE pthread m)
+    add_test(NAME p06_gui_render_stall COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/Simulation/Tests/test_p06_gui_timing.py $<TARGET_FILE:p06_gui_timing>)
+    set_tests_properties(p06_gui_render_stall PROPERTIES TIMEOUT 15 RUN_SERIAL TRUE)
 
     # GUI's pure control mapping and real loopback UDP sender are testable
     # without a graphical display or simulated CAN network.

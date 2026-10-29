@@ -9,6 +9,16 @@ See [firmware build instructions and ownership](Firmware/README.md).
 The firmware is software-build-ready; physical commissioning and robot motion
 authorization remain incomplete.
 
+## Unified simulation
+
+Run `./scripts/run_robot_simulation.sh` for the live production CM7 Supervisor,
+CM4 QSPI storage/playback services, SIL Kit six-motor network, HMI and virtual F/T
+GUI. MATLAB receives UDP telemetry; run your Windows MATLAB project independently.
+Optional `--matlab` enables supervised WSL autostart without affecting manual use.
+Use `--verify` for integration/regression gates; `--headless` is a zero-force
+startup smoke test only. See the
+[implementation boundary and exact WSL verification commands](docs/UNIFIED_ROBOT_SIMULATION.md).
+
 ## Host build and regressions
 
 Install CMake 3.28+, C/C++ compilers and the raylib Linux development dependencies.

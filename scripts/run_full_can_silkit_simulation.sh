@@ -22,6 +22,12 @@ MATLAB_IP="${MATLAB_IP:-}"
 DO_BUILD=1
 START_GUI=1
 VIRTUAL_FT=0
+HEADLESS_FT=0
+DURATION=0
+START_MATLAB=0
+MATLAB_PID=""
+SUPERVISOR_TARGET=supervisor_silkit_sim
+if [[ ${ROBOT_UNIFIED_MODE:-0} == 1 ]]; then SUPERVISOR_TARGET=robot_simulation; fi
 
 usage() {
     cat <<'EOF'
@@ -29,6 +35,10 @@ Usage:
   ./scripts/run_full_can_silkit_simulation.sh [options]
 
 Options:
+  --headless   Zero-force startup smoke test only; no GUIs or MATLAB.
+  --matlab     Opt in to supervised Windows MATLAB startup (unified mode).
+  --no-matlab  Keep independent/manual MATLAB startup (the default).
+  --duration N Stop successfully after N seconds (for startup checks).
   --no-build   Skip CMake configure/build.
   --no-gui     Do not start graphical applications (normal mode only).
   --virtual-ft Run interactive F/T hand-guiding instead of teaching_sim.
@@ -46,6 +56,19 @@ EOF
 
 while (($# > 0)); do
     case "$1" in
+        --matlab)
+            START_MATLAB=1
+            ;;
+        --no-matlab)
+            START_MATLAB=0
+            ;;
+        --headless)
+            START_GUI=0; HEADLESS_FT=1; VIRTUAL_FT=1
+            ;;
+        --duration)
+            shift; DURATION="${1:?--duration requires seconds}"
+            [[ "$DURATION" =~ ^[1-9][0-9]*$ ]] || exit 2
+            ;;
         --no-build)
             DO_BUILD=0
             ;;
@@ -71,7 +94,7 @@ done
 # The interactive F/T receiver needs one persistent zero-wrench source.
 # Running an F/T Supervisor without its GUI would trigger a watchdog fault
 # as soon as TEACHING begins; force explicit intent instead.
-if ((VIRTUAL_FT && !START_GUI)); then
+if ((VIRTUAL_FT && !START_GUI && !HEADLESS_FT)); then
     echo "[FAIL] --virtual-ft cannot be combined with --no-gui." >&2
     exit 2
 fi
@@ -79,7 +102,7 @@ fi
 if [[ -z "$MATLAB_IP" ]]; then
     MATLAB_IP="$(
         ip route 2>/dev/null |
-        awk '/default/ {print $3; exit}'
+        awk '/default/ {print $3; exit}' || true
     )"
 fi
 
@@ -90,7 +113,7 @@ fi
 
 REGISTRY_BIN="$SILKIT_ROOT/bin/sil-kit-registry"
 MOTOR_BIN="$BUILD_DIR/avatar_m_silkit_motor_bank"
-SUPERVISOR_BIN="$BUILD_DIR/supervisor_silkit_sim"
+SUPERVISOR_BIN="$BUILD_DIR/$SUPERVISOR_TARGET"
 PANEL_BIN="$BUILD_DIR/supervisor_panel"
 TEACH_BIN="$BUILD_DIR/teaching_sim"
 VFT_GUI_BIN="$BUILD_DIR/virtual_ft_gui"
@@ -128,6 +151,15 @@ cleanup() {
     local status=$?
     trap - EXIT INT TERM
 
+    if [[ -n "$MATLAB_PID" ]]; then
+        kill "$MATLAB_PID" 2>/dev/null || true
+        # Allow the helper to close only its owned Windows MATLAB instance.
+        for ((attempt=0; attempt<300; attempt++)); do
+            kill -0 "$MATLAB_PID" 2>/dev/null || break
+            sleep 0.1
+        done
+        wait "$MATLAB_PID" 2>/dev/null || true
+    fi
     if (("${#PIDS[@]}" > 0)); then
         echo
         echo "Stopping simulation..."
@@ -142,6 +174,7 @@ cleanup() {
         done
     fi
 
+    for pid in "${PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
     exit "$status"
 }
 
@@ -213,12 +246,12 @@ if ((DO_BUILD)); then
     fi
     cmake --build "$BUILD_DIR" \
         --target \
-            supervisor_silkit_sim \
+            "$SUPERVISOR_TARGET" \
             avatar_m_silkit_motor_bank \
             can_live_monitor \
             supervisor_panel \
             "$local_gui_target" \
-        -j "$(nproc)"
+        -j "${BUILD_JOBS:-4}"
 else
     echo "[1/5] Configure/build skipped."
     echo "[2/5] Build skipped."
@@ -245,6 +278,25 @@ if ((VIRTUAL_FT)); then
 fi
 
 echo
+if [[ ${ROBOT_UNIFIED_MODE:-0} == 1 ]] && ((START_GUI && START_MATLAB)); then
+    if [[ ! ${MATLAB_STARTUP_TIMEOUT:-120} =~ ^[1-9][0-9]*$ ]]; then
+        echo "[FAIL] MATLAB_STARTUP_TIMEOUT must be a positive integer." >&2
+        exit 2
+    fi
+    MATLAB_LOG="$LOG_DIR/windows-matlab-helper.log"
+    : > "$MATLAB_LOG"
+    python3 "$REPO_ROOT/scripts/windows_matlab.py" --repo "$REPO_ROOT" \
+        --output-parent "$LOG_DIR" --timeout "${MATLAB_STARTUP_TIMEOUT:-120}" \
+        >"$MATLAB_LOG" 2>&1 &
+    MATLAB_PID=$!
+    wait_for_log "$MATLAB_LOG" "[MATLAB] ready" \
+        "$(( ${MATLAB_STARTUP_TIMEOUT:-120} + 5 ))" "$MATLAB_PID" "Windows MATLAB"
+fi
+if ((HEADLESS_FT)); then
+    echo "[SMOKE ONLY] Zero-force startup; no teaching, validation or replay is verified."
+    echo "Use ./scripts/run_robot_simulation.sh --verify for automated integration/regressions."
+fi
+
 echo "[3/5] Starting SIL Kit CAN network..."
 
 "$REGISTRY_BIN"     --listen-uri "$REGISTRY_URI"     >"$REGISTRY_LOG" 2>&1 &
@@ -304,6 +356,14 @@ else
         "HAND_GUIDING_VIRTUAL_FT=0"
     )
 fi
+if ((HEADLESS_FT)); then
+    python3 "$REPO_ROOT/Simulation/Robot/zero_ft_sender.py" >"$VFT_GUI_LOG" 2>&1 &
+    VFT_GUI_PID=$!
+    PIDS+=("$VFT_GUI_PID")
+fi
+if [[ ${ROBOT_UNIFIED_MODE:-0} == 1 ]]; then
+    SUPERVISOR_ENV+=("SIM_FLASH_IMAGE=${SIM_FLASH_IMAGE:-$LOG_DIR/qspi-nor.bin}")
+fi
 env "${SUPERVISOR_ENV[@]}" "$SUPERVISOR_BIN" \
     >"$SUPERVISOR_LOG" 2>&1 &
 SUPERVISOR_PID=$!
@@ -362,7 +422,11 @@ fi
 
 echo
 echo "============================================================"
-echo " FULL PIPELINE RUNNING"
+if ((HEADLESS_FT)); then
+    echo " STARTUP SMOKE PIPELINE RUNNING (zero force)"
+else
+    echo " FULL PIPELINE RUNNING"
+fi
 echo "============================================================"
 echo " HMI"
 echo "   -> FreeRTOS Supervisor / StateMachine"
@@ -381,7 +445,11 @@ if ((VIRTUAL_FT)); then
 fi
 echo
 echo " MATLAB:"
-echo "   Keep MATLAB/can_robot_visualizer.m running on Windows."
+if [[ -n "$MATLAB_PID" ]]; then
+    echo "   Windows MATLAB started automatically; helper log: $MATLAB_LOG"
+else
+    echo "   Independent/manual MATLAB startup selected (or headless smoke mode)."
+fi
 echo "   Telemetry destination: $MATLAB_IP:5005"
 echo
 echo " Operator event log:"
@@ -440,7 +508,9 @@ if ((VIRTUAL_FT)); then
 fi
 
 # Keep the launcher alive and fail loudly if a core process exits.
+RUNTIME_START=$SECONDS
 while true; do
+    if ((DURATION > 0 && SECONDS - RUNTIME_START >= DURATION)); then exit 0; fi
     print_ft_diagnostics
     core_entries=(
         "$REGISTRY_PID:registry:$REGISTRY_LOG"
@@ -452,6 +522,16 @@ while true; do
     # Supervisor that may fault after its source disappears.
     if ((VIRTUAL_FT)); then
         core_entries+=("$VFT_GUI_PID:virtual-ft-gui:$VFT_GUI_LOG")
+    fi
+    if [[ -n "$MATLAB_PID" ]] && ! kill -0 "$MATLAB_PID" 2>/dev/null; then
+        if wait "$MATLAB_PID"; then
+            echo "Windows MATLAB visualizer closed; stopping simulation."
+            MATLAB_PID=""
+            exit 0
+        fi
+        echo "[FAIL] Windows MATLAB stopped with an error; see $MATLAB_LOG" >&2
+        MATLAB_PID=""
+        exit 1
     fi
     for entry in "${core_entries[@]}"
     do

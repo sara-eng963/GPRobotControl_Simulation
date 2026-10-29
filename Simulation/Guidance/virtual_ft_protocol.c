@@ -55,6 +55,8 @@ const char *virtual_ft_fault_name(VirtualFtFault reason)
     case VIRTUAL_FT_FAULT_INVALID_PACKET: return "invalid_packet_or_range";
     case VIRTUAL_FT_FAULT_SEQUENCE: return "duplicate_or_out_of_order_sequence";
     case VIRTUAL_FT_FAULT_TIMEOUT: return "wrench_input_timeout";
+    case VIRTUAL_FT_FAULT_DISABLED: return "input_explicitly_disabled";
+    case VIRTUAL_FT_FAULT_CLOCK: return "invalid_receive_timestamp";
     default: return "unknown";
     }
 }
@@ -119,7 +121,8 @@ bool virtual_ft_read(VirtualFtState *state, const VirtualFtLimits *limits,
     if (state == NULL || wrench_base_tcp == NULL ||
         !limits_valid(limits) || state->fault_latched)
         return false;
-    if (!state->connected || !state->enabled) return false;
+    if (!state->connected) return false;
+    if (!state->enabled) return trip(state,VIRTUAL_FT_FAULT_DISABLED);
     const uint32_t age = now_us - state->received_us;
     if (age >= UINT32_C(0x80000000) || age > limits->timeout_us)
         return trip(state, VIRTUAL_FT_FAULT_TIMEOUT);

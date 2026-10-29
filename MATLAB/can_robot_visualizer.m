@@ -179,7 +179,23 @@ fprintf("Waiting for Supervisor status packets...\n");
 fprintf("Close the figure to stop visualization.\n");
 fprintf("========================================\n\n");
 
+% Optional WSL --matlab helper handshake; independent MATLAB runs are unchanged.
+if isappdata(0, 'RobotSimulationReadyFile')
+    readyFile = getappdata(0, 'RobotSimulationReadyFile');
+    fid = fopen(readyFile, 'w');
+    if fid == -1
+        error('RobotSimulation:ReadyFile', 'Cannot write WSL readiness file');
+    end
+    fprintf(fid, 'ready\n');
+    fclose(fid);
+end
+
 while isvalid(fig)
+    if isappdata(0, 'RobotSimulationStopFile') && ...
+            isfile(getappdata(0, 'RobotSimulationStopFile'))
+        close(fig);
+        break;
+    end
 
     if udp.NumDatagramsAvailable > 0
 

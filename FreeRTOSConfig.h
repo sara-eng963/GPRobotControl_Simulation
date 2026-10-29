@@ -26,7 +26,11 @@
 #define configUSE_TIMERS                        0
 #define configUSE_CO_ROUTINES                   0
 
+#if defined(ROBOT_FREERTOS_STATIC)
+#define configSUPPORT_STATIC_ALLOCATION         1
+#else
 #define configSUPPORT_STATIC_ALLOCATION         0
+#endif
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
 
 /* The SIL Kit POSIX host runs an additional 4096-word validation task.

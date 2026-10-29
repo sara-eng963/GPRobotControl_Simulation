@@ -490,3 +490,5 @@ target_include_directories(joint_drive_boot_test PRIVATE
 )
 target_link_libraries(joint_drive_boot_test PRIVATE avatar_drives m)
 add_test(NAME joint_drive_boot_test COMMAND joint_drive_boot_test)
+
+include(Simulation/Robot/robot_simulation.cmake)

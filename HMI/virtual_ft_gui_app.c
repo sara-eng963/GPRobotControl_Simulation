@@ -2,7 +2,7 @@
  * This is an input device, not a motion controller or safety function. */
 #include "hmi_protocol.h"
 #include "hmi_theme.h"
-#include "../Simulation/Guidance/virtual_ft_client.h"
+#include "../Simulation/Guidance/virtual_ft_sender.h"
 #include "../Simulation/Guidance/virtual_ft_controls.h"
 #include "../StateMachine/state_machine_types.h"
 
@@ -91,34 +91,28 @@ static void draw_slider(Rectangle track, float value, float maximum,
                 track.y + 21, 14, HMI_C_MUTED, false);
 }
 
-static bool any_nonzero(const double wrench[6])
-{
-    for (unsigned i = 0; i < 6U; ++i)
-        if (wrench[i] != 0.0) return true;
-    return false;
-}
-
 int main(void)
 {
-    VirtualFtClient client;
-    if (!virtual_ft_client_open(&client)) {
-        fprintf(stderr, "[VFT GUI] UDP sender socket could not open\n");
-        return 1;
-    }
     HmiProtocol status;
     if (!hmi_protocol_init(&status, HMI_VFT_STATUS_PORT)) {
         fprintf(stderr, "[VFT GUI] status UDP port 5014 unavailable\n");
-        virtual_ft_client_close(&client);
         return 1;
     }
+    /* The UDP heartbeat shares this loop. GLFW otherwise waits for window
+     * events while minimized, starving the receiver's 150 ms watchdog. */
+    SetConfigFlags(FLAG_WINDOW_ALWAYS_RUN);
     InitWindow(WINDOW_W, WINDOW_H, "Virtual F/T Sensor | Six-Axis Hand Guiding");
     if (!IsWindowReady()) {
         hmi_protocol_shutdown(&status);
-        virtual_ft_client_close(&client);
         return 1;
     }
     SetTargetFPS(120);
     hmi_ui_init();
+    VirtualFtSender sender;
+    if (!virtual_ft_sender_start(&sender)) {
+        fprintf(stderr,"[VFT GUI] periodic transmitter could not start\n");
+        hmi_protocol_shutdown(&status);hmi_ui_shutdown();CloseWindow();return 1;
+    }
 
     /* Must remain within the existing protocol receiver's per-axis limits.
      * Synthetic simulation settings, NOT real sensor/robot ratings. */
@@ -129,7 +123,6 @@ int main(void)
     int pointer = POINTER_NONE;
     VirtualFtInputGate input_gate = {0};
     bool transport_error = false;
-    double next_send = 0.0;
     double last_sent[6] = {0};
 
     while (!WindowShouldClose()) {
@@ -143,7 +136,7 @@ int main(void)
             s->robot_state == ROBOT_STATE_TEACHING &&
             s->can_expected_nodes > 0U &&
             s->can_ready_nodes == s->can_expected_nodes;
-        const bool focus = IsWindowFocused();
+        const bool focus = IsWindowFocused() && !IsWindowMinimized();
         const bool allowed = guidance && focus;
         const Vector2 mouse = GetMousePosition();
         const bool mouse_down = focus && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
@@ -188,21 +181,22 @@ int main(void)
             keys.positive[i] = focus && (IsKeyDown(positive_key[i]) || mouse_pos);
         }
         virtual_ft_input_gate_update(&input_gate, focus, clear_pressed, &keys);
+        VirtualFtSenderStatus tx;
+        virtual_ft_sender_status(&sender,&tx);
+        if (tx.command_expired) {
+            input_gate.suppressed_until_release=true;
+            fprintf(stderr,"[VFT GUI] nonzero input lease expired; input disabled, release controls\n");
+        }
         const bool enabled = allowed && !input_gate.suppressed_until_release;
         double wrench[6];
         virtual_ft_wrench_request(&keys, enabled, force_N, torque_Nm, wrench);
 
-        /* The GUI streams 50 Hz, not at the 500-Hz controller rate.
-         * Send a zero immediately on release, focus loss, or inhibition;
-         * keep sending zeros afterward for the existing watchdog. */
-        const double now = GetTime();
-        if (now >= next_send || (!any_nonzero(wrench) && any_nonzero(last_sent))) {
-            transport_error = !virtual_ft_client_send(&client, wrench);
-            if (!transport_error) memcpy(last_sent, wrench, sizeof(last_sent));
-            next_send = now + 0.020;
-        }
+        virtual_ft_sender_update(&sender,wrench);
+        transport_error=tx.failed;
+        memcpy(last_sent,tx.last_wrench,sizeof(last_sent));
 
         const char *status_text = transport_error ? "Transport error" :
+            input_gate.suppressed_until_release && allowed ? "Release controls to rearm input" :
             !online ? "Disconnected" : fault ? "Supervisor fault / E-stop" :
             guidance ? "TEACHING - guidance input enabled" :
             "Waiting for TEACHING / CAN readiness";
@@ -261,7 +255,13 @@ int main(void)
     }
 
     /* Best-effort valid zero packets; loss after exit still faults watchdog. */
-    virtual_ft_client_close(&client);
+    VirtualFtSenderStatus final_tx;
+    virtual_ft_sender_status(&sender,&final_tx);
+    virtual_ft_sender_stop(&sender);
+    fprintf(stderr,"[VFT TX] sent=%llu last_seq=%u last_mono_us=%llu max_gap_us=%llu missed=%llu failed=%u\n",
+        (unsigned long long)final_tx.sent,final_tx.last_sequence,
+        (unsigned long long)final_tx.last_send_us,(unsigned long long)final_tx.max_send_gap_us,
+        (unsigned long long)final_tx.missed_releases,final_tx.failed);
     hmi_protocol_shutdown(&status);
     hmi_ui_shutdown();
     CloseWindow();

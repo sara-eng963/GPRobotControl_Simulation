@@ -30,9 +30,15 @@ bool virtual_ft_client_open(VirtualFtClient *client)
 bool virtual_ft_client_send(VirtualFtClient *client,
                                const double wrench_base_tcp[6])
 {
+    return virtual_ft_client_send_enabled(client,true,wrench_base_tcp);
+}
+
+bool virtual_ft_client_send_enabled(VirtualFtClient *client, bool enabled,
+                                       const double wrench_base_tcp[6])
+{
     if (client == NULL || client->socket_fd < 0) return false;
     uint8_t packet[VIRTUAL_FT_PACKET_SIZE];
-    if (!virtual_ft_encode(client->next_sequence, true, wrench_base_tcp, packet))
+    if (!virtual_ft_encode(client->next_sequence, enabled, wrench_base_tcp, packet))
         return false;
     const ssize_t count = sendto(client->socket_fd, packet, sizeof(packet),
                                 MSG_DONTWAIT,
